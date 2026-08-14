@@ -515,13 +515,16 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     "data-player-action": "speed",
                                     span { "data-player-speed-label": "", "{current_speed}×" }
                                 }
+                                // Both icons ship; CSS shows whichever matches
+                                // the current state, the same way play/pause does.
                                 button {
                                     r#type: "button",
                                     class: "player-control-button player-fullscreen-button",
                                     aria_label: "Enter fullscreen",
                                     title: "Fullscreen",
                                     "data-player-action": "fullscreen",
-                                    Maximize2 { size: 21 }
+                                    span { class: "player-fullscreen-enter-icon", Maximize2 { size: 21 } }
+                                    span { class: "player-fullscreen-exit-icon", Minimize2 { size: 21 } }
                                 }
                             }
                             div { class: "player-timeline",

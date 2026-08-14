@@ -15,9 +15,17 @@
     return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : tail;
   }
 
+  function fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
   function toggleFullscreen(root) {
-    if (document.fullscreenElement) {
-      return document.exitFullscreen && document.exitFullscreen();
+    if (fullscreenElement()) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (screen.orientation && typeof screen.orientation.unlock === "function") {
+        try { screen.orientation.unlock(); } catch (_) {}
+      }
+      return exit ? exit.call(document) : undefined;
     }
     return enterFullscreenFor(root);
   }
@@ -25,18 +33,32 @@
   /// Go fullscreen and, on a handset, rotate to suit the content: Shorts are
   /// portrait, everything else is landscape. Orientation locking only exists on
   /// mobile and rejects when unsupported, so failures are ignored.
+  ///
+  /// iOS Safari never implemented fullscreen on ordinary elements, so the video
+  /// element's own presentation mode is the fallback there. Without it the
+  /// button did nothing at all on a handset.
   function enterFullscreenFor(root) {
     const media = root.querySelector("video");
     const portrait = media && media.videoHeight > media.videoWidth;
-    const request = root.requestFullscreen && root.requestFullscreen();
-    return Promise.resolve(request)
+    const request =
+      root.requestFullscreen ||
+      root.webkitRequestFullscreen ||
+      root.webkitRequestFullScreen;
+    const started = request
+      ? Promise.resolve(request.call(root)).catch(() => Promise.reject())
+      : Promise.reject();
+    return started
       .then(() => {
         const orientation = screen.orientation;
         if (orientation && typeof orientation.lock === "function") {
           return orientation.lock(portrait ? "portrait" : "landscape").catch(() => {});
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (media && typeof media.webkitEnterFullscreen === "function") {
+          try { media.webkitEnterFullscreen(); } catch (_) {}
+        }
+      });
   }
 
   function attach(video) {
@@ -597,12 +619,20 @@
     });
     listen(video, "tawnytransportchange", () => setTimeout(refreshQualities, 0));
     listen(video, "tawnyqualitychange", refreshQualities);
-    listen(document, "fullscreenchange", () => {
-      const fullscreen = document.fullscreenElement === root;
+    const syncFullscreen = () => {
+      // The iOS fallback puts the video element itself fullscreen, not the
+      // root, so anything inside this player counts.
+      const active = fullscreenElement();
+      const fullscreen = Boolean(active && (active === root || root.contains(active)));
       root.classList.toggle("is-fullscreen", fullscreen);
+      controls.classList.toggle("is-fullscreen", fullscreen);
       fullscreenButton?.setAttribute("aria-label", fullscreen ? "Exit fullscreen" : "Enter fullscreen");
+      fullscreenButton?.setAttribute("title", fullscreen ? "Exit fullscreen" : "Fullscreen");
       showControls(false);
-    });
+    };
+    listen(document, "fullscreenchange", syncFullscreen);
+    listen(document, "webkitfullscreenchange", syncFullscreen);
+    listen(video, "webkitendfullscreen", syncFullscreen);
 
     root.tabIndex = 0;
     updatePlaybackState();

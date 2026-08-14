@@ -2722,3 +2722,25 @@ html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]
   animation: route-transition-ios-slide-down-cover var(--route-transition-cover-duration)
     var(--route-transition-ios-ease) both;
 }
+
+/* -- Chapter label and fullscreen state -- */
+
+/* The controls chain is pointer-events:none so the video underneath stays
+   tappable; every interactive child has to opt back in. Without this the label
+   looked clickable but the tap fell through to play/pause. */
+.player-chapter-label:not([hidden]) {
+  pointer-events: auto;
+}
+
+/* Mirrors the play/pause icon swap: arrows out to enter, arrows in to leave. */
+.player-fullscreen-exit-icon {
+  display: none;
+}
+
+.is-fullscreen .player-fullscreen-enter-icon {
+  display: none;
+}
+
+.is-fullscreen .player-fullscreen-exit-icon {
+  display: inline-flex;
+}
