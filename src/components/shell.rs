@@ -42,6 +42,19 @@ fn detail_title(route: &Route, app_state: AppState) -> Option<String> {
     }
 }
 
+/// The nav destination a cover route sits on top of.
+///
+/// Going back to it by navigating — rather than popping history — is what lets
+/// the sheet animate down, because the transition is chosen from the route pair
+/// and a raw `go_back` gives the library nothing to compare.
+fn back_destination(route: &Route) -> Route {
+    match route {
+        Route::PlaylistDetail { .. } => Route::Playlists {},
+        Route::ChannelDetail { .. } => Route::Subscriptions {},
+        _ => Route::Feed {},
+    }
+}
+
 /// The gold label: the nav destination the current route belongs to.
 fn section_label(route: &Route) -> &'static str {
     match route {
@@ -56,12 +69,16 @@ fn section_label(route: &Route) -> &'static str {
 pub fn AppShell() -> Element {
     let route: Route = use_route();
     let app_state = use_context::<AppState>();
-    let navigator = use_navigator();
+
 
     let player_expanded = matches!(route, Route::VideoDetail { .. });
     let detail = detail_title(&route, app_state);
     let is_detail = detail.is_some();
     let title = detail.unwrap_or_default();
+    // Cover routes are sheets over a nav destination: the tab bar belongs to
+    // the destination underneath, not to the sheet.
+    let is_cover = is_detail || player_expanded;
+    let back_route = route.clone();
 
     // Only the two browsing surfaces carry a segmented control.
     let toolbar = match route {
@@ -95,7 +112,10 @@ pub fn AppShell() -> Element {
                 style: ButtonStyle::Clear,
                 aria_label: "Back".to_string(),
                 class: "icon-button",
-                onclick: move |_| { navigator.go_back(); },
+                onclick: move |_| {
+                    let home = back_destination(&back_route);
+                    spawn(async move { animated_navigate(home).await; });
+                },
                 ChevronLeft { size: 22 }
             }
         }
@@ -151,7 +171,7 @@ pub fn AppShell() -> Element {
             }
             // The player owns the whole screen; its own controls and gestures
             // are the way out, so the tab bar steps aside there.
-            if !player_expanded {
+            if !is_cover {
                 NavbarTabBar { aria_label: "Primary navigation".to_string(),
                     NavbarTab {
                         label: "Feed".to_string(),

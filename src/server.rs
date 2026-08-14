@@ -932,7 +932,21 @@ impl AppServerState {
             self.ytdlp_stream_urls(video_id),
         );
         let youtube_sources = match player {
-            Ok(player) => rusty_playback_sources(&player, &ytdlp_urls),
+            Ok(player) => {
+                let sources = rusty_playback_sources(&player, &ytdlp_urls);
+                // Tracks yt-dlp does not cover are dropped, which is right when
+                // it covers most of them and wrong when it covers none: a
+                // yt-dlp hiccup would otherwise empty the list and report "no
+                // playable stream" for a video that is perfectly playable.
+                if sources.is_empty() && !ytdlp_urls.is_empty() {
+                    eprintln!(
+                        "playback for {video_id}: yt-dlp matched no itag, using extractor URLs"
+                    );
+                    rusty_playback_sources(&player, &HashMap::new())
+                } else {
+                    sources
+                }
+            }
             Err(error) => {
                 eprintln!("playback extraction failed for {video_id}: {error:#}");
                 Vec::new()

@@ -96,6 +96,25 @@ pub fn App() -> Element {
 fn ThemedApp() -> Element {
     let app_state = use_context::<AppState>();
     let appearance = app_state.settings().appearance;
+
+    // View-transition snapshots are painted on the document element, outside
+    // the wrapper that carries the theme variables, so the stylesheet's
+    // `--color-bg` lookup missed and fell back to near-white. Mirroring the
+    // real background onto the root keeps transitions dark.
+    let background = tawny_theme(appearance).bg.clone();
+    use_effect(move || {
+        let background = background.clone();
+        spawn(async move {
+            let script = format!(
+                "document.documentElement.style.setProperty('--route-transition-bg', {background:?});\
+                 document.documentElement.style.setProperty('--color-bg', {background:?});\
+                 dioxus.send(true);"
+            );
+            let mut eval = document::eval(&script);
+            let _ = eval.recv::<bool>().await;
+        });
+    });
+
     rsx! {
         AppWrapper {
             key: "{appearance:?}",

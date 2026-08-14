@@ -2609,3 +2609,12 @@ textarea {
   border-color: color-mix(in srgb, var(--color-focused) 45%, transparent);
   color: var(--color-focused);
 }
+
+/* Separates the content-type toggles from the group filters in the same row. */
+.group-filter-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 1.1rem;
+  margin: 0 0.3rem;
+  background: var(--color-card-border);
+}

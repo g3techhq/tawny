@@ -4,7 +4,7 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::Sparkles;
+use dioxus_icons::lucide::{Clapperboard, Radio, Zap};
 use g3_ui::{Refresher, StatusColor};
 
 use super::VideoGrid;
@@ -15,6 +15,9 @@ pub fn Feed() -> Element {
     // Owned by the header's segmented control.
     let filter_index = app_state.feed_filter_index;
     let mut selected_group = use_signal(|| "all".to_string());
+    let mut show_videos = use_signal(|| true);
+    let mut show_shorts = use_signal(|| true);
+    let mut show_live = use_signal(|| true);
     let filter = match filter_index() {
         1 => FeedFilter::Unwatched,
         2 => FeedFilter::Today,
@@ -42,6 +45,20 @@ pub fn Feed() -> Element {
         && let Some(group) = groups.iter().find(|group| group.id == active_group)
     {
         videos.retain(|video| group.channel_ids.contains(&video.channel_id));
+    }
+    // Each toggle is independent; turning them all off would be a blank page,
+    // so an empty selection is treated as "show everything".
+    let any_kind = show_videos() || show_shorts() || show_live();
+    if any_kind {
+        videos.retain(|video| {
+            if video.is_live {
+                show_live()
+            } else if video.is_short {
+                show_shorts()
+            } else {
+                show_videos()
+            }
+        });
     }
     if app_state.settings().hide_watched || filter == FeedFilter::Unwatched {
         videos.retain(|video| !video.watched);
@@ -98,7 +115,30 @@ pub fn Feed() -> Element {
             // Count and group filters share one row rather than stacking two
             // thin bands above the grid.
             nav { class: "group-filter-row", aria_label: "Subscription groups",
-                span { class: "feed-count", Sparkles { size: 14 } "{videos.len()} fresh" }
+                // Content-type toggles: independent switches rather than a
+                // segmented control, so any combination can be shown.
+                button {
+                    class: if show_videos() { "group-filter active" } else { "group-filter" },
+                    aria_pressed: show_videos(),
+                    onclick: move |_| show_videos.toggle(),
+                    Clapperboard { size: 14 }
+                    "Videos"
+                }
+                button {
+                    class: if show_shorts() { "group-filter active" } else { "group-filter" },
+                    aria_pressed: show_shorts(),
+                    onclick: move |_| show_shorts.toggle(),
+                    Zap { size: 14 }
+                    "Shorts"
+                }
+                button {
+                    class: if show_live() { "group-filter active" } else { "group-filter" },
+                    aria_pressed: show_live(),
+                    onclick: move |_| show_live.toggle(),
+                    Radio { size: 14 }
+                    "Live"
+                }
+                span { class: "group-filter-divider" }
                 button {
                     class: if selected_group() == "all" { "group-filter active" } else { "group-filter" },
                     onclick: move |_| selected_group.set("all".into()),
