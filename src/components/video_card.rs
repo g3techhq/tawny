@@ -163,9 +163,11 @@ pub fn VideoCard(video: Video) -> Element {
                         },
                         ListPlus { size: 18 }
                     }
+                    // Listings that come from a flat playlist carry no runtime.
+                    // No badge is honest; "0:00" is not.
                     if video.is_live {
                         Badge { color: StatusColor::Danger, class: "duration-badge", "LIVE" }
-                    } else {
+                    } else if video.duration_seconds > 0 {
                         span { class: "duration-badge", "{video.duration_label()}" }
                     }
                     if progress > 0.0 {

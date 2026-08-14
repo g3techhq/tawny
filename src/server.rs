@@ -140,6 +140,23 @@ struct YtdlpDump {
     formats: Vec<YtdlpFormat>,
 }
 
+#[derive(Debug, Deserialize)]
+struct YtdlpFlatEntry {
+    #[serde(default)]
+    id: String,
+    title: Option<String>,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    view_count: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YtdlpFlatPlaylist {
+    #[serde(default)]
+    entries: Vec<YtdlpFlatEntry>,
+}
+
 async fn youtube_call<T, E, F>(future: F, operation: &str) -> Result<T>
 where
     E: std::fmt::Display,
@@ -772,6 +789,63 @@ impl AppServerState {
             }
         }
         true
+    }
+
+    /// A channel's Shorts, listed by yt-dlp.
+    ///
+    /// rustypipe 0.11.4 cannot read the Shorts tab at all: verified 2026-08-13
+    /// against two channels that publish Shorts, both returned zero items on
+    /// the first page *and* zero after following the continuation token. yt-dlp
+    /// parses the same tab correctly, and it is already a dependency for
+    /// playback URLs, so it fills the gap rather than leaving the tab empty.
+    async fn ytdlp_channel_shorts(&self, channel_id: &str, channel_name: &str) -> Vec<Video> {
+        let Some(binary) = self.ytdlp_bin.as_ref() else {
+            return Vec::new();
+        };
+        let output = tokio::process::Command::new(binary)
+            .args([
+                "--flat-playlist",
+                "-J",
+                "--playlist-end",
+                "30",
+                "--no-warnings",
+                "--socket-timeout",
+                "15",
+                &format!("https://www.youtube.com/channel/{channel_id}/shorts"),
+            ])
+            .stdin(std::process::Stdio::null())
+            .output();
+        let output = match tokio::time::timeout(Duration::from_secs(40), output).await {
+            Ok(Ok(output)) if output.status.success() => output,
+            _ => {
+                eprintln!("yt-dlp could not list Shorts for {channel_id}");
+                return Vec::new();
+            }
+        };
+        let Ok(dump) = serde_json::from_slice::<YtdlpFlatPlaylist>(&output.stdout) else {
+            return Vec::new();
+        };
+        dump.entries
+            .into_iter()
+            .filter(|entry| !entry.id.is_empty())
+            .map(|entry| Video {
+                thumbnail_url: format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id),
+                id: entry.id,
+                title: entry.title.unwrap_or_default(),
+                channel_id: channel_id.to_string(),
+                channel_name: channel_name.to_string(),
+                published_at: String::new(),
+                duration_seconds: entry.duration.unwrap_or(0.0) as u64,
+                view_count: entry
+                    .view_count
+                    .map(|count| compact_count(count, " views"))
+                    .unwrap_or_default(),
+                progress_seconds: 0,
+                watched: false,
+                is_live: false,
+                is_short: true,
+            })
+            .collect()
     }
 
     /// Ungated stream URLs from yt-dlp, keyed by itag.
@@ -1522,6 +1596,13 @@ impl AppServerState {
             videos.videos.retain(|video| !video.is_short);
             for video in mixed_shorts {
                 push_unique_video(&mut shorts.videos, video);
+            }
+            // The extractor cannot read the Shorts tab, so ask yt-dlp before
+            // falling back to guessing from the RSS feed.
+            if shorts.videos.is_empty() {
+                for video in self.ytdlp_channel_shorts(channel_id, &channel.name).await {
+                    push_unique_video(&mut shorts.videos, video);
+                }
             }
             if shorts.videos.is_empty()
                 && let Ok(rss) = rss_result

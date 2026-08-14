@@ -2478,3 +2478,110 @@ textarea {
     max-height: calc(100% - 5.8rem);
   }
 }
+
+/* -- Subscriptions: groups and channel lists -- */
+
+.group-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 12px;
+  background: var(--color-card-inset);
+}
+
+.group-row-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.group-row-copy strong {
+  font-size: 0.9rem;
+}
+
+.group-row-copy span {
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+}
+
+/* Overlapping faces read as "these channels", without a wall of names. */
+.group-row-faces {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.group-row-faces .channel-avatar {
+  width: 1.6rem;
+  height: 1.6rem;
+  margin-left: -0.4rem;
+  border: 2px solid var(--color-card-inset);
+  font-size: 0.7rem;
+}
+
+.group-row-faces .channel-avatar:first-child {
+  margin-left: 0;
+}
+
+.group-row-delete {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0.3rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.group-row-delete:hover {
+  background: var(--color-control);
+  color: var(--color-danger);
+}
+
+.group-editor-list {
+  display: flex;
+  max-height: 62vh;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-y: auto;
+}
+
+.group-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.group-editor-row span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-editor-row:hover {
+  background: var(--color-control);
+}
+
+.group-editor-row.included {
+  border-color: color-mix(in srgb, var(--color-focused) 45%, transparent);
+  color: var(--color-focused);
+}
