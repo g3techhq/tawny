@@ -19,7 +19,24 @@
     if (document.fullscreenElement) {
       return document.exitFullscreen && document.exitFullscreen();
     }
-    return root.requestFullscreen && root.requestFullscreen();
+    return enterFullscreenFor(root);
+  }
+
+  /// Go fullscreen and, on a handset, rotate to suit the content: Shorts are
+  /// portrait, everything else is landscape. Orientation locking only exists on
+  /// mobile and rejects when unsupported, so failures are ignored.
+  function enterFullscreenFor(root) {
+    const media = root.querySelector("video");
+    const portrait = media && media.videoHeight > media.videoWidth;
+    const request = root.requestFullscreen && root.requestFullscreen();
+    return Promise.resolve(request)
+      .then(() => {
+        const orientation = screen.orientation;
+        if (orientation && typeof orientation.lock === "function") {
+          return orientation.lock(portrait ? "portrait" : "landscape").catch(() => {});
+        }
+      })
+      .catch(() => {});
   }
 
   function attach(video) {
@@ -35,6 +52,7 @@
     const signal = abort.signal;
     const progress = controls.querySelector("[data-player-progress]");
     const chapterMarkers = controls.querySelector("[data-player-chapter-markers]");
+    const chapterLabel = controls.querySelector("[data-player-chapter-label]");
     const seekPreview = controls.querySelector("[data-player-seek-preview]");
     const previewImage = controls.querySelector("[data-player-preview-image]");
     const previewChapter = controls.querySelector("[data-player-preview-chapter]");
@@ -101,10 +119,19 @@
       return end;
     }
 
+    function updateChapterLabel(position) {
+      if (!chapterLabel) return;
+      const chapter = chapterAt(position);
+      const title = chapter?.title || "";
+      chapterLabel.hidden = !title;
+      if (chapterLabel.textContent !== title) chapterLabel.textContent = title;
+    }
+
     function updateTimeline() {
       const length = Number.isFinite(video.duration) ? video.duration : 0;
       const position = Number.isFinite(video.currentTime) ? video.currentTime : 0;
       if (currentTime) currentTime.textContent = formatTime(position);
+      updateChapterLabel(position);
       if (duration) duration.textContent = formatTime(length);
       if (!progress || scrubbing) return;
       const played = length > 0 ? Math.min(100, (position / length) * 100) : 0;
@@ -328,6 +355,9 @@
         case "captions":
           controls.querySelector("[data-player-caption-toggle]")?.click();
           break;
+        case "chapters":
+          controls.querySelector("[data-player-chapters-open]")?.click();
+          break;
         case "speed":
           cycleQuickSpeed();
           break;
@@ -411,14 +441,64 @@
       listen(progress, "blur", () => finishScrub(true));
     }
 
+    // Tapping anywhere on the video toggles playback — unless the pointer just
+    // travelled far enough to be a swipe, in which case the gesture owns it.
     listen(video, "click", () => {
       closeOptions();
-      if (controls.classList.contains("controls-visible")) {
-        controls.classList.remove("controls-visible");
-        root.classList.remove("player-controls-visible");
-      } else {
-        showControls(false);
+      if (swallowNextClick) {
+        swallowNextClick = false;
+        return;
       }
+      runAction("toggle");
+      showControls(false);
+    });
+
+    // Vertical swipes: up enters fullscreen, down leaves it, and a downward
+    // swipe outside fullscreen shrinks the player to the mini bar.
+    let gestureStart = null;
+    let swallowNextClick = false;
+    listen(root, "pointerdown", (event) => {
+      swallowNextClick = false;
+      if (event.target.closest("[data-player-action], [data-player-progress], .player-options-menu")) {
+        gestureStart = null;
+        return;
+      }
+      gestureStart = { x: event.clientX, y: event.clientY, at: Date.now() };
+      // Capture the pointer so a release that lands outside the player — which
+      // a fast upward flick very often does — still reports back here.
+      try {
+        root.setPointerCapture(event.pointerId);
+      } catch (_) {}
+    });
+
+    const endGesture = (event) => {
+      if (!gestureStart) return;
+      const dx = event.clientX - gestureStart.x;
+      const dy = event.clientY - gestureStart.y;
+      const elapsed = Date.now() - gestureStart.at;
+      gestureStart = null;
+      try {
+        root.releasePointerCapture(event.pointerId);
+      } catch (_) {}
+      // Deliberate, mostly-vertical, and quick enough to be a flick.
+      if (elapsed > 800 || Math.abs(dy) < 55 || Math.abs(dy) <= Math.abs(dx)) return;
+      // A swipe is not a tap: keep the click that follows from toggling play.
+      swallowNextClick = true;
+      const fullscreen = document.fullscreenElement === root;
+      if (dy < 0) {
+        // Requested straight from the handler: fullscreen needs the user
+        // activation this event carries, and awaiting anything first loses it.
+        if (!fullscreen) enterFullscreenFor(root);
+      } else if (fullscreen) {
+        document.exitFullscreen && document.exitFullscreen();
+      } else {
+        controls.querySelector("[data-player-minimize]")?.click();
+      }
+    };
+
+    listen(root, "pointerup", endGesture);
+    listen(root, "pointercancel", () => {
+      gestureStart = null;
     });
     listen(video, "dblclick", (event) => {
       const bounds = video.getBoundingClientRect();

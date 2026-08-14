@@ -1,4 +1,7 @@
-use crate::{models::Appearance, state::AppState};
+use crate::{
+    models::{Appearance, SwipeActionKind},
+    state::AppState,
+};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
     Database, Gauge, HardDrive, ListPlus, Server, ShieldCheck,
@@ -28,6 +31,13 @@ pub fn SettingsPage() -> Element {
         .unwrap_or_else(|| "Deep dives".into());
     let start_value = use_signal(|| start_name);
     let end_value = use_signal(|| end_name);
+    let start_action = use_signal(|| settings.swipe_right_action.label().to_string());
+    let end_action = use_signal(|| settings.swipe_left_action.label().to_string());
+    let action_options = SwipeActionKind::ALL
+        .iter()
+        .map(|kind| SelectOption::from(kind.label().to_string()))
+        .collect::<Vec<_>>();
+    let action_options_for_end = action_options.clone();
     let options = library
         .playlists
         .iter()
@@ -54,21 +64,39 @@ pub fn SettingsPage() -> Element {
 
                     section { class: "settings-section",
                         span { class: "section-kicker", "GESTURES" }
-                        Card { title: "Swipe destinations".to_string(),
+                        Card { title: "Swipe actions".to_string(),
                             div { class: "setting-row",
                                 div { class: "setting-icon", ListPlus { size: 19 } }
                                 div { class: "setting-copy",
                                     strong { "Swipe right" }
-                                    span { "Quick-save destination" }
+                                    span { "What the gesture does" }
                                 }
                                 Select {
-                                    value: start_value,
-                                    options,
-                                    onchange: move |name: String| {
-                                        if let Some(playlist) = app_state.library().playlists.iter().find(|playlist| playlist.name == name) {
-                                            app_state.settings.write().swipe_right_playlist_id = playlist.id.clone();
+                                    value: start_action,
+                                    options: action_options,
+                                    onchange: move |label: String| {
+                                        if let Some(kind) = SwipeActionKind::from_label(&label) {
+                                            app_state.settings.write().swipe_right_action = kind;
                                         }
                                     },
+                                }
+                            }
+                            // The playlist picker only matters when the action
+                            // is "Add to playlist", so it is hidden otherwise.
+                            if settings.swipe_right_action == SwipeActionKind::AddToPlaylist {
+                                div { class: "setting-row setting-row-nested",
+                                    div { class: "setting-copy",
+                                        span { "Destination playlist" }
+                                    }
+                                    Select {
+                                        value: start_value,
+                                        options,
+                                        onchange: move |name: String| {
+                                            if let Some(playlist) = app_state.library().playlists.iter().find(|playlist| playlist.name == name) {
+                                                app_state.settings.write().swipe_right_playlist_id = playlist.id.clone();
+                                            }
+                                        },
+                                    }
                                 }
                             }
                             div { class: "setting-divider" }
@@ -76,16 +104,32 @@ pub fn SettingsPage() -> Element {
                                 div { class: "setting-icon flip", ListPlus { size: 19 } }
                                 div { class: "setting-copy",
                                     strong { "Swipe left" }
-                                    span { "Quick-save destination" }
+                                    span { "What the gesture does" }
                                 }
                                 Select {
-                                    value: end_value,
-                                    options: options_for_end,
-                                    onchange: move |name: String| {
-                                        if let Some(playlist) = app_state.library().playlists.iter().find(|playlist| playlist.name == name) {
-                                            app_state.settings.write().swipe_left_playlist_id = playlist.id.clone();
+                                    value: end_action,
+                                    options: action_options_for_end,
+                                    onchange: move |label: String| {
+                                        if let Some(kind) = SwipeActionKind::from_label(&label) {
+                                            app_state.settings.write().swipe_left_action = kind;
                                         }
                                     },
+                                }
+                            }
+                            if settings.swipe_left_action == SwipeActionKind::AddToPlaylist {
+                                div { class: "setting-row setting-row-nested",
+                                    div { class: "setting-copy",
+                                        span { "Destination playlist" }
+                                    }
+                                    Select {
+                                        value: end_value,
+                                        options: options_for_end,
+                                        onchange: move |name: String| {
+                                            if let Some(playlist) = app_state.library().playlists.iter().find(|playlist| playlist.name == name) {
+                                                app_state.settings.write().swipe_left_playlist_id = playlist.id.clone();
+                                            }
+                                        },
+                                    }
                                 }
                             }
                         }

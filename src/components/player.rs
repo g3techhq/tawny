@@ -9,10 +9,11 @@ use crate::{
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    Captions, Check, Clock, Gauge, Heart, ListVideo, Maximize2, Minimize2, Pause, PictureInPicture,
-    Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, Volume2, VolumeX, X,
+    Captions, Check, Clock, Heart, ListVideo, Maximize2, MessageSquare, Minimize2, Pause,
+    PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, Volume2,
+    VolumeX, X,
 };
-use g3_ui::{Badge, Button, ButtonSize, ButtonStyle, StatusColor};
+use g3_ui::{Badge, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
 
 use super::VideoGrid;
 
@@ -290,7 +291,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         && !playback_source
             .as_ref()
             .is_some_and(source_is_transportable);
-    let (playback_badge, _) = playback_copy(playback_source.as_ref(), use_embed());
     let is_short = video.is_short;
     let current_speed = app_state.settings().speed_for(is_short);
     let session_to_attach = playback_session.clone();
@@ -313,6 +313,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let captions_for_toggle = app_state.active_captions;
     let caption_tracks_to_render = (app_state.active_captions)();
     let minimize_navigator = navigator.clone();
+    let minimize_swipe_navigator = navigator.clone();
+    let mut chapters_sheet = app_state.chapters_sheet_open;
     let open_video_id = video.id.clone();
     let player_key = format!("{}-{}", video.id, playback_attempt());
 
@@ -463,6 +465,15 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             div { class: "player-control-row",
                                 span { class: "player-time",
                                     span { "data-player-current-time": "", "0:00" }
+                                    // Current chapter, next to the clock; tapping it opens the
+                                    // chapter list rather than making the user scrub for it.
+                                    button {
+                                        r#type: "button",
+                                        class: "player-chapter-label",
+                                        "data-player-chapter-label": "",
+                                        "data-player-action": "chapters",
+                                        hidden: true,
+                                    }
                                     span { class: "player-time-separator", " • " }
                                     span { "data-player-duration": "", "0:00" }
                                 }
@@ -483,6 +494,22 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     title: "Captions",
                                     "data-player-action": "captions",
                                     Captions { size: 21 }
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "player-caption-state-bridge",
+                                    tabindex: "-1",
+                                    aria_hidden: "true",
+                                    "data-player-chapters-open": "",
+                                    onclick: move |_| chapters_sheet.set(true),
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "player-caption-state-bridge",
+                                    tabindex: "-1",
+                                    aria_hidden: "true",
+                                    "data-player-minimize": "",
+                                    onclick: move |_| { minimize_swipe_navigator.push(Route::Feed {}); },
                                 }
                                 button {
                                     r#type: "button",
@@ -585,11 +612,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     }
                 }
             }
-            if expanded {
-                div { class: "persistent-player-status",
-                    span { class: "resolver-pill", Play { size: 13 } "{playback_badge}" }
-                }
-            } else {
+            if !expanded {
                 button {
                     class: "mini-player-copy",
                     aria_label: "Open {video.title}",
@@ -741,55 +764,6 @@ fn source_is_transportable(source: &PlaybackSource) -> bool {
     }
 }
 
-fn playback_copy(source: Option<&PlaybackSource>, forced_embed: bool) -> (&'static str, String) {
-    if forced_embed {
-        return (
-            "Embed fallback",
-            "The direct stream failed twice, so the privacy-enhanced fallback took over.".into(),
-        );
-    }
-    let Some(source) = source else {
-        return (
-            "Resolving",
-            "Requesting a fresh, ephemeral playback session.".into(),
-        );
-    };
-    let quality = source.quality_label.as_deref().unwrap_or("Auto");
-    match source.protocol {
-        PlaybackProtocol::Sabr => (
-            "SABR transport",
-            format!("Playing the extractor's SABR transport · {quality}"),
-        ),
-        PlaybackProtocol::Dash if !source.tracks.is_empty() => (
-            "Adaptive tracks",
-            format!("Buffering separate audio and video with automatic quality · {quality}"),
-        ),
-        PlaybackProtocol::Dash => (
-            "DASH adaptive",
-            format!("Playing through the in-app adaptive transport · {quality}"),
-        ),
-        PlaybackProtocol::Hls if !source.request_headers.is_empty() => (
-            "HLS resolved",
-            "This stream requires request headers, so the platform fallback is active.".into(),
-        ),
-        PlaybackProtocol::Hls => (
-            "HLS adaptive",
-            format!("Playing through the in-app adaptive transport · {quality}"),
-        ),
-        PlaybackProtocol::Progressive if !source.request_headers.is_empty() => (
-            "Stream resolved",
-            "This stream requires request headers, so the platform fallback is active.".into(),
-        ),
-        PlaybackProtocol::Progressive => (
-            "Direct stream",
-            format!("Playing an ephemeral muxed stream · {quality}"),
-        ),
-        PlaybackProtocol::EmbedFallback => (
-            "Embed fallback",
-            "Privacy-enhanced embed fallback active.".into(),
-        ),
-    }
-}
 
 #[component]
 pub fn VideoDetail(id: String) -> Element {
@@ -801,6 +775,9 @@ fn VideoDetailInner(id: String) -> Element {
     let mut app_state = use_context::<AppState>();
     let navigator = use_navigator();
     let mut description_expanded = use_signal(|| false);
+    let mut chapters_open = app_state.chapters_sheet_open;
+    let mut captions_open = use_signal(|| false);
+    let mut comments_open = use_signal(|| false);
     let mut comments = use_signal(Vec::<VideoComment>::new);
     let mut comments_next_page = use_signal(|| None::<String>);
     let mut comments_initialized = use_signal(|| false);
@@ -947,8 +924,6 @@ fn VideoDetailInner(id: String) -> Element {
         .as_ref()
         .map(|channel| channel.subscribed)
         .unwrap_or(false);
-    let is_short = video.is_short;
-    let current_speed = app_state.settings().speed_for(is_short);
     let caption_tracks = details.captions.clone();
     let chapters = details.chapters.clone();
     let comments_disabled = details.comments.disabled;
@@ -965,6 +940,9 @@ fn VideoDetailInner(id: String) -> Element {
                         h1 { "{video.title}" }
                         p { class: "video-stats", "{video.stats_label()}" }
 
+                        // Captions and chapters are chips that open their own
+                        // sheet, so the page is not padded out with two panels
+                        // that are mostly idle.
                         if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() {
                             div { class: "video-engagement",
                                 if details.like_count > 0 {
@@ -974,38 +952,25 @@ fn VideoDetailInner(id: String) -> Element {
                                     span { ThumbsDown { size: 15 } "{compact_number(details.dislike_count)}" }
                                 }
                                 if !caption_tracks.is_empty() {
-                                    span { Captions { size: 15 } "{caption_tracks.len()} captions" }
+                                    button {
+                                        class: "engagement-chip",
+                                        onclick: move |_| captions_open.set(true),
+                                        Captions { size: 15 }
+                                        "{caption_tracks.len()} captions"
+                                    }
                                 }
                                 if !chapters.is_empty() {
-                                    span { ListVideo { size: 15 } "{chapters.len()} chapters" }
-                                }
-                            }
-                        }
-
-                        div { class: "speed-strip", aria_label: "Quick playback speed",
-                            span { Gauge { size: 16 } "Speed" }
-                            for speed in [1.0, 1.25, 1.5, 2.0] {
-                                button {
-                                    class: if (current_speed - speed).abs() < f64::EPSILON { "speed-chip selected" } else { "speed-chip" },
-                                    onclick: move |_| {
-                                        app_state.settings.write().set_speed_for(is_short, speed);
-                                        set_player_speed(speed);
-                                    },
-                                    "{speed}×"
+                                    button {
+                                        class: "engagement-chip",
+                                        onclick: move |_| chapters_open.set(true),
+                                        ListVideo { size: 15 }
+                                        "{chapters.len()} chapters"
+                                    }
                                 }
                             }
                         }
 
                         div { class: "player-actions",
-                            Button {
-                                style: ButtonStyle::Neutral,
-                                start: rsx! { Clock { size: 17 } },
-                                onclick: move |_| {
-                                    app_state.playlist_picker_video.set(Some(playlist_video.clone()));
-                                    app_state.playlist_picker_open.set(true);
-                                },
-                                "Save"
-                            }
                             Button {
                                 style: ButtonStyle::Neutral,
                                 start: rsx! { Check { size: 17 } },
@@ -1017,13 +982,22 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
+                                start: rsx! { Clock { size: 17 } },
+                                onclick: move |_| {
+                                    app_state.playlist_picker_video.set(Some(playlist_video.clone()));
+                                    app_state.playlist_picker_open.set(true);
+                                },
+                                "Save"
+                            }
+                            Button {
+                                style: ButtonStyle::Neutral,
                                 start: rsx! { Share2 { size: 17 } },
                                 onclick: move |_| app_state.show_toast("Link ready to share", StatusColor::Neutral),
                                 "Share"
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
-                                start: rsx! { Maximize2 { size: 17 } },
+                                start: rsx! { PictureInPicture { size: 17 } },
                                 onclick: move |_| toggle_picture_in_picture(),
                                 "PiP"
                             }
@@ -1056,37 +1030,6 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                         }
 
-                        if !chapters.is_empty() {
-                            section { class: "detail-section",
-                                div { class: "subsection-heading",
-                                    h3 { ListVideo { size: 18 } "Chapters" }
-                                    span { "Jump without scrubbing" }
-                                }
-                                div { class: "chapter-strip",
-                                    for chapter in chapters {
-                                        {
-                                            let start_seconds = chapter.start_seconds;
-                                            rsx! {
-                                                button {
-                                                    class: "chapter-card",
-                                                    onclick: move |_| seek_player(start_seconds),
-                                                    strong { "{chapter.timestamp_label()}" }
-                                                    span { "{chapter.title}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !caption_tracks.is_empty() {
-                            CaptionPicker {
-                                tracks: caption_tracks.clone(),
-                                selected: app_state.selected_caption,
-                            }
-                        }
-
                         if !details.description.is_empty() {
                             section { class: "detail-section description-panel",
                                 div { class: "subsection-heading",
@@ -1102,53 +1045,17 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                         }
 
-                        section { class: "detail-section comments-section",
-                            div { class: "subsection-heading",
-                                h3 { "Comments" }
-                                span { "{comments().len()} loaded" }
-                            }
+                        Button {
+                            class: "comments-open-button",
+                            style: ButtonStyle::Neutral,
+                            expand: true,
+                            disabled: comments_disabled,
+                            start: rsx! { MessageSquare { size: 17 } },
+                            onclick: move |_| comments_open.set(true),
                             if comments_disabled {
-                                p { class: "detail-muted", "Comments are disabled for this video." }
-                            } else if comments().is_empty() {
-                                p { class: "detail-muted",
-                                    if comments_initialized() && !details.comments.remote_available {
-                                        "Comments need a connected video source."
-                                    } else {
-                                        "No comments are available."
-                                    }
-                                }
+                                "Comments are disabled"
                             } else {
-                                div { class: "comment-list",
-                                    for comment in comments() {
-                                        CommentCard { comment }
-                                    }
-                                }
-                            }
-                            if let Some(next_page) = comments_next_page() {
-                                Button {
-                                    class: "load-comments-button",
-                                    style: ButtonStyle::Neutral,
-                                    disabled: comments_loading(),
-                                    onclick: move |_| {
-                                        let video_id = video.id.clone();
-                                        let token = next_page.clone();
-                                        comments_loading.set(true);
-                                        spawn(async move {
-                                            match get_comments_page(video_id, token).await {
-                                                Ok(page) => {
-                                                    comments.write().extend(page.comments);
-                                                    comments_next_page.set(page.next_page);
-                                                }
-                                                Err(_) => app_state.show_toast(
-                                                    "Could not load more comments",
-                                                    StatusColor::Warning,
-                                                ),
-                                            }
-                                            comments_loading.set(false);
-                                        });
-                                    },
-                                    if comments_loading() { "Loading…" } else { "Load more comments" }
-                                }
+                                "Comments · {comments().len()}"
                             }
                         }
 
@@ -1160,6 +1067,97 @@ fn VideoDetailInner(id: String) -> Element {
                         }
                         VideoGrid { videos: related }
                     }
+        }
+
+        Sheet { is_open: chapters_open, class: "player-sheet",
+            div { class: "sheet-heading",
+                div { class: "sheet-icon", ListVideo { size: 22 } }
+                div {
+                    h2 { "Chapters" }
+                    p { "{chapters.len()} in this video" }
+                }
+            }
+            div { class: "chapter-sheet-list",
+                for chapter in chapters.clone() {
+                    {
+                        let start_seconds = chapter.start_seconds;
+                        rsx! {
+                            button {
+                                class: "chapter-sheet-row",
+                                key: "{chapter.start_seconds}",
+                                onclick: move |_| {
+                                    seek_player(start_seconds);
+                                    chapters_open.set(false);
+                                },
+                                strong { "{chapter.timestamp_label()}" }
+                                span { "{chapter.title}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Sheet { is_open: captions_open, class: "player-sheet",
+            div { class: "sheet-heading",
+                div { class: "sheet-icon", Captions { size: 22 } }
+                div {
+                    h2 { "Captions" }
+                    p { "Pick a track here, then turn it on in the player" }
+                }
+            }
+            CaptionPicker {
+                tracks: caption_tracks.clone(),
+                selected: app_state.selected_caption,
+            }
+        }
+
+        // No heading and no running count: the button that opened this already
+        // said "Comments", so the sheet is just the list. Load-more lives at the
+        // end of the scrolled list rather than pinned above it.
+        Sheet { is_open: comments_open, class: "player-sheet comments-sheet",
+            if comments().is_empty() {
+                p { class: "detail-muted",
+                    if comments_initialized() && !details.comments.remote_available {
+                        "Comments need a connected video source."
+                    } else {
+                        "No comments are available."
+                    }
+                }
+            } else {
+                div { class: "comment-list",
+                    for comment in comments() {
+                        CommentCard { comment }
+                    }
+                    if let Some(next_page) = comments_next_page() {
+                        Button {
+                            class: "load-comments-button",
+                            style: ButtonStyle::Neutral,
+                            expand: true,
+                            disabled: comments_loading(),
+                            onclick: move |_| {
+                                let video_id = video.id.clone();
+                                let token = next_page.clone();
+                                comments_loading.set(true);
+                                spawn(async move {
+                                    match get_comments_page(video_id, token).await {
+                                        Ok(page) => {
+                                            comments.write().extend(page.comments);
+                                            comments_next_page.set(page.next_page);
+                                        }
+                                        Err(_) => app_state.show_toast(
+                                            "Could not load more comments",
+                                            StatusColor::Warning,
+                                        ),
+                                    }
+                                    comments_loading.set(false);
+                                });
+                            },
+                            if comments_loading() { "Loading…" } else { "Load more comments" }
+                        }
+                    }
+                }
+            }
         }
     }
 }

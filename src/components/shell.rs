@@ -1,7 +1,7 @@
 use crate::{app::Route, state::AppState};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    Bell, ChevronLeft, History, House, List as ListIcon, ListVideo, Search, Settings,
+    ChevronLeft, History, House, List as ListIcon, ListVideo, Search, Settings, Users,
 };
 use g3_ui::{
     Body, Button, ButtonStyle, Header, Navbar, NavbarTab, NavbarTabBar, SegmentButton, SegmentGroup,
@@ -37,7 +37,6 @@ fn detail_title(route: &Route, app_state: AppState) -> Option<String> {
         Route::SettingsPage {} => Some("Settings".into()),
         Route::QueuePage {} => Some("Queue".into()),
         Route::HistoryPage {} => Some("History".into()),
-        Route::VideoDetail { .. } => Some("Now playing".into()),
         _ => None,
     }
 }
@@ -79,6 +78,13 @@ pub fn AppShell() -> Element {
                 SegmentButton { index: 2, "Channels" }
             }
         }),
+        Route::ChannelDetail { .. } => Some(rsx! {
+            SegmentGroup { active: app_state.channel_tab_index,
+                SegmentButton { index: 0, "Videos" }
+                SegmentButton { index: 1, "Shorts" }
+                SegmentButton { index: 2, "Live" }
+            }
+        }),
         _ => None,
     };
 
@@ -102,66 +108,74 @@ pub fn AppShell() -> Element {
     };
 
     rsx! {
-        Navbar { class: "tawny-shell",
-            Header {
-                title,
-                class: "tawny-header",
-                start_button,
-                end_button: rsx! {
-                    div { class: "header-actions",
-                        Button {
-                            style: ButtonStyle::Clear,
-                            aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
-                            class: "icon-button",
-                            onclick: move |_| { navigator.push(Route::QueuePage {}); },
-                            ListVideo { size: 19 }
+        Navbar { class: if player_expanded { "tawny-shell tawny-shell-immersive" } else { "tawny-shell" },
+            // No top bar on the player: minimize, back, and swipe-down all
+            // leave the screen, so a bar would only steal height from the video.
+            if !player_expanded {
+                Header {
+                    title,
+                    class: "tawny-header",
+                    start_button,
+                    end_button: rsx! {
+                        div { class: "header-actions",
+                            Button {
+                                style: ButtonStyle::Clear,
+                                aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
+                                class: "icon-button",
+                                onclick: move |_| { navigator.push(Route::QueuePage {}); },
+                                ListVideo { size: 19 }
+                            }
+                            Button {
+                                style: ButtonStyle::Clear,
+                                aria_label: "History".to_string(),
+                                class: "icon-button header-history-button",
+                                onclick: move |_| { navigator.push(Route::HistoryPage {}); },
+                                History { size: 19 }
+                            }
+                            Button {
+                                style: ButtonStyle::Clear,
+                                aria_label: "Settings".to_string(),
+                                class: "icon-button",
+                                onclick: move |_| { navigator.push(Route::SettingsPage {}); },
+                                Settings { size: 20 }
+                            }
                         }
-                        Button {
-                            style: ButtonStyle::Clear,
-                            aria_label: "History".to_string(),
-                            class: "icon-button header-history-button",
-                            onclick: move |_| { navigator.push(Route::HistoryPage {}); },
-                            History { size: 19 }
-                        }
-                        Button {
-                            style: ButtonStyle::Clear,
-                            aria_label: "Settings".to_string(),
-                            class: "icon-button",
-                            onclick: move |_| { navigator.push(Route::SettingsPage {}); },
-                            Settings { size: 20 }
-                        }
-                    }
-                },
-                toolbar,
+                    },
+                    toolbar,
+                }
             }
             Body { padding: false,
                 PersistentPlayer { expanded: player_expanded }
                 Outlet::<Route> {}
             }
-            NavbarTabBar { aria_label: "Primary navigation".to_string(),
-                NavbarTab {
-                    label: "Feed".to_string(),
-                    selected: matches!(route, Route::Feed {}),
-                    icon: rsx! { House { size: 20 } },
-                    onclick: move |_| { navigator.push(Route::Feed {}); },
-                }
-                NavbarTab {
-                    label: "Subscriptions".to_string(),
-                    selected: matches!(route, Route::Subscriptions {}),
-                    icon: rsx! { Bell { size: 20 } },
-                    onclick: move |_| { navigator.push(Route::Subscriptions {}); },
-                }
-                NavbarTab {
-                    label: "Playlists".to_string(),
-                    selected: matches!(route, Route::Playlists {}),
-                    icon: rsx! { ListIcon { size: 20 } },
-                    onclick: move |_| { navigator.push(Route::Playlists {}); },
-                }
-                NavbarTab {
-                    label: "Search".to_string(),
-                    selected: matches!(route, Route::Explore {}),
-                    icon: rsx! { Search { size: 20 } },
-                    onclick: move |_| { navigator.push(Route::Explore {}); },
+            // The player owns the whole screen; its own controls and gestures
+            // are the way out, so the tab bar steps aside there.
+            if !player_expanded {
+                NavbarTabBar { aria_label: "Primary navigation".to_string(),
+                    NavbarTab {
+                        label: "Feed".to_string(),
+                        selected: matches!(route, Route::Feed {}),
+                        icon: rsx! { House { size: 20 } },
+                        onclick: move |_| { navigator.push(Route::Feed {}); },
+                    }
+                    NavbarTab {
+                        label: "Playlists".to_string(),
+                        selected: matches!(route, Route::Playlists {}),
+                        icon: rsx! { ListIcon { size: 20 } },
+                        onclick: move |_| { navigator.push(Route::Playlists {}); },
+                    }
+                    NavbarTab {
+                        label: "Search".to_string(),
+                        selected: matches!(route, Route::Explore {}),
+                        icon: rsx! { Search { size: 20 } },
+                        onclick: move |_| { navigator.push(Route::Explore {}); },
+                    }
+                    NavbarTab {
+                        label: "Subscriptions".to_string(),
+                        selected: matches!(route, Route::Subscriptions {}),
+                        icon: rsx! { Users { size: 20 } },
+                        onclick: move |_| { navigator.push(Route::Subscriptions {}); },
+                    }
                 }
             }
         }

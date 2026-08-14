@@ -5,8 +5,8 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{History, ListVideo, Play, RefreshCw, Trash2};
-use g3_ui::{Badge, Button, ButtonStyle, SegmentButton, SegmentGroup, StatusColor};
+use dioxus_icons::lucide::{History, ListVideo, Play, Trash2};
+use g3_ui::{Button, ButtonStyle, Refresher, StatusColor};
 
 use super::VideoGrid;
 
@@ -113,7 +113,8 @@ pub fn HistoryPage() -> Element {
 pub fn ChannelDetail(id: String) -> Element {
     let app_state = use_context::<AppState>();
 
-    let tab_index = use_signal(|| 0_usize);
+    // Owned by the header segmented control.
+    let tab_index = app_state.channel_tab_index;
     let mut extra_videos = use_signal(Vec::<Video>::new);
     let mut extra_shorts = use_signal(Vec::<Video>::new);
     let mut extra_live = use_signal(Vec::<Video>::new);
@@ -216,14 +217,6 @@ pub fn ChannelDetail(id: String) -> Element {
         ChannelMediaTab::Shorts => shorts_next(),
         ChannelMediaTab::Live => live_next(),
     };
-    let source = remote_details
-        .as_ref()
-        .map(|details| match selected_tab {
-            ChannelMediaTab::Videos => details.videos.source.clone(),
-            ChannelMediaTab::Shorts => details.shorts.source.clone(),
-            ChannelMediaTab::Live => details.live.source.clone(),
-        })
-        .unwrap_or_else(|| "Cache".into());
     let is_subscribed = channel.subscribed;
     let initial = channel.name.chars().next().unwrap_or('T');
     let avatar_url = channel.avatar_url.clone();
@@ -233,6 +226,18 @@ pub fn ChannelDetail(id: String) -> Element {
 
     rsx! {
         div { class: "channel-detail-page",
+                // Pull down to refresh replaces the button that used to sit in
+                // the toolbar next to the segments.
+                Refresher {
+                    refreshing: page_loading(),
+                    on_refresh: move |_| {
+                        initialized.set(false);
+                        extra_videos.set(Vec::new());
+                        extra_shorts.set(Vec::new());
+                        extra_live.set(Vec::new());
+                        details_resource.restart();
+                    },
+                }
                 main { class: "page",
                     if let Some(banner_url) = banner_url {
                         div {
@@ -265,29 +270,6 @@ pub fn ChannelDetail(id: String) -> Element {
                                 }
                             },
                             if is_subscribed { "Subscribed" } else { "Subscribe" }
-                        }
-                    }
-                    div { class: "feed-toolbar channel-tabs",
-                        SegmentGroup { active: tab_index,
-                            SegmentButton { index: 0, "Videos" }
-                            SegmentButton { index: 1, "Shorts" }
-                            SegmentButton { index: 2, "Live" }
-                        }
-                        div { class: "heading-actions",
-                            Badge { color: StatusColor::Accent, "{source}" }
-                            Button {
-                                style: ButtonStyle::Clear,
-                                aria_label: "Refresh channel".to_string(),
-                                start: rsx! { RefreshCw { size: 16 } },
-                                onclick: move |_| {
-                                    initialized.set(false);
-                                    extra_videos.set(Vec::new());
-                                    extra_shorts.set(Vec::new());
-                                    extra_live.set(Vec::new());
-                                    details_resource.restart();
-                                },
-                                "Refresh"
-                            }
                         }
                     }
                     VideoGrid {

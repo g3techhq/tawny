@@ -29,8 +29,10 @@ pub struct AppState {
     pub syncing: Signal<bool>,
     /// Segment selections live here because the header owns the segmented
     /// control while the page owns the list it filters.
+    pub chapters_sheet_open: Signal<bool>,
     pub feed_filter_index: Signal<usize>,
     pub explore_filter_index: Signal<usize>,
+    pub channel_tab_index: Signal<usize>,
 }
 
 impl AppState {
@@ -462,6 +464,91 @@ impl AppState {
         }
     }
 
+    /// Replace the library with a server snapshot without losing videos that
+    /// something still points at.
+    ///
+    /// The queue, playlists, and history store ids and resolve them against
+    /// `videos`. A refreshed snapshot only carries the current feed, so a video
+    /// that scrolled out of it would vanish from the queue even though its id is
+    /// still queued. Carrying those records over keeps the queue honest.
+    pub fn adopt_library(mut self, remote: LibrarySnapshot) {
+        let merged = keep_referenced_videos(&self.library(), remote);
+        self.library.set(merged);
+    }
+
+    /// Run whichever action a swipe direction is configured for.
+    ///
+    /// Centralised so the gesture, the desktop buttons, and the settings page
+    /// all agree on what a direction means.
+    pub fn run_swipe_action(self, video_id: &str, start_side: bool) {
+        use crate::models::SwipeActionKind;
+
+        let settings = self.settings();
+        let (kind, playlist_id) = if start_side {
+            (settings.swipe_right_action, settings.swipe_right_playlist_id)
+        } else {
+            (settings.swipe_left_action, settings.swipe_left_playlist_id)
+        };
+        match kind {
+            SwipeActionKind::AddToPlaylist => {
+                if let Some(message) = self.add_to_playlist(video_id, &playlist_id) {
+                    self.show_toast(message, StatusColor::Success);
+                }
+            }
+            SwipeActionKind::AddToQueue => {
+                let message = self.add_to_queue(video_id, false);
+                self.show_toast(message, StatusColor::Success);
+            }
+            SwipeActionKind::PlayNext => {
+                let message = self.add_to_queue(video_id, true);
+                self.show_toast(message, StatusColor::Success);
+            }
+            SwipeActionKind::MarkWatched => {
+                self.mark_watched(video_id, true);
+                self.show_toast("Marked watched", StatusColor::Neutral);
+            }
+            SwipeActionKind::Share => {
+                let url = format!("https://www.youtube.com/watch?v={video_id}");
+                let payload = serde_json::to_string(&url).unwrap_or_default();
+                spawn(async move {
+                    let script = format!(
+                        r#"
+                        const url = {payload};
+                        if (navigator.share) await navigator.share({{ url }});
+                        else await navigator.clipboard.writeText(url);
+                        dioxus.send(true);
+                        "#
+                    );
+                    let mut eval = document::eval(&script);
+                    let _ = eval.recv::<bool>().await;
+                });
+                self.show_toast("Link shared", StatusColor::Neutral);
+            }
+        }
+    }
+
+    /// The label a swipe direction should show on its action panel.
+    pub fn swipe_action_label(self, start_side: bool) -> String {
+        use crate::models::SwipeActionKind;
+
+        let settings = self.settings();
+        let (kind, playlist_id) = if start_side {
+            (settings.swipe_right_action, settings.swipe_right_playlist_id)
+        } else {
+            (settings.swipe_left_action, settings.swipe_left_playlist_id)
+        };
+        match kind {
+            SwipeActionKind::AddToPlaylist => self
+                .library()
+                .playlists
+                .iter()
+                .find(|playlist| playlist.id == playlist_id)
+                .map(|playlist| playlist.name.clone())
+                .unwrap_or_else(|| "Playlist".into()),
+            other => other.label().to_string(),
+        }
+    }
+
     pub fn add_to_queue(mut self, video_id: &str, play_next: bool) -> String {
         let mut library = self.library.write();
         library.queue.retain(|id| id != video_id);
@@ -533,6 +620,31 @@ impl AppState {
     }
 }
 
+/// Carry over any video the incoming snapshot dropped but something still
+/// references, so ids in the queue, playlists, or history always resolve.
+fn keep_referenced_videos(
+    current: &LibrarySnapshot,
+    mut remote: LibrarySnapshot,
+) -> LibrarySnapshot {
+    let mut referenced = current.queue.clone();
+    referenced.extend(current.history.iter().map(|entry| entry.video_id.clone()));
+    referenced.extend(
+        current
+            .playlists
+            .iter()
+            .flat_map(|playlist| playlist.video_ids.iter().cloned()),
+    );
+    for id in referenced {
+        if remote.videos.iter().any(|video| video.id == id) {
+            continue;
+        }
+        if let Some(kept) = current.videos.iter().find(|video| video.id == id) {
+            remote.videos.push(kept.clone());
+        }
+    }
+    remote
+}
+
 #[component]
 pub fn AppStateProvider(children: Element) -> Element {
     let mut library = use_persistent_signal("tawny-library-v1", LibrarySnapshot::demo);
@@ -550,11 +662,11 @@ pub fn AppStateProvider(children: Element) -> Element {
             if let Ok(remote) = get_library().await {
                 let local = library();
                 if remote.cache_revision > local.cache_revision {
-                    library.set(remote);
+                    library.set(keep_referenced_videos(&local, remote));
                 } else if local.cache_revision > remote.cache_revision
-                    && let Ok(merged) = sync_library(local).await
+                    && let Ok(merged) = sync_library(local.clone()).await
                 {
-                    library.set(merged);
+                    library.set(keep_referenced_videos(&local, merged));
                 }
             }
             initial_syncing.set(false);
@@ -577,8 +689,10 @@ pub fn AppStateProvider(children: Element) -> Element {
         active_chapters: Signal::new(Vec::new()),
         active_preview_frames: Signal::new(None),
         syncing: initial_syncing,
+        chapters_sheet_open: Signal::new(false),
         feed_filter_index: Signal::new(0),
         explore_filter_index: Signal::new(0),
+        channel_tab_index: Signal::new(0),
     });
 
     rsx! { {children} }

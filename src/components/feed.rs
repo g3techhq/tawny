@@ -4,8 +4,8 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Layers, RefreshCw, Sparkles};
-use g3_ui::{Button, ButtonStyle, StatusColor};
+use dioxus_icons::lucide::{Layers, Sparkles};
+use g3_ui::{Refresher, StatusColor};
 
 use super::VideoGrid;
 
@@ -54,58 +54,49 @@ pub fn Feed() -> Element {
         });
     }
 
-    let sync_label = if app_state.syncing() {
-        "Syncing…"
-    } else {
-        "Refresh"
-    };
-
     rsx! {
+        // Pull down to refresh, replacing the button that sat in the intro row.
+        Refresher {
+            refreshing: app_state.syncing(),
+            on_refresh: move |_| {
+                app_state.syncing.set(true);
+                spawn(async move {
+                    let local = app_state.library();
+                    let result = match sync_library(local).await {
+                        Ok(remote) => {
+                            app_state.adopt_library(remote);
+                            refresh_subscription_feed().await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    match result {
+                        Ok(refresh) => {
+                            app_state.adopt_library(refresh.library);
+                            let message = if refresh.imported == 0 {
+                                "No new videos".to_string()
+                            } else if refresh.failed_channels == 0 {
+                                format!("Feed refreshed from {}", refresh.sources.join(" + "))
+                            } else {
+                                format!(
+                                    "Feed updated; {} channel{} will retry later",
+                                    refresh.failed_channels,
+                                    if refresh.failed_channels == 1 { "" } else { "s" }
+                                )
+                            };
+                            app_state.show_toast(message, StatusColor::Success);
+                        }
+                        Err(_) => app_state.show_toast(
+                            "Offline — showing your cached feed",
+                            StatusColor::Warning,
+                        ),
+                    }
+                    app_state.syncing.set(false);
+                });
+            },
+        }
         main { class: "page feed-page",
             section { class: "feed-intro",
                 span { class: "feed-count", Sparkles { size: 14 } "{videos.len()} fresh" }
-                Button {
-                    class: "feed-refresh-button",
-                    style: ButtonStyle::Neutral,
-                    disabled: app_state.syncing(),
-                    start: rsx! { RefreshCw { size: 17, class: if app_state.syncing() { "spin" } else { "" } } },
-                    onclick: move |_| {
-                        app_state.syncing.set(true);
-                        spawn(async move {
-                            let local = app_state.library();
-                            let result = match sync_library(local).await {
-                                Ok(remote) => {
-                                    app_state.library.set(remote);
-                                    refresh_subscription_feed().await
-                                }
-                                Err(error) => Err(error),
-                            };
-                            match result {
-                                Ok(refresh) => {
-                                    app_state.library.set(refresh.library);
-                                    let message = if refresh.imported == 0 {
-                                        "No new videos".to_string()
-                                    } else if refresh.failed_channels == 0 {
-                                        format!("Feed refreshed from {}", refresh.sources.join(" + "))
-                                    } else {
-                                        format!(
-                                            "Feed updated; {} channel{} will retry later",
-                                            refresh.failed_channels,
-                                            if refresh.failed_channels == 1 { "" } else { "s" }
-                                        )
-                                    };
-                                    app_state.show_toast(message, StatusColor::Success);
-                                }
-                                Err(_) => app_state.show_toast(
-                                    "Offline — showing your cached feed",
-                                    StatusColor::Warning,
-                                ),
-                            }
-                            app_state.syncing.set(false);
-                        });
-                    },
-                    "{sync_label}"
-                }
             }
 
             nav { class: "group-filter-row", aria_label: "Subscription groups",

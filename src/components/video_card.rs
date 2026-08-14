@@ -6,22 +6,6 @@ use g3_ui::{
     SwipeState,
 };
 
-pub(super) fn playlist_name(state: AppState, playlist_id: &str) -> String {
-    state
-        .library()
-        .playlists
-        .iter()
-        .find(|playlist| playlist.id == playlist_id)
-        .map(|playlist| playlist.name.clone())
-        .unwrap_or_else(|| "Playlist".into())
-}
-
-fn add_with_feedback(state: AppState, video_id: &str, playlist_id: &str) {
-    if let Some(message) = state.add_to_playlist(video_id, playlist_id) {
-        state.show_toast(message, StatusColor::Success);
-    }
-}
-
 #[component]
 pub fn VideoGrid(
     videos: Vec<Video>,
@@ -77,13 +61,8 @@ pub fn VideoGrid(
 pub fn VideoCard(video: Video) -> Element {
     let mut app_state = use_context::<AppState>();
     let navigator = use_navigator();
-    let settings = app_state.settings();
-    let start_playlist_id = settings.swipe_right_playlist_id.clone();
-    let end_playlist_id = settings.swipe_left_playlist_id.clone();
-    let start_playlist_name = playlist_name(app_state, &start_playlist_id);
-    let end_playlist_name = playlist_name(app_state, &end_playlist_id);
-    let button_start_playlist = start_playlist_id.clone();
-    let button_end_playlist = end_playlist_id.clone();
+    let start_playlist_name = app_state.swipe_action_label(true);
+    let end_playlist_name = app_state.swipe_action_label(false);
     let button_start_name = start_playlist_name.clone();
     let button_end_name = end_playlist_name.clone();
     let button_start_video = video.id.clone();
@@ -115,7 +94,7 @@ pub fn VideoCard(video: Video) -> Element {
                 SwipeAction {
                     side: SwipeSide::Start,
                     accent: true,
-                    onclick: move |_| add_with_feedback(app_state, &start_video_id, &start_playlist_id),
+                    onclick: move |_| app_state.run_swipe_action(&start_video_id, true),
                     div { class: "swipe-action-content",
                         ListPlus { size: 22 }
                         span { "{start_playlist_name}" }
@@ -125,7 +104,7 @@ pub fn VideoCard(video: Video) -> Element {
             end_actions: rsx! {
                 SwipeAction {
                     side: SwipeSide::End,
-                    onclick: move |_| add_with_feedback(app_state, &end_video_id, &end_playlist_id),
+                    onclick: move |_| app_state.run_swipe_action(&end_video_id, false),
                     div { class: "swipe-action-content",
                         ListPlus { size: 22 }
                         span { "{end_playlist_name}" }
@@ -133,11 +112,7 @@ pub fn VideoCard(video: Video) -> Element {
                 }
             },
             on_swipe_action: move |swipe: SwipeState| {
-                let playlist_id = match swipe.side {
-                    SwipeSide::Start => app_state.settings().swipe_right_playlist_id,
-                    SwipeSide::End => app_state.settings().swipe_left_playlist_id,
-                };
-                add_with_feedback(app_state, &full_video_id, &playlist_id);
+                app_state.run_swipe_action(&full_video_id, swipe.side == SwipeSide::Start);
             },
             article {
                 class: "video-card",
@@ -174,7 +149,7 @@ pub fn VideoCard(video: Video) -> Element {
                         title: "Add to {button_start_name}",
                         onclick: move |event: MouseEvent| {
                             event.stop_propagation();
-                            add_with_feedback(app_state, &button_start_video, &button_start_playlist);
+                            app_state.run_swipe_action(&button_start_video, true);
                         },
                         ListPlus { size: 18 }
                     }
@@ -184,7 +159,7 @@ pub fn VideoCard(video: Video) -> Element {
                         title: "Add to {button_end_name}",
                         onclick: move |event: MouseEvent| {
                             event.stop_propagation();
-                            add_with_feedback(app_state, &button_end_video, &button_end_playlist);
+                            app_state.run_swipe_action(&button_end_video, false);
                         },
                         ListPlus { size: 18 }
                     }

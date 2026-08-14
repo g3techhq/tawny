@@ -1424,9 +1424,9 @@ textarea {
   color: var(--color-text);
 }
 
-.description-panel {
-  background: color-mix(in srgb, var(--color-card) 88%, var(--tawny-amber-soft));
-}
+/* Inherits the plain card surface. It used to be tinted amber, which made it
+   the only panel on the page that did not match the channel row and the
+   comments button sitting right beside it. */
 
 .video-description {
   display: -webkit-box;
@@ -1810,8 +1810,14 @@ textarea {
     flex-wrap: wrap;
   }
 
-  .header-history-button {
-    display: none !important;
+  /* All three header actions stay available on narrow screens; they are
+     tightened instead of one being dropped. */
+  .header-actions {
+    gap: 0.1rem;
+  }
+
+  .header-actions .icon-button {
+    padding: 0.3rem;
   }
 
   .action-sheet-thumbnail {
@@ -2084,13 +2090,107 @@ textarea {
   pointer-events: none;
 }
 
+/* A notch cut into the bar rather than a dot sitting on top of it: the marker
+   is the track colour, so it reads as a division of the timeline. */
 .player-chapter-marker {
   position: absolute;
-  width: 3px;
+  width: 2px;
   height: 100%;
-  background: rgba(18, 18, 18, 0.92);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
-  transform: translateX(-1.5px);
+  background: rgba(8, 12, 18, 0.85);
+  transform: translateX(-1px);
+}
+
+.player-chapter-label {
+  max-width: 12rem;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+  font-size: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-chapter-label::before {
+  content: " · ";
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.player-chapter-label:hover {
+  color: var(--color-focused);
+}
+
+.engagement-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--color-card-border);
+  border-radius: 999px;
+  background: var(--color-card);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.engagement-chip:hover {
+  border-color: var(--color-focused);
+  color: var(--color-text);
+}
+
+.chapter-sheet-list {
+  display: flex;
+  max-height: 60vh;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.chapter-sheet-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.7rem 0.5rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chapter-sheet-row:hover {
+  background: var(--color-control);
+}
+
+.chapter-sheet-row strong {
+  color: var(--color-focused);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reaches high up the screen so a useful number of comments is visible. */
+.comments-sheet {
+  max-height: 88vh;
+}
+
+.comments-sheet .comment-list {
+  max-height: 82vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The engagement chips are a separate control row from the actions below. */
+.video-engagement {
+  margin-bottom: 0.9rem;
+}
+
+.player-actions {
+  margin-top: 0.25rem;
+}
+
+.comments-open-button {
+  margin-top: 0.5rem;
 }
 
 .player-seek-preview {

@@ -365,6 +365,12 @@ pub struct AppSettings {
     pub shorts_playback_speed: f64,
     pub swipe_right_playlist_id: String,
     pub swipe_left_playlist_id: String,
+    /// What each swipe direction actually does. The playlist ids above are only
+    /// consulted when the action is `AddToPlaylist`.
+    #[serde(default)]
+    pub swipe_right_action: SwipeActionKind,
+    #[serde(default)]
+    pub swipe_left_action: SwipeActionKind,
     pub hide_watched: bool,
     pub autoplay: bool,
     pub prefer_sabr: bool,
@@ -373,6 +379,41 @@ pub struct AppSettings {
 
 fn default_speed() -> f64 {
     1.0
+}
+
+/// What a swipe on a video card does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SwipeActionKind {
+    #[default]
+    AddToPlaylist,
+    AddToQueue,
+    PlayNext,
+    Share,
+    MarkWatched,
+}
+
+impl SwipeActionKind {
+    pub const ALL: [Self; 5] = [
+        Self::AddToPlaylist,
+        Self::AddToQueue,
+        Self::PlayNext,
+        Self::Share,
+        Self::MarkWatched,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AddToPlaylist => "Add to playlist",
+            Self::AddToQueue => "Add to queue",
+            Self::PlayNext => "Play next",
+            Self::Share => "Share",
+            Self::MarkWatched => "Mark watched",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.label() == label)
+    }
 }
 
 impl AppSettings {
@@ -400,6 +441,8 @@ impl Default for AppSettings {
             appearance: Appearance::Dark,
             playback_speed: 1.0,
             shorts_playback_speed: 1.0,
+            swipe_right_action: SwipeActionKind::AddToPlaylist,
+            swipe_left_action: SwipeActionKind::AddToPlaylist,
             swipe_right_playlist_id: "watch-later".to_string(),
             swipe_left_playlist_id: "deep-dives".to_string(),
             hide_watched: false,
