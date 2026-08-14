@@ -1,0 +1,8 @@
+/target
+/dist
+/node_modules
+/assets/tailwind.css
+/.tawny-cache
+/.codex
+.env
+/rustypipe_reports

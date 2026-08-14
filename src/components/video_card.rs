@@ -1,0 +1,250 @@
+use crate::{app::Route, models::Video, state::AppState};
+use dioxus::prelude::*;
+use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, X};
+use g3_ui::{
+    Badge, Button, ButtonStyle, StatusColor, SwipeAction, SwipeBehavior, SwipeItem, SwipeSide,
+    SwipeState,
+};
+
+pub(super) fn playlist_name(state: AppState, playlist_id: &str) -> String {
+    state
+        .library()
+        .playlists
+        .iter()
+        .find(|playlist| playlist.id == playlist_id)
+        .map(|playlist| playlist.name.clone())
+        .unwrap_or_else(|| "Playlist".into())
+}
+
+fn add_with_feedback(state: AppState, video_id: &str, playlist_id: &str) {
+    if let Some(message) = state.add_to_playlist(video_id, playlist_id) {
+        state.show_toast(message, StatusColor::Success);
+    }
+}
+
+#[component]
+pub fn VideoGrid(
+    videos: Vec<Video>,
+    empty_message: Option<String>,
+    playlist_id: Option<String>,
+) -> Element {
+    let app_state = use_context::<AppState>();
+    let empty_copy =
+        empty_message.unwrap_or_else(|| "Your cached library will appear here.".to_string());
+    rsx! {
+        if videos.is_empty() {
+            div { class: "empty-state",
+                div { class: "empty-orbit", "◌" }
+                h3 { "Nothing here yet" }
+                p { "{empty_copy}" }
+            }
+        } else {
+            div { class: "video-grid",
+                for video in videos {
+                    {
+                        let video_id = video.id.clone();
+                        let playlist_id = playlist_id.clone();
+                        rsx! {
+                            div { class: "video-grid-cell", key: "{video.id}",
+                                VideoCard { video }
+                                // Sits on the thumbnail rather than below the
+                                // card so it does not add a row of chrome to
+                                // every tile in a playlist.
+                                if let Some(playlist_id) = playlist_id {
+                                    button {
+                                        class: "playlist-remove-video",
+                                        aria_label: "Remove from playlist",
+                                        title: "Remove from playlist",
+                                        onclick: move |event: MouseEvent| {
+                                            event.stop_propagation();
+                                            if app_state.remove_from_playlist(&video_id, &playlist_id) {
+                                                app_state.show_toast("Removed from playlist", StatusColor::Neutral);
+                                            }
+                                        },
+                                        X { size: 15 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn VideoCard(video: Video) -> Element {
+    let mut app_state = use_context::<AppState>();
+    let navigator = use_navigator();
+    let settings = app_state.settings();
+    let start_playlist_id = settings.swipe_right_playlist_id.clone();
+    let end_playlist_id = settings.swipe_left_playlist_id.clone();
+    let start_playlist_name = playlist_name(app_state, &start_playlist_id);
+    let end_playlist_name = playlist_name(app_state, &end_playlist_id);
+    let button_start_playlist = start_playlist_id.clone();
+    let button_end_playlist = end_playlist_id.clone();
+    let button_start_name = start_playlist_name.clone();
+    let button_end_name = end_playlist_name.clone();
+    let button_start_video = video.id.clone();
+    let button_end_video = video.id.clone();
+    let open_id = video.id.clone();
+    let meta_open_id = video.id.clone();
+    let keyboard_open_id = video.id.clone();
+    let start_video_id = video.id.clone();
+    let end_video_id = video.id.clone();
+    let full_video_id = video.id.clone();
+    let watched_video_id = video.id.clone();
+    let menu_video = video.clone();
+    let channel_avatar_url = app_state
+        .library()
+        .channels
+        .into_iter()
+        .find(|channel| channel.id == video.channel_id)
+        .and_then(|channel| channel.avatar_url);
+    let keyboard_video = video.clone();
+    let open_video = video.clone();
+    let meta_open_video = video.clone();
+    let progress = video.progress_percent();
+
+    rsx! {
+        SwipeItem {
+            class: "video-swipe-row",
+            behavior: SwipeBehavior::Activate,
+            start_actions: rsx! {
+                SwipeAction {
+                    side: SwipeSide::Start,
+                    accent: true,
+                    onclick: move |_| add_with_feedback(app_state, &start_video_id, &start_playlist_id),
+                    div { class: "swipe-action-content",
+                        ListPlus { size: 22 }
+                        span { "{start_playlist_name}" }
+                    }
+                }
+            },
+            end_actions: rsx! {
+                SwipeAction {
+                    side: SwipeSide::End,
+                    onclick: move |_| add_with_feedback(app_state, &end_video_id, &end_playlist_id),
+                    div { class: "swipe-action-content",
+                        ListPlus { size: 22 }
+                        span { "{end_playlist_name}" }
+                    }
+                }
+            },
+            on_swipe_action: move |swipe: SwipeState| {
+                let playlist_id = match swipe.side {
+                    SwipeSide::Start => app_state.settings().swipe_right_playlist_id,
+                    SwipeSide::End => app_state.settings().swipe_left_playlist_id,
+                };
+                add_with_feedback(app_state, &full_video_id, &playlist_id);
+            },
+            article {
+                class: "video-card",
+                tabindex: "0",
+                role: "button",
+                onkeydown: move |event| {
+                    if event.key() == Key::Enter {
+                        app_state.play(keyboard_video.clone());
+                        app_state.record_history(&keyboard_open_id);
+                        navigator.push(Route::VideoDetail { id: keyboard_open_id.clone() });
+                    }
+                },
+                div {
+                    class: "thumbnail-shell",
+                    onclick: move |_| {
+                        app_state.play(open_video.clone());
+                        app_state.record_history(&open_id);
+                        navigator.push(Route::VideoDetail { id: open_id.clone() });
+                    },
+                    img {
+                        class: "video-thumbnail",
+                        src: "{video.thumbnail_url}",
+                        alt: "Thumbnail for {video.title}",
+                        loading: "lazy",
+                    }
+                    div { class: "thumbnail-vignette" }
+                    // Pointer equivalents of the swipe gestures. A swipe is
+                    // awkward with a mouse, so desktop gets explicit controls
+                    // on each side of the thumbnail; CSS hides them on touch
+                    // layouts where the gesture is the better affordance.
+                    button {
+                        class: "card-quick-action card-quick-action-start",
+                        aria_label: "Add to {button_start_name}",
+                        title: "Add to {button_start_name}",
+                        onclick: move |event: MouseEvent| {
+                            event.stop_propagation();
+                            add_with_feedback(app_state, &button_start_video, &button_start_playlist);
+                        },
+                        ListPlus { size: 18 }
+                    }
+                    button {
+                        class: "card-quick-action card-quick-action-end",
+                        aria_label: "Add to {button_end_name}",
+                        title: "Add to {button_end_name}",
+                        onclick: move |event: MouseEvent| {
+                            event.stop_propagation();
+                            add_with_feedback(app_state, &button_end_video, &button_end_playlist);
+                        },
+                        ListPlus { size: 18 }
+                    }
+                    if video.is_live {
+                        Badge { color: StatusColor::Danger, class: "duration-badge", "LIVE" }
+                    } else {
+                        span { class: "duration-badge", "{video.duration_label()}" }
+                    }
+                    if progress > 0.0 {
+                        div { class: "watch-progress", style: "--progress: {progress}%;" }
+                    }
+                    if video.watched {
+                        span { class: "watched-badge", Check { size: 13 } "Watched" }
+                    }
+                }
+                div { class: "video-meta-row",
+                    if let Some(avatar_url) = channel_avatar_url {
+                        img {
+                            class: "channel-avatar",
+                            src: "{avatar_url}",
+                            alt: "{video.channel_name}",
+                            loading: "lazy",
+                        }
+                    } else {
+                        div { class: "channel-avatar", "{video.channel_name.chars().next().unwrap_or('T')}" }
+                    }
+                    div {
+                        class: "video-copy",
+                        onclick: move |_| {
+                            app_state.play(meta_open_video.clone());
+                            app_state.record_history(&meta_open_id);
+                            navigator.push(Route::VideoDetail { id: meta_open_id.clone() });
+                        },
+                        h2 { "{video.title}" }
+                        if !video.channel_name.is_empty() {
+                            p { "{video.channel_name}" }
+                        }
+                        p { class: "video-stats", "{video.stats_label()}" }
+                    }
+                    Button {
+                        style: ButtonStyle::Clear,
+                        aria_label: "Video actions".to_string(),
+                        class: "card-menu-button",
+                        onclick: move |event: MouseEvent| {
+                            event.stop_propagation();
+                            app_state.video_actions_video.set(Some(menu_video.clone()));
+                            app_state.video_actions_open.set(true);
+                        },
+                        EllipsisVertical { size: 21 }
+                    }
+                }
+                button {
+                    class: "sr-action",
+                    onclick: move |event| {
+                        event.stop_propagation();
+                        app_state.mark_watched(&watched_video_id, true);
+                    },
+                    "Mark watched"
+                }
+            }
+        }
+    }
+}

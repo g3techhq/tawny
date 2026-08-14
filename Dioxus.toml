@@ -1,0 +1,36 @@
+[application]
+name = "tawny"
+asset_dir = "assets"
+default_platform = "web"
+out_dir = "dist"
+tailwind_input = "tailwind.css"
+tailwind_output = "assets/tailwind.css"
+
+[web.app]
+title = "Tawny"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "assets"]
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]
+script = []
+
+[bundle]
+identifier = "com.G3Tech.Tawny"
+publisher = "G3Tech"
+category = "Entertainment"
+short_description = "A calm, local-first YouTube client."
+long_description = "Tawny is a privacy-minded, local-first YouTube client for mobile, web, and desktop."
+
+[ios]
+deployment_target = "15.0"
+
+[android]
+min_sdk = 35
+target_sdk = 35
+compile_sdk = 35

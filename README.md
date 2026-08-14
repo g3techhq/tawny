@@ -1,0 +1,66 @@
+# Tawny
+
+Tawny is a calm, local-first YouTube client built with Dioxus and `g3_ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
+
+Tawny is a complete replacement for a LibreTube plus Piped deployment. The Dioxus backend performs every job a Piped instance would — search, feeds, channels, video details, comments, captions, and stream resolution — by extracting from YouTube directly. There is no companion backend to run and no third-party instance is contacted.
+
+This repository currently contains a working local-first vertical slice:
+
+- cached subscription feed with all/unwatched/today filters;
+- real YouTube search for videos and channels with continuation paging, request coalescing, and a five-minute result cache;
+- full channel pages with Videos, Shorts, Live, refresh, and continuation paging;
+- subscription management with direct extraction, official RSS fallback, and YouTube WebSub callbacks;
+- local playlists, creation, detail views, and offline persistence;
+- revisioned playlist, subscription, queue, history, and watch-state sync;
+- configurable swipe-left and swipe-right playlist destinations;
+- channel pages, a persistent play queue, watch history, and a full video action sheet;
+- a persistent player that expands on video pages and becomes a mini-player above navigation elsewhere, with one-tap speed controls;
+- subscription groups with one-tap feed filters;
+- direct YouTube video details, comments, captions, chapters, recommendations, and expiring playback sources;
+- cached descriptions, chapter jumps, captions, comments, and related videos;
+- same-origin ranged media/caption proxying, HLS/DASH manifest rewriting, adaptive quality, buffered seeking, and session retry;
+- responsive mobile, web, and desktop navigation using `g3_ui`;
+- in-process playback resolution for SABR, HLS, DASH, progressive streams, and per-video PoTokens.
+
+The seeded library is intentional: it keeps the first launch useful while the real library hydrates. Library actions update the device cache immediately and then write the newer revision to SurrealDB; if another client already has a newer revision, its server snapshot wins.
+
+## Development
+
+```sh
+npm install
+dx serve
+```
+
+The pinned Shaka Player package supplies the cross-platform DASH/HLS Media Source transport. Dioxus packages its compiled browser runtime as a local app asset; playback never depends on a third-party CDN.
+
+Tawny defaults to an embedded, persistent SurrealDB RocksDB database in the platform data directory. Set `TAWNY_DATA_DIR` to override that location, `SURREALDB_HOST=mem://` for disposable development data, or the `SURREALDB_*` variables for a separate database deployment.
+
+No Piped instance — public or self-hosted — is required or contacted. Tawny extracts public YouTube search results, channel tabs, RSS feeds, video metadata, comments, captions, and player data directly. Search coalesces concurrent requests and caches identical query/filter pairs for five minutes. Results are normalized and deduplicated in SurrealDB. Video details use a two-hour server cache with stale fallback; ephemeral stream URLs and PO tokens are never persisted.
+
+Feed ingestion is designed for large libraries. When WebSub is active the server rotates lightweight official RSS checks through the 48 stalest channels instead of fully extracting every subscription; without that accelerated source, RSS covers the complete library with bounded concurrency. Full Videos/Shorts/Live extraction happens when a channel is opened or an individual channel is newly subscribed. Atom timestamps and relative labels such as `2 hours ago` are normalized into one chronological sort key, and the client re-sorts cached feed entries on render for migration safety.
+
+For push updates, deploy with a public HTTPS `TAWNY_PUBLIC_URL` (or explicit `TAWNY_WEBSUB_CALLBACK_URL`). Subscribing requests a YouTube WebSub lease; signed callbacks insert the upload immediately and enrich only that video. Lease requests are persisted, renewed after three days, and processed with bounded concurrency. The 15-minute RSS reconciliation worker remains as a recovery path for missed callbacks.
+
+Useful verification commands:
+
+```sh
+cargo check --features web
+cargo check --no-default-features --features server
+cargo test --no-default-features --features server
+cargo test --no-default-features --features server live_youtube_search_subscribe_channel_and_feed_round_trip -- --ignored --nocapture --test-threads=1
+dx build --platform web
+```
+
+See [docs/architecture.md](docs/architecture.md) for the data flow, cache strategy, playback model, and implementation roadmap.
+
+## Current playback behavior
+
+Playback is resolved in-process from direct YouTube extraction, which preserves every indexed audio/video representation including codec, bitrate, duration, quality, and DASH initialization/index byte ranges.
+
+Stream URLs come from a local `yt-dlp` binary when one is available (`TAWNY_YTDLP_BIN`, otherwise `yt-dlp` on PATH), matched to the extracted streams by itag. YouTube gates the URLs the built-in extractor can obtain — they serve roughly 6 MiB and then return 403, which shows up as playback dying about a minute in — while the client yt-dlp uses is not gated. Install yt-dlp for reliable playback; without it Tawny still resolves and plays, but hits that limit. Those raw URLs are replaced with short-lived same-origin proxy URLs before reaching the client. The player turns the representation set into a local DASH manifest and uses its packaged adaptive engine for automatic quality selection, buffering, seeking, retry recovery, DASH, and HLS. A fatal media request snapshots the current timestamp and renews the active playback session first, then tries protocol fallbacks, without replaying from zero.
+
+The privacy-enhanced YouTube embed is never substituted automatically. If every direct source fails, the player reports the transport's actual error and offers a retry; switching to the embed is an explicit user action.
+
+The media element lives in the shared app shell: it is full-width on a video route and changes into a compact bar above bottom navigation while the user explores the rest of the app, without being unmounted. Playback speed, captions, chapter seeking, and picture-in-picture operate on that same element. Set `TAWNY_BOTGUARD_BIN` to a compatible `rustypipe-botguard` executable for PO-token-backed browser-client streams; the extractor caches session tokens while content-bound data stays ephemeral. A `Sabr` source is played through a playable DASH/HLS bridge or a registered `TawnySabrAdapter`; raw UMP parsing and BotGuard execution remain behind that adapter boundary rather than being mislabeled as ordinary media playback.
+
+Tawny is not affiliated with or endorsed by YouTube. YouTube trademarks belong to their respective owners.
