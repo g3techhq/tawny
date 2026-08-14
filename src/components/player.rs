@@ -8,6 +8,7 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{
     Captions, Check, Clock, Heart, ListVideo, Maximize2, MessageSquare, Minimize2, Pause,
     PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, Volume2,
@@ -616,7 +617,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                 button {
                     class: "mini-player-copy",
                     aria_label: "Open {video.title}",
-                    onclick: move |_| { navigator.push(Route::VideoDetail { id: open_video_id.clone() }); },
+                    onclick: move |_| { { let v = open_video_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); }; },
                     strong { "{video.title}" }
                     span { "{video.channel_name}" }
                 }
@@ -773,7 +774,7 @@ pub fn VideoDetail(id: String) -> Element {
 #[component]
 fn VideoDetailInner(id: String) -> Element {
     let mut app_state = use_context::<AppState>();
-    let navigator = use_navigator();
+
     let mut description_expanded = use_signal(|| false);
     let mut chapters_open = app_state.chapters_sheet_open;
     let mut captions_open = use_signal(|| false);
@@ -1008,7 +1009,7 @@ fn VideoDetailInner(id: String) -> Element {
                                 class: "player-channel-row",
                                 role: "button",
                                 tabindex: "0",
-                                onclick: move |_| { navigator.push(Route::ChannelDetail { id: open_channel_id.clone() }); },
+                                onclick: move |_| { { let v = open_channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
                                 if let Some(avatar_url) = channel.avatar_url {
                                     img { class: "channel-avatar channel-avatar-medium", src: "{avatar_url}", alt: "" }
                                 } else {

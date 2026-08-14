@@ -4,7 +4,7 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Layers, Sparkles};
+use dioxus_icons::lucide::Sparkles;
 use g3_ui::{Refresher, StatusColor};
 
 use super::VideoGrid;
@@ -95,12 +95,10 @@ pub fn Feed() -> Element {
             },
         }
         main { class: "page feed-page",
-            section { class: "feed-intro",
-                span { class: "feed-count", Sparkles { size: 14 } "{videos.len()} fresh" }
-            }
-
+            // Count and group filters share one row rather than stacking two
+            // thin bands above the grid.
             nav { class: "group-filter-row", aria_label: "Subscription groups",
-                span { class: "group-filter-label", Layers { size: 15 } "Groups" }
+                span { class: "feed-count", Sparkles { size: 14 } "{videos.len()} fresh" }
                 button {
                     class: if selected_group() == "all" { "group-filter active" } else { "group-filter" },
                     onclick: move |_| selected_group.set("all".into()),

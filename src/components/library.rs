@@ -5,6 +5,7 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{History, ListVideo, Play, Trash2};
 use g3_ui::{Button, ButtonStyle, Refresher, StatusColor};
 
@@ -13,7 +14,6 @@ use super::VideoGrid;
 #[component]
 pub fn QueuePage() -> Element {
     let app_state = use_context::<AppState>();
-    let navigator = use_navigator();
     let library = app_state.library();
     let videos = library
         .queue
@@ -37,7 +37,7 @@ pub fn QueuePage() -> Element {
                         onclick: move |_| {
                             if let Some(id) = &first_id {
                                 app_state.record_history(id);
-                                navigator.push(Route::VideoDetail { id: id.clone() });
+                                { let v = id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                             }
                         },
                         "Play all"

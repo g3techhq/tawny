@@ -1,5 +1,6 @@
 use crate::{app::Route, models::Playlist, state::AppState};
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{CheckCheck, ListPlus, Pin, Plus, Trash2};
 use g3_ui::{Button, ButtonStyle, Card, Field, Modal, RightSlot, StatusColor};
 
@@ -24,7 +25,6 @@ fn playlist_thumbnails(state: AppState, playlist: &Playlist) -> Vec<String> {
 #[component]
 pub fn Playlists() -> Element {
     let app_state = use_context::<AppState>();
-    let navigator = use_navigator();
     let mut create_open = use_signal(|| false);
     let mut playlist_name = use_signal(String::new);
     let mut delete_target = use_signal(|| None::<(String, String)>);
@@ -90,7 +90,7 @@ pub fn Playlists() -> Element {
                                         }
                                     }
                                 }),
-                                onclick: move |_| { navigator.push(Route::PlaylistDetail { id: playlist_id.clone() }); },
+                                onclick: move |_| { { let v = playlist_id.clone(); spawn(async move { animated_navigate(Route::PlaylistDetail { id: v }).await; }); }; },
                                 div { class: "playlist-collage",
                                     if thumbs.is_empty() {
                                         div { class: "playlist-empty-art", ListPlus { size: 30 } }

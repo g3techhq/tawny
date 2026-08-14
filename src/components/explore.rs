@@ -5,6 +5,7 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::Search;
 use g3_ui::Field;
 use g3_ui::{Button, StatusColor};
@@ -14,7 +15,6 @@ use super::VideoGrid;
 #[component]
 pub fn Explore() -> Element {
     let app_state = use_context::<AppState>();
-    let navigator = use_navigator();
     let search = use_signal(String::new);
     // Owned by the header's segmented control.
     let filter_index = app_state.explore_filter_index;
@@ -132,7 +132,7 @@ pub fn Explore() -> Element {
                                     button {
                                         class: "channel-result",
                                         key: "{channel.id}",
-                                        onclick: move |_| { navigator.push(Route::ChannelDetail { id: channel_id.clone() }); },
+                                        onclick: move |_| { { let v = channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
                                         if let Some(avatar_url) = channel.avatar_url {
                                             img { src: "{avatar_url}", alt: "", loading: "lazy" }
                                         } else {

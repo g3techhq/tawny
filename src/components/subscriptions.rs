@@ -1,5 +1,6 @@
 use crate::{app::Route, models::Channel, state::AppState};
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{Check, Layers, Plus, Trash2};
 use g3_ui::{Button, ButtonSize, ButtonStyle, Card, Field, Modal, Sheet, StatusColor};
 
@@ -7,7 +8,6 @@ use g3_ui::{Button, ButtonSize, ButtonStyle, Card, Field, Modal, Sheet, StatusCo
 #[component]
 fn ChannelCard(channel: Channel) -> Element {
     let app_state = use_context::<AppState>();
-    let navigator = use_navigator();
     let channel_id = channel.id.clone();
     let open_channel_id = channel.id.clone();
     let is_subscribed = channel.subscribed;
@@ -19,7 +19,7 @@ fn ChannelCard(channel: Channel) -> Element {
             class: "channel-card",
             role: "button",
             tabindex: "0",
-            onclick: move |_| { navigator.push(Route::ChannelDetail { id: open_channel_id.clone() }); },
+            onclick: move |_| { { let v = open_channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
             if let Some(avatar_url) = avatar_url {
                 img {
                     class: "channel-avatar channel-avatar-large",

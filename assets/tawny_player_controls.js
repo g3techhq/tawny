@@ -457,19 +457,57 @@
     // swipe outside fullscreen shrinks the player to the mini bar.
     let gestureStart = null;
     let swallowNextClick = false;
+    const SWIPE_DISTANCE = 55;
+
+    const trackGesture = (event) => {
+      if (!gestureStart) return;
+      const dy = event.clientY - gestureStart.y;
+      const dx = event.clientX - gestureStart.x;
+      if (!gestureStart.committed) {
+        // Claim the gesture only once it is clearly vertical. Until then the
+        // page keeps its normal scrolling.
+        if (Math.abs(dy) < 10 || Math.abs(dy) <= Math.abs(dx)) return;
+        gestureStart.committed = true;
+        try {
+          root.setPointerCapture(event.pointerId);
+        } catch (_) {}
+      }
+      // Follow the finger the way YouTube does: swiping up grows the video
+      // toward its fullscreen size so the gesture feels attached to it.
+      const progress = Math.min(1, Math.max(0, -dy / 260));
+      root.style.setProperty("--player-swipe-progress", progress.toFixed(3));
+      root.classList.toggle("player-swiping", progress > 0);
+      // Suppress the page's own scrolling while we own the gesture.
+      if (event.cancelable) event.preventDefault();
+    };
+
+    const resetGestureVisuals = () => {
+      root.style.removeProperty("--player-swipe-progress");
+      root.classList.remove("player-swiping");
+    };
+
     listen(root, "pointerdown", (event) => {
       swallowNextClick = false;
       if (event.target.closest("[data-player-action], [data-player-progress], .player-options-menu")) {
         gestureStart = null;
         return;
       }
-      gestureStart = { x: event.clientX, y: event.clientY, at: Date.now() };
-      // Capture the pointer so a release that lands outside the player — which
-      // a fast upward flick very often does — still reports back here.
-      try {
-        root.setPointerCapture(event.pointerId);
-      } catch (_) {}
+      gestureStart = {
+        x: event.clientX,
+        y: event.clientY,
+        at: Date.now(),
+        committed: event.pointerType === "mouse",
+      };
+      if (gestureStart.committed) {
+        // A mouse drag never competes with scrolling, so capture immediately;
+        // a release outside the player still has to report back here.
+        try {
+          root.setPointerCapture(event.pointerId);
+        } catch (_) {}
+      }
     });
+
+    listen(root, "pointermove", trackGesture);
 
     const endGesture = (event) => {
       if (!gestureStart) return;
@@ -477,11 +515,14 @@
       const dy = event.clientY - gestureStart.y;
       const elapsed = Date.now() - gestureStart.at;
       gestureStart = null;
+      resetGestureVisuals();
       try {
         root.releasePointerCapture(event.pointerId);
       } catch (_) {}
       // Deliberate, mostly-vertical, and quick enough to be a flick.
-      if (elapsed > 800 || Math.abs(dy) < 55 || Math.abs(dy) <= Math.abs(dx)) return;
+      if (elapsed > 800 || Math.abs(dy) < SWIPE_DISTANCE || Math.abs(dy) <= Math.abs(dx)) {
+        return;
+      }
       // A swipe is not a tap: keep the click that follows from toggling play.
       swallowNextClick = true;
       const fullscreen = document.fullscreenElement === root;
@@ -499,6 +540,7 @@
     listen(root, "pointerup", endGesture);
     listen(root, "pointercancel", () => {
       gestureStart = null;
+      resetGestureVisuals();
     });
     listen(video, "dblclick", (event) => {
       const bounds = video.getBoundingClientRect();

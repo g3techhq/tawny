@@ -1,5 +1,6 @@
 use crate::{app::Route, models::Video, state::AppState};
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, X};
 use g3_ui::{
     Badge, Button, ButtonStyle, StatusColor, SwipeAction, SwipeBehavior, SwipeItem, SwipeSide,
@@ -60,7 +61,6 @@ pub fn VideoGrid(
 #[component]
 pub fn VideoCard(video: Video) -> Element {
     let mut app_state = use_context::<AppState>();
-    let navigator = use_navigator();
     let start_playlist_name = app_state.swipe_action_label(true);
     let end_playlist_name = app_state.swipe_action_label(false);
     let button_start_name = start_playlist_name.clone();
@@ -122,7 +122,7 @@ pub fn VideoCard(video: Video) -> Element {
                     if event.key() == Key::Enter {
                         app_state.play(keyboard_video.clone());
                         app_state.record_history(&keyboard_open_id);
-                        navigator.push(Route::VideoDetail { id: keyboard_open_id.clone() });
+                        { let v = keyboard_open_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                     }
                 },
                 div {
@@ -130,7 +130,7 @@ pub fn VideoCard(video: Video) -> Element {
                     onclick: move |_| {
                         app_state.play(open_video.clone());
                         app_state.record_history(&open_id);
-                        navigator.push(Route::VideoDetail { id: open_id.clone() });
+                        { let v = open_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                     },
                     img {
                         class: "video-thumbnail",
@@ -193,7 +193,7 @@ pub fn VideoCard(video: Video) -> Element {
                         onclick: move |_| {
                             app_state.play(meta_open_video.clone());
                             app_state.record_history(&meta_open_id);
-                            navigator.push(Route::VideoDetail { id: meta_open_id.clone() });
+                            { let v = meta_open_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                         },
                         h2 { "{video.title}" }
                         if !video.channel_name.is_empty() {

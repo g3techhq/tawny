@@ -1,5 +1,6 @@
 use crate::{app::Route, state::AppState};
 use dioxus::prelude::*;
+use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{
     ChevronLeft, History, House, List as ListIcon, ListVideo, Search, Settings, Users,
 };
@@ -122,21 +123,21 @@ pub fn AppShell() -> Element {
                                 style: ButtonStyle::Clear,
                                 aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
                                 class: "icon-button",
-                                onclick: move |_| { navigator.push(Route::QueuePage {}); },
+                                onclick: move |_| { spawn(async move { animated_navigate(Route::QueuePage {}).await; }); },
                                 ListVideo { size: 19 }
                             }
                             Button {
                                 style: ButtonStyle::Clear,
                                 aria_label: "History".to_string(),
                                 class: "icon-button header-history-button",
-                                onclick: move |_| { navigator.push(Route::HistoryPage {}); },
+                                onclick: move |_| { spawn(async move { animated_navigate(Route::HistoryPage {}).await; }); },
                                 History { size: 19 }
                             }
                             Button {
                                 style: ButtonStyle::Clear,
                                 aria_label: "Settings".to_string(),
                                 class: "icon-button",
-                                onclick: move |_| { navigator.push(Route::SettingsPage {}); },
+                                onclick: move |_| { spawn(async move { animated_navigate(Route::SettingsPage {}).await; }); },
                                 Settings { size: 20 }
                             }
                         }
@@ -156,25 +157,25 @@ pub fn AppShell() -> Element {
                         label: "Feed".to_string(),
                         selected: matches!(route, Route::Feed {}),
                         icon: rsx! { House { size: 20 } },
-                        onclick: move |_| { navigator.push(Route::Feed {}); },
+                        onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
                     }
                     NavbarTab {
                         label: "Playlists".to_string(),
                         selected: matches!(route, Route::Playlists {}),
                         icon: rsx! { ListIcon { size: 20 } },
-                        onclick: move |_| { navigator.push(Route::Playlists {}); },
+                        onclick: move |_| { spawn(async move { animated_navigate(Route::Playlists {}).await; }); },
                     }
                     NavbarTab {
                         label: "Search".to_string(),
                         selected: matches!(route, Route::Explore {}),
                         icon: rsx! { Search { size: 20 } },
-                        onclick: move |_| { navigator.push(Route::Explore {}); },
+                        onclick: move |_| { spawn(async move { animated_navigate(Route::Explore {}).await; }); },
                     }
                     NavbarTab {
                         label: "Subscriptions".to_string(),
                         selected: matches!(route, Route::Subscriptions {}),
                         icon: rsx! { Users { size: 20 } },
-                        onclick: move |_| { navigator.push(Route::Subscriptions {}); },
+                        onclick: move |_| { spawn(async move { animated_navigate(Route::Subscriptions {}).await; }); },
                     }
                 }
             }

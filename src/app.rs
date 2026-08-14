@@ -7,6 +7,7 @@ use crate::{
     state::{AppState, AppStateProvider},
 };
 use dioxus::prelude::*;
+use dx_route_transitions::{RouteTransitionRoot, route_transitions};
 use g3_ui::{AppWrapper, Theme};
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -14,28 +15,41 @@ const SHAKA_PLAYER_JS: Asset = asset!("/node_modules/shaka-player/dist/shaka-pla
 const TAWNY_TRANSPORT_JS: Asset = asset!("/assets/tawny_transport.js");
 const TAWNY_PLAYER_CONTROLS_JS: Asset = asset!("/assets/tawny_player_controls.js");
 
+/// The four nav destinations are `base` peers; everything reached *from* them
+/// is a `cover` sheet that animates up and back down.
+#[route_transitions]
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 pub enum Route {
     #[layout(AppShell)]
+        #[transition(base)]
         #[route("/")]
         Feed {},
+        #[transition(base)]
         #[route("/subscriptions")]
         Subscriptions {},
+        #[transition(base)]
         #[route("/playlists")]
         Playlists {},
+        #[transition(base)]
         #[route("/explore")]
         Explore {},
+        #[transition(cover)]
         #[route("/queue")]
         QueuePage {},
+        #[transition(cover)]
         #[route("/history")]
         HistoryPage {},
+        #[transition(cover)]
         #[route("/watch/:id")]
         VideoDetail { id: String },
+        #[transition(cover)]
         #[route("/playlists/:id")]
         PlaylistDetail { id: String },
+        #[transition(cover)]
         #[route("/settings")]
         SettingsPage {},
+        #[transition(cover)]
         #[route("/channel/:id")]
         ChannelDetail { id: String },
 }
@@ -87,7 +101,9 @@ fn ThemedApp() -> Element {
             key: "{appearance:?}",
             theme: tawny_theme(appearance),
             disable_text_selection: true,
-            Router::<Route> {}
+            RouteTransitionRoot {
+                Router::<Route> {}
+            }
             AppOverlays {}
         }
     }
