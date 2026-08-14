@@ -132,12 +132,101 @@ struct YtdlpFormat {
     url: Option<String>,
     #[serde(default)]
     filesize: Option<u64>,
+    #[serde(default)]
+    filesize_approx: Option<u64>,
+    #[serde(default)]
+    ext: Option<String>,
+    #[serde(default)]
+    container: Option<String>,
+    #[serde(default)]
+    vcodec: Option<String>,
+    #[serde(default)]
+    acodec: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    fps: Option<f64>,
+    #[serde(default)]
+    tbr: Option<f64>,
+    #[serde(default)]
+    format_note: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    has_drm: Option<bool>,
+    /// Filled in from the dump's top-level duration, which is where yt-dlp
+    /// reports it: the per-format entries carry none, and a DASH manifest
+    /// without one presents as a zero-length video.
+    #[serde(skip)]
+    duration_ms: Option<u64>,
+}
+
+impl YtdlpFormat {
+    /// The itag, which is the format id up to any `-drc` style suffix.
+    fn itag(&self) -> Option<u32> {
+        self.format_id.split('-').next()?.parse().ok()
+    }
+
+    fn codec(value: &Option<String>) -> Option<&str> {
+        value
+            .as_deref()
+            .filter(|codec| !codec.is_empty() && *codec != "none")
+    }
+
+    fn video_codec(&self) -> Option<&str> {
+        Self::codec(&self.vcodec)
+    }
+
+    fn audio_codec(&self) -> Option<&str> {
+        Self::codec(&self.acodec)
+    }
+
+    /// Adaptive formats carry exactly one of the two streams.
+    fn adaptive_kind(&self) -> Option<PlaybackTrackKind> {
+        match (self.video_codec(), self.audio_codec()) {
+            (Some(_), None) => Some(PlaybackTrackKind::Video),
+            (None, Some(_)) => Some(PlaybackTrackKind::Audio),
+            _ => None,
+        }
+    }
+
+    /// A DASH-ready container, as opposed to the muxed progressive formats and
+    /// the m3u8 entries that only appear on live streams.
+    fn is_dash(&self) -> bool {
+        self.container
+            .as_deref()
+            .is_some_and(|container| container.ends_with("_dash"))
+    }
+
+    /// `video/mp4; codecs="avc1.4d400c"`, assembled the way a DASH manifest
+    /// wants it. WebM and MP4 are the only containers YouTube serves adaptive.
+    fn mime_type(&self, kind: PlaybackTrackKind) -> Option<String> {
+        let subtype = match self.ext.as_deref() {
+            Some("mp4") | Some("m4a") => "mp4",
+            Some("webm") => "webm",
+            _ => return None,
+        };
+        let top = match kind {
+            PlaybackTrackKind::Video => "video",
+            PlaybackTrackKind::Audio => "audio",
+        };
+        let codec = self.video_codec().or_else(|| self.audio_codec())?;
+        Some(format!("{top}/{subtype}; codecs=\"{codec}\""))
+    }
+
+    fn content_length(&self) -> Option<u64> {
+        self.filesize.or(self.filesize_approx)
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct YtdlpDump {
     #[serde(default)]
     formats: Vec<YtdlpFormat>,
+    #[serde(default)]
+    duration: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -863,9 +952,10 @@ impl AppServerState {
     /// transcode: the two clients hand out different URLs for the same file.
     /// `filesize` is compared per itag so a mismatch is skipped rather than
     /// producing a manifest whose ranges point into the wrong bytes.
-    async fn ytdlp_stream_urls(&self, video_id: &str) -> HashMap<u32, (String, Option<u64>)> {
+    /// Every format yt-dlp can see, which is the whole basis of playback now.
+    async fn ytdlp_formats(&self, video_id: &str) -> Vec<YtdlpFormat> {
         let Some(binary) = self.ytdlp_bin.as_ref() else {
-            return HashMap::new();
+            return Vec::new();
         };
         let output = tokio::process::Command::new(binary)
             .args([
@@ -885,30 +975,42 @@ impl AppServerState {
                     "yt-dlp failed for {video_id}: {}",
                     String::from_utf8_lossy(&output.stderr).trim()
                 );
-                return HashMap::new();
+                return Vec::new();
             }
             Ok(Err(error)) => {
                 eprintln!("could not run yt-dlp: {error}");
-                return HashMap::new();
+                return Vec::new();
             }
             Err(_) => {
                 eprintln!("yt-dlp timed out for {video_id}");
-                return HashMap::new();
+                return Vec::new();
             }
         };
         let dump = match serde_json::from_slice::<YtdlpDump>(&output.stdout) {
             Ok(dump) => dump,
             Err(error) => {
                 eprintln!("could not parse yt-dlp output for {video_id}: {error}");
-                return HashMap::new();
+                return Vec::new();
             }
         };
-        dump.formats
-            .into_iter()
+        let duration_ms = dump
+            .duration
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .map(|seconds| (seconds * 1000.0).round() as u64);
+        let mut formats = dump.formats;
+        for format in &mut formats {
+            format.duration_ms = duration_ms;
+        }
+        formats
+    }
+
+    /// The itag-to-URL view the extractor-layout path still needs.
+    fn ytdlp_url_map(formats: &[YtdlpFormat]) -> HashMap<u32, (String, Option<u64>)> {
+        formats
+            .iter()
             .filter_map(|format| {
-                let url = format.url.filter(|url| !url.is_empty())?;
-                let itag = format.format_id.split('-').next()?.parse::<u32>().ok()?;
-                Some((itag, (url, format.filesize)))
+                let url = format.url.clone().filter(|url| !url.is_empty())?;
+                Some((format.itag()?, (url, format.filesize)))
             })
             .collect()
     }
@@ -924,13 +1026,28 @@ impl AppServerState {
         // (byte ranges, codecs, languages) and yt-dlp supplies URLs that are
         // not subject to the iOS client's 403 gate.
         let query = self.youtube.query();
-        let (player, ytdlp_urls) = tokio::join!(
+        let (player, ytdlp_formats) = tokio::join!(
             youtube_call(
                 query.player_from_clients(video_id, PLAYER_CLIENTS),
                 "extract YouTube player"
             ),
-            self.ytdlp_stream_urls(video_id),
+            self.ytdlp_formats(video_id),
         );
+
+        // yt-dlp owns the adaptive source. The extractor is consulted only for
+        // what yt-dlp does not produce — the HLS manifest a live stream needs —
+        // and as a fallback when yt-dlp itself came back empty.
+        if let Some(source) =
+            ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await
+        {
+            eprintln!(
+                "playback for {video_id}: {} yt-dlp tracks, ranges derived locally",
+                source.tracks.len()
+            );
+            provider_sources.push(source);
+        }
+
+        let ytdlp_urls = Self::ytdlp_url_map(&ytdlp_formats);
         let youtube_sources = match player {
             Ok(player) => {
                 let sources = rusty_playback_sources(&player, &ytdlp_urls);
@@ -2705,6 +2822,284 @@ fn playback_source_priority(source: &PlaybackSource) -> u8 {
 /// clients are not describing the same file and the ranges would address the
 /// wrong bytes.
 ///
+/// The byte ranges a DASH `SegmentBase` needs.
+///
+/// yt-dlp reports everything about a format except these, so they are derived
+/// from the container itself rather than taken from a second extractor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SegmentRanges {
+    init_end: u64,
+    index_start: u64,
+    index_end: u64,
+}
+
+/// Walk ISO-BMFF boxes looking for `sidx`.
+///
+/// YouTube's DASH-ready MP4 is laid out `ftyp`, `moov`, `sidx`, then fragments,
+/// so the initialisation segment is everything before `sidx` and the index is
+/// the `sidx` box itself. Verified against the extractor's own numbers.
+fn mp4_segment_ranges(head: &[u8]) -> Option<SegmentRanges> {
+    let mut offset = 0usize;
+    while offset + 8 <= head.len() {
+        let declared = u32::from_be_bytes(head[offset..offset + 4].try_into().ok()?);
+        let kind = &head[offset + 4..offset + 8];
+        // A declared size of 1 means the real size is a 64-bit value following
+        // the header. 0 means "to end of file", which cannot precede an index.
+        let (size, header) = if declared == 1 {
+            if offset + 16 > head.len() {
+                return None;
+            }
+            (
+                u64::from_be_bytes(head[offset + 8..offset + 16].try_into().ok()?),
+                16u64,
+            )
+        } else {
+            (u64::from(declared), 8u64)
+        };
+        if kind == b"sidx" {
+            let start = u64::try_from(offset).ok()?;
+            return Some(SegmentRanges {
+                init_end: start.checked_sub(1)?,
+                index_start: start,
+                index_end: start.checked_add(size)?.checked_sub(1)?,
+            });
+        }
+        if size < header {
+            return None;
+        }
+        offset = offset.checked_add(usize::try_from(size).ok()?)?;
+    }
+    None
+}
+
+/// Read an EBML variable-length integer, returning its value and width.
+///
+/// The leading zero count of the first byte gives the width. The marker bit is
+/// part of an element ID but not of a size, hence `keep_marker`.
+fn ebml_vint(bytes: &[u8], offset: usize, keep_marker: bool) -> Option<(u64, usize)> {
+    let first = *bytes.get(offset)?;
+    if first == 0 {
+        return None;
+    }
+    let width = first.leading_zeros() as usize + 1;
+    if width > 8 || offset + width > bytes.len() {
+        return None;
+    }
+    let mut value = if keep_marker {
+        u64::from(first)
+    } else if width == 8 {
+        // Every value bit lives in the following bytes; the first is only the
+        // marker, and shifting a u8 by its full width is an overflow.
+        0
+    } else {
+        u64::from(first & (0xFFu8 >> width))
+    };
+    for index in 1..width {
+        value = (value << 8) | u64::from(bytes[offset + index]);
+    }
+    Some((value, width))
+}
+
+const EBML_SEGMENT_ID: u64 = 0x1853_8067;
+const EBML_CUES_ID: u64 = 0x1C53_BB6B;
+
+/// Find the `Cues` element that indexes a WebM stream.
+///
+/// The initialisation segment is everything before `Cues` and the index is the
+/// element itself, header included — the same shape as MP4's `sidx`, which is
+/// why both share one return type.
+fn webm_segment_ranges(head: &[u8]) -> Option<SegmentRanges> {
+    fn scan(head: &[u8], start: usize, end: usize, descended: bool) -> Option<SegmentRanges> {
+        let mut offset = start;
+        while offset < end {
+            let (id, id_width) = ebml_vint(head, offset, true)?;
+            let (size, size_width) = ebml_vint(head, offset + id_width, false)?;
+            let data = offset.checked_add(id_width)?.checked_add(size_width)?;
+            if id == EBML_CUES_ID {
+                let start = u64::try_from(offset).ok()?;
+                let total = u64::try_from(id_width + size_width)
+                    .ok()?
+                    .checked_add(size)?;
+                return Some(SegmentRanges {
+                    init_end: start.checked_sub(1)?,
+                    index_start: start,
+                    index_end: start.checked_add(total)?.checked_sub(1)?,
+                });
+            }
+            // Cues live inside the Segment master element, so that one is
+            // stepped into rather than over.
+            if id == EBML_SEGMENT_ID && !descended {
+                let limit = usize::try_from(size)
+                    .ok()
+                    .and_then(|size| data.checked_add(size))
+                    .unwrap_or(end)
+                    .min(end);
+                return scan(head, data, limit, true);
+            }
+            offset = data.checked_add(usize::try_from(size).ok()?)?;
+        }
+        None
+    }
+    scan(head, 0, head.len(), false)
+}
+
+/// Build the adaptive source entirely from yt-dlp.
+///
+/// This is the split: yt-dlp owns extraction, because its URLs are not subject
+/// to the gate that kills the other client's after a few MiB, and the byte
+/// ranges it does not report are derived from the containers directly. The
+/// other extractor keeps metadata, search, channels and comments, where it is
+/// faster and needs no subprocess.
+async fn ytdlp_playback_source(
+    client: &reqwest::Client,
+    video_id: &str,
+    formats: &[YtdlpFormat],
+) -> Option<PlaybackSource> {
+    let candidates = formats
+        .iter()
+        .filter(|format| !format.has_drm.unwrap_or(false))
+        .filter(|format| format.is_dash())
+        .filter_map(|format| {
+            let url = format.url.as_deref().filter(|url| !url.is_empty())?;
+            let kind = format.adaptive_kind()?;
+            Some((format, format.itag()?, kind, url))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Probed together rather than in sequence: one round trip per format is
+    // tolerable in parallel and ruinous serially.
+    let probes = candidates
+        .iter()
+        .map(|(_, itag, _, url)| probe_segment_ranges(client, video_id, *itag, url));
+    let ranges = futures_util::future::join_all(probes).await;
+
+    let mut tracks = candidates
+        .into_iter()
+        .zip(ranges)
+        .filter_map(|((format, _, kind, url), ranges)| {
+            let ranges = ranges?;
+            let mime_type = format.mime_type(kind.clone())?;
+            Some(PlaybackTrack {
+                kind,
+                url: url.to_string(),
+                mime_type,
+                bitrate: format.tbr.map(|rate| (rate * 1000.0).round() as u64),
+                content_length: format.content_length(),
+                duration_ms: format.duration_ms,
+                width: format.width,
+                height: format.height,
+                fps: format.fps.map(|fps| fps.round() as u32),
+                quality_label: format.format_note.clone(),
+                language: format.language.clone(),
+                label: None,
+                is_default: false,
+                init_range: Some(PlaybackByteRange {
+                    start: 0,
+                    end: ranges.init_end,
+                }),
+                index_range: Some(PlaybackByteRange {
+                    start: ranges.index_start,
+                    end: ranges.index_end,
+                }),
+                request_headers: Vec::new(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if tracks.is_empty() {
+        return None;
+    }
+    // Highest quality first, so the manifest lists them the way the ABR manager
+    // expects to read them.
+    tracks.sort_by_key(|track| {
+        std::cmp::Reverse((
+            track.height.unwrap_or_default(),
+            track.bitrate.unwrap_or_default(),
+        ))
+    });
+    if let Some(first) = tracks.first_mut() {
+        first.is_default = true;
+    }
+
+    Some(PlaybackSource {
+        protocol: PlaybackProtocol::Dash,
+        url: String::new(),
+        mime_type: None,
+        tracks,
+        expires_at: None,
+        po_token: None,
+        quality_label: None,
+        request_headers: Vec::new(),
+    })
+}
+
+/// Ranges keyed by video and itag.
+///
+/// The URLs expire but the container layout does not, so a probe is paid for
+/// once per format rather than once per playback.
+static SEGMENT_RANGE_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<(String, u32), SegmentRanges>>,
+> = std::sync::OnceLock::new();
+
+fn cached_segment_ranges(video_id: &str, itag: u32) -> Option<SegmentRanges> {
+    SEGMENT_RANGE_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()?
+        .get(&(video_id.to_string(), itag))
+        .copied()
+}
+
+fn store_segment_ranges(video_id: &str, itag: u32, ranges: SegmentRanges) {
+    if let Some(cache) = SEGMENT_RANGE_CACHE.get_or_init(Default::default).lock().ok() {
+        let mut cache = cache;
+        cache.insert((video_id.to_string(), itag), ranges);
+    }
+}
+
+/// Read enough of a stream to find its index.
+///
+/// 32 KiB covers `ftyp` + `moov` + `sidx` with room to spare on every format
+/// measured; a container whose index sits beyond that is skipped rather than
+/// chased, since a second round trip per track would cost more than the format
+/// is worth.
+async fn probe_segment_ranges(
+    client: &reqwest::Client,
+    video_id: &str,
+    itag: u32,
+    url: &str,
+) -> Option<SegmentRanges> {
+    if let Some(cached) = cached_segment_ranges(video_id, itag) {
+        return Some(cached);
+    }
+    let response = client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-32767")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let head = response.bytes().await.ok()?;
+    let ranges = segment_ranges(&head)?;
+    store_segment_ranges(video_id, itag, ranges);
+    Some(ranges)
+}
+
+/// Pick a parser from the container's magic rather than its declared extension.
+fn segment_ranges(head: &[u8]) -> Option<SegmentRanges> {
+    if head.len() >= 8 && &head[4..8] == b"ftyp" {
+        mp4_segment_ranges(head)
+    } else if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        webm_segment_ranges(head)
+    } else {
+        None
+    }
+}
+
 /// When yt-dlp produced any URLs at all, a track it does not cover is dropped
 /// rather than kept: its extractor URL is known to be gated, so offering it
 /// only invites the ABR manager to select it, take a 403, and recover. When
@@ -3454,8 +3849,9 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppServerState, canonical_sort_key, center_vtt_cues, extract_chapters, parse_youtube_feed,
-        reconciliation_limit, sniff_media_type, url_path_ends_with, video_published_epoch,
+        AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters,
+        mp4_segment_ranges, parse_youtube_feed, reconciliation_limit, segment_ranges,
+        sniff_media_type, url_path_ends_with, video_published_epoch, webm_segment_ranges,
         websub_channel_from_topic,
     };
     use crate::models::PlaybackProtocol;
@@ -3717,5 +4113,102 @@ mod tests {
                 .windows(2)
                 .all(|pair| { pair[0].published_epoch() >= pair[1].published_epoch() })
         );
+    }
+    /// Header layout measured from a real YouTube itag 160 stream:
+    /// ftyp@0+28, moov@28+710, sidx@738+3812.
+    fn mp4_head(boxes: &[(&[u8; 4], u32)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (kind, size) in boxes {
+            out.extend_from_slice(&size.to_be_bytes());
+            out.extend_from_slice(*kind);
+            out.resize(out.len() + (*size as usize - 8), 0);
+        }
+        out
+    }
+
+    #[test]
+    fn mp4_index_is_the_sidx_box_and_init_is_everything_before_it() {
+        let head = mp4_head(&[(b"ftyp", 28), (b"moov", 710), (b"sidx", 3812)]);
+        let ranges = mp4_segment_ranges(&head).expect("sidx found");
+        assert_eq!(ranges.init_end, 737);
+        assert_eq!(ranges.index_start, 738);
+        assert_eq!(ranges.index_end, 4549);
+    }
+
+    #[test]
+    fn mp4_walk_stops_rather_than_looping_on_a_zero_sized_box() {
+        let mut head = Vec::new();
+        head.extend_from_slice(&0u32.to_be_bytes());
+        head.extend_from_slice(b"free");
+        head.resize(64, 0);
+        assert_eq!(mp4_segment_ranges(&head), None);
+    }
+
+    #[test]
+    fn ebml_vint_widths_and_marker_handling() {
+        // 0x81 is a one-byte value of 1 once the marker is stripped.
+        assert_eq!(ebml_vint(&[0x81], 0, false), Some((1, 1)));
+        assert_eq!(ebml_vint(&[0x81], 0, true), Some((0x81, 1)));
+        // 0x1A45DFA3 is the four-byte EBML header id, kept whole.
+        assert_eq!(
+            ebml_vint(&[0x1A, 0x45, 0xDF, 0xA3], 0, true),
+            Some((0x1A45_DFA3, 4))
+        );
+        assert_eq!(ebml_vint(&[0x00], 0, false), None);
+    }
+
+    /// Emit one EBML element: id bytes, then a size vint of the given width,
+    /// then a zeroed payload.
+    fn ebml_element(out: &mut Vec<u8>, id: &[u8], payload: usize, size_width: usize) {
+        out.extend_from_slice(id);
+        let marker = 1u64 << (7 * size_width);
+        let size = marker | payload as u64;
+        let bytes = size.to_be_bytes();
+        out.extend_from_slice(&bytes[8 - size_width..]);
+        out.resize(out.len() + payload, 0);
+    }
+
+    /// Layout measured from a real YouTube itag 278 stream: an EBML header of
+    /// 36 bytes, a Segment whose children run 44..219, then Cues at 219
+    /// spanning 5345 bytes.
+    #[test]
+    fn webm_index_is_the_cues_element_inside_the_segment() {
+        let mut head = Vec::new();
+        ebml_element(&mut head, &[0x1A, 0x45, 0xDF, 0xA3], 31, 1);
+        assert_eq!(head.len(), 36);
+        // Segment is a master element: header only, with a four-byte declared
+        // size covering the children that follow rather than a payload of its
+        // own.
+        head.extend_from_slice(&[0x18, 0x53, 0x80, 0x67]);
+        let segment_payload = 5564u64 - 44;
+        head.extend_from_slice(&((1u64 << 28) | segment_payload).to_be_bytes()[4..]);
+        assert_eq!(head.len(), 44);
+        for payload in [42usize, 54, 64] {
+            ebml_element(&mut head, &[0x11, 0x4D, 0x9B, 0x74], payload, 1);
+        }
+        assert_eq!(head.len(), 219);
+        ebml_element(&mut head, &[0x1C, 0x53, 0xBB, 0x6B], 5339, 2);
+        assert_eq!(head.len(), 5564);
+
+        let ranges = webm_segment_ranges(&head).expect("cues found");
+        assert_eq!(ranges.init_end, 218);
+        assert_eq!(ranges.index_start, 219);
+        assert_eq!(ranges.index_end, 5563);
+    }
+
+    #[test]
+    fn ebml_vint_of_full_width_does_not_overflow_its_mask() {
+        // An eight-byte size carries no value bits in its first byte.
+        assert_eq!(
+            ebml_vint(&[0x01, 0, 0, 0, 0, 0, 0, 7], 0, false),
+            Some((7, 8))
+        );
+    }
+
+    #[test]
+    fn container_is_chosen_by_magic_not_by_extension() {
+        let mp4 = mp4_head(&[(b"ftyp", 28), (b"sidx", 100)]);
+        assert!(segment_ranges(&mp4).is_some());
+        assert_eq!(segment_ranges(b"not a media container at all"), None);
     }
 }
