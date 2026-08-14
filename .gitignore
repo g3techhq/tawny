@@ -6,3 +6,4 @@
 /.codex
 .env
 /rustypipe_reports
+dx*.log

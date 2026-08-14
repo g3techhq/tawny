@@ -1,6 +1,0 @@
-
-[31mERROR[0m [33mdx serve[0m: Failed to bind server to: 127.0.0.1:8080, is there another devserver running?
-To run multiple devservers, use the --port flag to specify a different port
-
-Caused by:
-    Only one usage of each socket address (protocol/network address/port) is normally permitted. (os error 10048)
