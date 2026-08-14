@@ -2114,14 +2114,15 @@ textarea {
   pointer-events: none;
 }
 
-/* A notch cut into the bar rather than a dot sitting on top of it: the marker
-   is the track colour, so it reads as a division of the timeline. */
+/* A gap punched through the bar, not a tick drawn on top of it. It is opaque
+   and wider than the old notch so the timeline reads as one segment per
+   chapter, and it clears the fill as well as the track. */
 .player-chapter-marker {
   position: absolute;
-  width: 2px;
+  width: 4px;
   height: 100%;
-  background: rgba(8, 12, 18, 0.85);
-  transform: translateX(-1px);
+  background: #05080c;
+  transform: translateX(-2px);
 }
 
 .player-chapter-label {
@@ -2193,13 +2194,15 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
-/* Reaches high up the screen so a useful number of comments is visible. */
+/* Opens to a fixed share of the screen rather than hugging its content, so a
+   short thread does not open as a thin strip at the bottom. */
 .comments-sheet {
-  max-height: 88vh;
+  min-height: 70dvh;
+  max-height: 88dvh;
 }
 
 .comments-sheet .comment-list {
-  max-height: 82vh;
+  max-height: 78dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2632,4 +2635,35 @@ textarea {
   .tawny-shell-cover > .g3-body {
     padding-bottom: 0;
   }
+}
+
+/* -- Player sheets -- */
+
+/* Replaces the icon-and-subtitle heading block, which pushed the actual list
+   below the fold. Just enough to name the sheet. */
+.sheet-label {
+  margin: 0 0 0.55rem;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The list is the sheet, so it gets the height the heading was using. */
+.player-sheet .chapter-sheet-list {
+  max-height: 68dvh;
+  overscroll-behavior: contain;
+}
+
+/* Sits after the clock, and truncates rather than pushing the buttons around
+   on a long chapter title. */
+.player-chapter-label:not([hidden]) {
+  margin-left: 0.5rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-chapter-label:hover {
+  color: #fff;
 }

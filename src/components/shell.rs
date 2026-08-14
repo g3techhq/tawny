@@ -115,8 +115,19 @@ pub fn AppShell() -> Element {
                 aria_label: "Back".to_string(),
                 class: "icon-button",
                 onclick: move |_| {
-                    let home = back_destination(&back_route);
-                    spawn(async move { animated_navigate(home).await; });
+                    // Popping keeps the two back affordances agreeing. Pushing
+                    // the parent instead left the detail page ahead in history,
+                    // so the browser's back button walked straight back into
+                    // the page the user had just left. Falling back to a push
+                    // covers arriving by deep link, where there is nothing to
+                    // pop to.
+                    let navigator = navigator();
+                    if navigator.can_go_back() {
+                        navigator.go_back();
+                    } else {
+                        let home = back_destination(&back_route);
+                        spawn(async move { animated_navigate(home).await; });
+                    }
                 },
                 ChevronLeft { size: 22 }
             }
@@ -131,7 +142,11 @@ pub fn AppShell() -> Element {
     };
 
     rsx! {
-        Navbar { class: if is_cover { "tawny-shell tawny-shell-cover" } else { "tawny-shell" },
+        // The shell is the base the sheet covers. The cover marker must never
+        // sit on an ancestor of this: a named descendant is lifted out of its
+        // ancestor's snapshot, so an outer cover would capture everything
+        // except the content — an empty background sliding around.
+        Navbar { class: if is_cover { "tawny-shell tawny-shell-cover route-transition-base" } else { "tawny-shell route-transition-base" },
             // No top bar on the player: minimize, back, and swipe-down all
             // leave the screen, so a bar would only steal height from the video.
             if !player_expanded {
@@ -183,7 +198,7 @@ pub fn AppShell() -> Element {
                     }
                     NavbarTab {
                         label: "Playlists".to_string(),
-                        selected: matches!(route, Route::Playlists {}),
+                        selected: matches!(route, Route::Playlists {} | Route::PlaylistDetail { .. }),
                         icon: rsx! { ListIcon { size: 20 } },
                         onclick: move |_| { spawn(async move { animated_navigate(Route::Playlists {}).await; }); },
                     }
@@ -195,7 +210,7 @@ pub fn AppShell() -> Element {
                     }
                     NavbarTab {
                         label: "Subscriptions".to_string(),
-                        selected: matches!(route, Route::Subscriptions {}),
+                        selected: matches!(route, Route::Subscriptions {} | Route::ChannelDetail { .. }),
                         icon: rsx! { Users { size: 20 } },
                         onclick: move |_| { spawn(async move { animated_navigate(Route::Subscriptions {}).await; }); },
                     }

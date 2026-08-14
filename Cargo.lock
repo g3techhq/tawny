@@ -2986,7 +2986,6 @@ dependencies = [
  "dioxus",
  "dioxus-icons",
  "dioxus-sdk-time",
- "dx-route-transitions",
  "manganis",
  "web-sys",
 ]

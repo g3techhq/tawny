@@ -463,8 +463,10 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             div { class: "player-control-row",
                                 span { class: "player-time",
                                     span { "data-player-current-time": "", "0:00" }
-                                    // Current chapter, next to the clock; tapping it opens the
-                                    // chapter list rather than making the user scrub for it.
+                                    span { class: "player-time-separator", " • " }
+                                    span { "data-player-duration": "", "0:00" }
+                                    // Current chapter, to the right of the clock; tapping it
+                                    // opens the chapter list rather than making the user scrub.
                                     button {
                                         r#type: "button",
                                         class: "player-chapter-label",
@@ -472,8 +474,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                         "data-player-action": "chapters",
                                         hidden: true,
                                     }
-                                    span { class: "player-time-separator", " • " }
-                                    span { "data-player-duration": "", "0:00" }
                                 }
                                 span { class: "player-control-spacer" }
                                 button {
@@ -576,9 +576,10 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                         allowfullscreen: true,
                     }
                 } else if resolving {
+                    // The spinner already says "loading"; naming the mechanism
+                    // only reads as something going wrong.
                     div { class: "player-stage-status",
                         div { class: "loading-orbit" }
-                        p { "Resolving a direct stream…" }
                     }
                 } else {
                     div { class: "player-stage-status player-stage-error",
@@ -888,7 +889,6 @@ fn VideoDetailInner(id: String) -> Element {
                             p { "This video is unavailable from both the local cache and configured source." }
                         } else {
                             div { class: "loading-orbit" }
-                            p { "Loading cached details and a fresh source snapshot…" }
                         }
                     }
             }
@@ -933,7 +933,9 @@ fn VideoDetailInner(id: String) -> Element {
     };
 
     rsx! {
-        main { class: "player-content player-detail-content",
+        // The sheet itself: this is what slides up over the shell and back
+        // down off it, so it is what carries the cover snapshot.
+        main { class: "player-content player-detail-content route-transition-cover",
                     section { class: "player-details page",
                         h1 { "{video.title}" }
                         p { class: "video-stats", "{video.stats_label()}" }
@@ -1067,14 +1069,10 @@ fn VideoDetailInner(id: String) -> Element {
                     }
         }
 
+        // A small label, not a masthead: the list is the content, and a full
+        // heading block was taking half the sheet before a chapter was visible.
         Sheet { is_open: chapters_open, class: "player-sheet",
-            div { class: "sheet-heading",
-                div { class: "sheet-icon", ListVideo { size: 22 } }
-                div {
-                    h2 { "Chapters" }
-                    p { "{chapters.len()} in this video" }
-                }
-            }
+            p { class: "sheet-label", "Chapters" }
             div { class: "chapter-sheet-list",
                 for chapter in chapters.clone() {
                     {
@@ -1097,13 +1095,7 @@ fn VideoDetailInner(id: String) -> Element {
         }
 
         Sheet { is_open: captions_open, class: "player-sheet",
-            div { class: "sheet-heading",
-                div { class: "sheet-icon", Captions { size: 22 } }
-                div {
-                    h2 { "Captions" }
-                    p { "Pick a track here, then turn it on in the player" }
-                }
-            }
+            p { class: "sheet-label", "Captions" }
             CaptionPicker {
                 tracks: caption_tracks.clone(),
                 selected: app_state.selected_caption,
