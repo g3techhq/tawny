@@ -409,16 +409,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 }
                             }
                         }
+                        // Play/pause alone. Skipping is a double-tap on either
+                        // side of the video on any platform, and the arrow keys
+                        // on a keyboard, so dedicated buttons only crowded the
+                        // video they sit on.
                         div { class: "player-controls-center",
-                            button {
-                                r#type: "button",
-                                class: "player-control-button player-seek-button",
-                                aria_label: "Rewind 10 seconds",
-                                title: "Rewind 10 seconds",
-                                "data-player-action": "rewind",
-                                RotateCcw { size: 33 }
-                                span { "10" }
-                            }
                             button {
                                 r#type: "button",
                                 class: "player-control-button player-play-button",
@@ -427,15 +422,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 "data-player-action": "toggle",
                                 span { class: "player-play-icon", Play { size: 38, fill: "currentColor" } }
                                 span { class: "player-pause-icon", Pause { size: 38, fill: "currentColor" } }
-                            }
-                            button {
-                                r#type: "button",
-                                class: "player-control-button player-seek-button",
-                                aria_label: "Forward 10 seconds",
-                                title: "Forward 10 seconds",
-                                "data-player-action": "forward",
-                                RotateCw { size: 33 }
-                                span { "10" }
                             }
                         }
                         div { class: "player-options-menu", "data-player-options-menu": "", hidden: true,

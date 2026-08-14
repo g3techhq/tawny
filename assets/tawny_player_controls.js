@@ -132,6 +132,12 @@
       const position = Number.isFinite(video.currentTime) ? video.currentTime : 0;
       if (currentTime) currentTime.textContent = formatTime(position);
       updateChapterLabel(position);
+      // The markers are appended imperatively into an element the framework
+      // owns, so any re-render of that subtree silently drops them. Rebuilding
+      // when they have gone missing is what keeps them on screen.
+      if (chapterMarkers && chapters.length > 1 && length > 0 && !chapterMarkers.firstChild) {
+        renderChapters();
+      }
       if (duration) duration.textContent = formatTime(length);
       if (!progress || scrubbing) return;
       const played = length > 0 ? Math.min(100, (position / length) * 100) : 0;
@@ -356,7 +362,11 @@
           controls.querySelector("[data-player-caption-toggle]")?.click();
           break;
         case "chapters":
-          controls.querySelector("[data-player-chapters-open]")?.click();
+          (
+            controls.querySelector("[data-player-chapters-open]") ||
+            root.querySelector("[data-player-chapters-open]") ||
+            document.querySelector("[data-player-chapters-open]")
+          )?.click();
           break;
         case "speed":
           cycleQuickSpeed();
@@ -563,8 +573,8 @@
       if (!handled.includes(key)) return;
       event.preventDefault();
       if (key === " " || key === "k") runAction("toggle");
-      else if (key === "j" || key === "arrowleft") seekBy(key === "j" ? -10 : -5);
-      else if (key === "l" || key === "arrowright") seekBy(key === "l" ? 10 : 5);
+      else if (key === "j" || key === "arrowleft") seekBy(-10);
+      else if (key === "l" || key === "arrowright") seekBy(10);
       else if (key === "m") runAction("mute");
       else if (key === "f") runAction("fullscreen");
       else if (key === "c") runAction("captions");

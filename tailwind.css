@@ -2126,7 +2126,7 @@ textarea {
 }
 
 .player-chapter-label {
-  max-width: 12rem;
+  max-width: 7.5rem;
   padding: 0;
   overflow: hidden;
   border: 0;
@@ -2134,6 +2134,10 @@ textarea {
   color: rgba(255, 255, 255, 0.82);
   cursor: pointer;
   font-size: inherit;
+  /* Must never wrap: a second line grows the control row and shoves the
+     buttons below it off the video. */
+  white-space: nowrap;
+  text-overflow: ellipsis;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2669,8 +2673,16 @@ textarea {
 /* Sits after the clock, and truncates rather than pushing the buttons around
    on a long chapter title. */
 .player-chapter-label:not([hidden]) {
+  display: inline-block;
   margin-left: 0.5rem;
-  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+/* The row itself must not wrap either, or the label just moves the break. */
+.player-time {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
   white-space: nowrap;
 }
 
