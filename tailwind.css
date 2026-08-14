@@ -2618,3 +2618,18 @@ textarea {
   margin: 0 0.3rem;
   background: var(--color-card-border);
 }
+
+/* -- Sheet routes: compact chrome only -- */
+
+/* On compact layouts a cover route is a full-screen sheet, so the bottom tab
+   bar steps aside and must not leave a reserved strip behind it. The desktop
+   rail is permanent chrome and stays put. */
+@container g3-app-shell (width < 48rem) {
+  .tawny-shell-cover > .g3-navbar-tab-bar {
+    display: none;
+  }
+
+  .tawny-shell-cover > .g3-body {
+    padding-bottom: 0;
+  }
+}

@@ -1,0 +1,527 @@
+ 12.78s  INFO -----------------------------------------------------------------
+                Serving your app: tawny! 🚀
+                • Press [33m`ctrl+c`[0m to exit the server
+                • Press [33m`r`[0m to rebuild the app
+                • Press [33m`p`[0m to toggle automatic rebuilds
+                • Press [33m`v`[0m to toggle verbose logging
+                • Press [33m`/`[0m for more commands and shortcuts
+                Learn more at [34mhttps://dioxuslabs.com/learn/0.7/getting_started[0m
+               ----------------------------------------------------------------
+ 21.83s  INFO Build completed successfully in [33m21.31s[0m, launching app! 💫
+ 22.93s  INFO  INFO Starting kvs store at relative path rocksdb://C:\Users\Matthew\AppData\Local\Tawny\surrealdb
+ 22.94s  INFO  INFO Background thread count: 24
+ 22.94s  INFO  INFO Maximum background jobs count: 48
+ 22.94s  INFO  INFO Maximum number of open files: 1024
+ 22.94s  INFO  INFO Number of log files to keep: 10
+ 22.94s  INFO  INFO Target file size for compaction: 67108864
+ 22.94s  INFO  INFO Target file size compaction multiplier: 2
+ 22.94s  INFO  INFO Number of files to trigger compaction: 4
+ 22.94s  INFO  INFO Compaction readahead size: 16777216
+ 22.94s  INFO  INFO Maximum concurrent subcompactions: 4
+ 22.94s  INFO  INFO Use separate thread queues: true
+ 22.94s  INFO  INFO Enable separation of keys and values: true
+ 22.94s  INFO  INFO Minimum blob value size: 4096
+ 22.94s  INFO  INFO Target blob file size: 268435456
+ 22.94s  INFO  INFO Enable blob garbage collection: true
+ 22.94s  INFO  INFO Blob GC age cutoff: 0.5
+ 22.94s  INFO  INFO Blob GC force threshold: 0.5
+ 22.94s  INFO  INFO Blob compaction readahead size: 0
+ 22.94s  INFO  INFO Write-ahead-log file size limit: 0MB
+ 22.94s  INFO  INFO Allow concurrent memtable writes: true
+ 22.94s  INFO  INFO Avoid unnecessary blocking IO: true
+ 22.94s  INFO  INFO Allow adaptive write thread yielding: true
+ 22.94s  INFO  INFO Setting delete compaction factory: 1000 / 50 (0.5)
+ 22.94s  INFO  INFO Setting compaction style: level
+ 22.94s  INFO  INFO Setting compression level
+ 22.94s  INFO  INFO Setting storage engine log level: warn
+ 23.25s  INFO  INFO Memory manager: block cache size: 15670208512B
+ 23.25s  INFO  INFO Memory manager: write buffer size: 134217728B
+ 23.25s  INFO  INFO Memory manager: maximum write buffers: 8
+ 23.25s  INFO  INFO Memory manager: minimum write buffers to merge: 2
+ 23.25s  INFO  INFO Memory manager: total memory limit: 16743950336
+ 23.25s  INFO  INFO Disk space manager: disabled
+ 23.25s  INFO  INFO Sync mode: every transaction commit
+ 23.25s  INFO  INFO Grouped commit: enabled (timeout=5000000ns, wait_threshold=12, max_batch_size=4096)
+ 23.37s  INFO  INFO Started rocksdb kvs store
+ 23.78s  INFO DEBUG rustypipe-botguard: using rustypipe-botguard 0.1.2 at rustypipe-botguard
+ 24.66s  INFO  INFO Registering: POST /api/v1/feed/refresh
+ 24.66s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}/media
+ 24.66s  INFO  INFO Registering: GET /api/v1/search/page
+ 24.66s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}
+ 24.66s  INFO  INFO Registering: GET /api/v1/videos/{video_id}
+ 24.66s  INFO  INFO Registering: GET /api/v1/videos/{video_id}/comments
+ 24.66s  INFO  INFO Registering: GET /api/v1/playback/{video_id}
+ 24.66s  INFO  INFO Registering: GET /api/v1/search
+ 24.66s  INFO  INFO Registering: POST /api/v1/library/sync
+ 24.66s  INFO  INFO Registering: GET /api/v1/library
+150.26s  INFO [200] / 
+154.78s  INFO [200] / 
+155.04s  INFO [404] /favicon.ico 
+155.19s  INFO [404] /favicon.ico 
+155.27s  INFO [200] /api/v1/library 
+235.60s  INFO Build completed in [33m15.37s[0m
+ERROR: The process with PID 33468 could not be terminated.
+Reason: This process can only be terminated forcefully (with /F option).
+237.78s  INFO  INFO Starting kvs store at relative path rocksdb://C:\Users\Matthew\AppData\Local\Tawny\surrealdb
+237.78s  INFO  INFO Background thread count: 24
+237.78s  INFO  INFO Maximum background jobs count: 48
+237.78s  INFO  INFO Maximum number of open files: 1024
+237.78s  INFO  INFO Number of log files to keep: 10
+237.78s  INFO  INFO Target file size for compaction: 67108864
+237.78s  INFO  INFO Target file size compaction multiplier: 2
+237.78s  INFO  INFO Number of files to trigger compaction: 4
+237.83s  INFO  INFO Compaction readahead size: 16777216
+237.83s  INFO  INFO Maximum concurrent subcompactions: 4
+237.83s  INFO  INFO Use separate thread queues: true
+237.83s  INFO  INFO Enable separation of keys and values: true
+237.83s  INFO  INFO Minimum blob value size: 4096
+237.83s  INFO  INFO Target blob file size: 268435456
+237.83s  INFO  INFO Enable blob garbage collection: true
+237.83s  INFO  INFO Blob GC age cutoff: 0.5
+237.83s  INFO  INFO Blob GC force threshold: 0.5
+237.83s  INFO  INFO Blob compaction readahead size: 0
+237.83s  INFO  INFO Write-ahead-log file size limit: 0MB
+237.83s  INFO  INFO Allow concurrent memtable writes: true
+237.83s  INFO  INFO Avoid unnecessary blocking IO: true
+237.83s  INFO  INFO Allow adaptive write thread yielding: true
+237.83s  INFO  INFO Setting delete compaction factory: 1000 / 50 (0.5)
+237.83s  INFO  INFO Setting compaction style: level
+237.83s  INFO  INFO Setting compression level
+237.83s  INFO  INFO Setting storage engine log level: warn
+238.21s  INFO  INFO Memory manager: block cache size: 15670208512B
+238.21s  INFO  INFO Memory manager: write buffer size: 134217728B
+238.21s  INFO  INFO Memory manager: maximum write buffers: 8
+238.21s  INFO  INFO Memory manager: minimum write buffers to merge: 2
+238.21s  INFO  INFO Memory manager: total memory limit: 16743950336
+238.21s  INFO  INFO Disk space manager: disabled
+238.21s  INFO  INFO Sync mode: every transaction commit
+238.21s  INFO  INFO Grouped commit: enabled (timeout=5000000ns, wait_threshold=12, max_batch_size=4096)
+238.32s  INFO  INFO Started rocksdb kvs store
+238.76s  INFO DEBUG rustypipe-botguard: using rustypipe-botguard 0.1.2 at rustypipe-botguard
+239.83s  INFO  INFO Registering: POST /api/v1/feed/refresh
+239.83s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}/media
+239.83s  INFO  INFO Registering: GET /api/v1/search/page
+239.83s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}
+239.83s  INFO  INFO Registering: GET /api/v1/videos/{video_id}
+239.83s  INFO  INFO Registering: GET /api/v1/videos/{video_id}/comments
+239.83s  INFO  INFO Registering: GET /api/v1/playback/{video_id}
+239.83s  INFO  INFO Registering: GET /api/v1/search
+239.83s  INFO  INFO Registering: POST /api/v1/library/sync
+239.83s  INFO  INFO Registering: GET /api/v1/library
+239.84s  INFO [200] / 
+239.88s  INFO [404] /favicon.ico 
+240.14s  INFO [404] /favicon.ico 
+240.23s  INFO [200] /api/v1/library 
+266.38s  INFO [200] / 
+270.23s  INFO [200] / 
+270.28s  INFO [404] /favicon.ico 
+270.53s  INFO [404] /favicon.ico 
+270.58s  INFO [200] /api/v1/library 
+305.44s  INFO [200] / 
+305.48s  INFO [404] /favicon.ico 
+305.76s  INFO [404] /favicon.ico 
+305.80s  INFO [200] /api/v1/library 
+315.25s  INFO [404] /favicon.ico 
+326.95s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting channel_videos(UC-tawny-byte)
+326.95s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting YT visitor data
+326.95s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting channel_videos(UC-tawny-byte)
+326.95s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting YT visitor data
+326.95s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting channel_videos(UC-tawny-byte)
+326.95s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting YT visitor data
+326.96s  INFO [404] /favicon.ico 
+327.40s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: visitor data Cgs4R3ZCd2UwV242SSipx_zTBjIKCgJVUxIEGgAgQmLfAgrcAjIwLllUPWZNbURVeWstYlgwTDROT1hrZGlWUjcyYjMtc0NDWHNmX0hDdFlPZ1lpSUhZZ2cxUk8zVm9NNEhlbW5TWi1YMEx6WnlWNnVZUW03Uk9hYWdXRkVkQTVDZlNGU25Oa2tuN09lTUhiQXpxT29wSko3aEdVbmdiQ0N3OERfci1TSHFtd2hCUUNJU2hHNXE3Yk9Vcm5nRkFGSGNBM1ZvOHN2QU9mR001cjZPMUJpVG9WeFY5TU9oU25seGJvaEZ0TlhxTW4tZjJELW56dGk2ZjR1cU45MFBBaFRwQTRsaWZiM050OV9xNWtCWHdtYkJCWVpBSmhVSXRoZDJRb3p6VkpGdnh4YjNwbzZmSmRpMGptZTlUaWxBQXhIYWMwRE5DTzV0NFBVa3R5ZkhPRzJ1WjlIdlZlejRLbVVzRkxVaWhWRDZxZi1XS3NER3FVekJ6cHRIQVRiMkYtUQ%3D%3D added to cache (1 ids)
+327.40s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: visitor data CgtjRW9IeEdkZnlkSSiox_zTBjIKCgJVUxIEGgAgaWLfAgrcAjIxLllUPWg1QWZTdzRqbUF1a1NzOUVvZ0IzRGhWTWoyWTY2MC1DczM4MnRncFhMYWFsbno5ZVZPbXpDVTZmeG1BdHlSNGhVY0xzY0Q5RUNUN0VzUUp5ZEI4dUV1dDJGM3ZkaFlFLWxWZFhWNlNKbHNpdlBwSHcyUTR1OEJxQzg1eWMzWXJqYnRCUllzaDdDQVFKc2JPREZ4WWRmUUFOc0pKRjA4QWxkTU14RlhaTmpSWXlwUkJnUmE3bHQxMlVIcVRXR25LVkZIVEVhWUVBYUZadjZZdW1zYU5SLVhSdDItWm9WaFVuck5kS1dIOXlsMFMwX1ByM05NQ0dmaDg2MTBLNmU3dDJCU0tycmZVY1VXV2lOV0FJNlJneHBnQ3RLYTFfUUN1VGtBZ1hBWU1keDF1RUdOZWFJWnI1OXRSbHFZeDhiT0UyVU93Z2ZuU1BmcFRwdmY4eXFYZV9YUQ%3D%3D added to cache (2 ids)
+327.41s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: visitor data CgtMaWRVSmF6TmJPSSiox_zTBjIKCgJVUxIEGgAgKmLfAgrcAjIxLllUPW05dGt3Um1FYzVTZzByRXRCMU0tdE1UdkZucTh5VkJRWUdBNHhMb3NGZl8yZ0kxYV9YVUVPcWlmOW51dmdHdWFVYU5FUEF0eTgwR3N6YXROcnhaM2Q4bVJvTmVfamFhMGI3czQ0Ti1fTkxhaFNBOFl2QXhYYXZnMFdhVjNJeEdOWlVhdUtNTEZ3NDJEU1o2bmdCdmxXZmJoSkpIWjcwMUYtVHgxUTdXcWtjTXYxcTdOZ2wtYlRRMnUxeFJiYlRKMjBnTFpoYXZ5ZFFEdTI4QW1lODF2SEw3RzljM1pKTXVqcVYtalRUMWdXM2M0R182bWNPY0lSV3B0U08yVVhocXBjbHRQcVVFaWZWVDlBMGJMeXFvUHBaQkZaNVRhQlQ3NjhKb0pZV3BvdjdIRllkemk2TmlQOHdPa3dubEtsa3kyVHdTZzgtcGFscHN6WEQwVnMxV2puUQ%3D%3D added to cache (3 ids)
+327.45s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: fetched 11975 bytes from YT
+327.48s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: fetched 11975 bytes from YT
+327.48s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: fetched 11975 bytes from YT
+327.53s  INFO [200] /api/v1/channels/UC-tawny-byte 
+327.97s  INFO [404] /favicon.ico 
+395.43s  INFO [200] / 
+395.68s  INFO [200] / 
+400.97s  INFO [200] / 
+401.22s  INFO [200] / 
+406.50s  INFO [200] / 
+406.75s  INFO [200] / 
+412.03s  INFO [200] / 
+412.30s  INFO [200] / 
+417.59s  INFO [200] / 
+417.84s  INFO [200] / 
+421.02s  INFO Build completed in [33m15.88s[0m
+ERROR: The process with PID 12204 could not be terminated.
+Reason: This process can only be terminated forcefully (with /F option).
+423.23s  INFO  INFO Starting kvs store at relative path rocksdb://C:\Users\Matthew\AppData\Local\Tawny\surrealdb
+423.23s  INFO  INFO Background thread count: 24
+423.23s  INFO  INFO Maximum background jobs count: 48
+423.23s  INFO  INFO Maximum number of open files: 1024
+423.23s  INFO  INFO Number of log files to keep: 10
+423.23s  INFO  INFO Target file size for compaction: 67108864
+423.23s  INFO  INFO Target file size compaction multiplier: 2
+423.23s  INFO  INFO Number of files to trigger compaction: 4
+423.24s  INFO  INFO Compaction readahead size: 16777216
+423.24s  INFO  INFO Maximum concurrent subcompactions: 4
+423.24s  INFO  INFO Use separate thread queues: true
+423.24s  INFO  INFO Enable separation of keys and values: true
+423.24s  INFO  INFO Minimum blob value size: 4096
+423.24s  INFO  INFO Target blob file size: 268435456
+423.24s  INFO  INFO Enable blob garbage collection: true
+423.24s  INFO  INFO Blob GC age cutoff: 0.5
+423.24s  INFO  INFO Blob GC force threshold: 0.5
+423.24s  INFO  INFO Blob compaction readahead size: 0
+423.24s  INFO  INFO Write-ahead-log file size limit: 0MB
+423.24s  INFO  INFO Allow concurrent memtable writes: true
+423.24s  INFO  INFO Avoid unnecessary blocking IO: true
+423.24s  INFO  INFO Allow adaptive write thread yielding: true
+423.24s  INFO  INFO Setting delete compaction factory: 1000 / 50 (0.5)
+423.24s  INFO  INFO Setting compaction style: level
+423.24s  INFO  INFO Setting compression level
+423.24s  INFO  INFO Setting storage engine log level: warn
+423.54s  INFO  INFO Memory manager: block cache size: 15670208512B
+423.54s  INFO  INFO Memory manager: write buffer size: 134217728B
+423.54s  INFO  INFO Memory manager: maximum write buffers: 8
+423.54s  INFO  INFO Memory manager: minimum write buffers to merge: 2
+423.54s  INFO  INFO Memory manager: total memory limit: 16743950336
+423.54s  INFO  INFO Disk space manager: disabled
+423.54s  INFO  INFO Sync mode: every transaction commit
+423.54s  INFO  INFO Grouped commit: enabled (timeout=5000000ns, wait_threshold=12, max_batch_size=4096)
+423.67s  INFO  INFO Started rocksdb kvs store
+424.11s  INFO DEBUG rustypipe-botguard: using rustypipe-botguard 0.1.2 at rustypipe-botguard
+425.04s  INFO  INFO Registering: POST /api/v1/feed/refresh
+425.04s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}/media
+425.04s  INFO  INFO Registering: GET /api/v1/search/page
+425.04s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}
+425.04s  INFO  INFO Registering: GET /api/v1/videos/{video_id}
+425.04s  INFO  INFO Registering: GET /api/v1/videos/{video_id}/comments
+425.04s  INFO  INFO Registering: GET /api/v1/playback/{video_id}
+425.04s  INFO  INFO Registering: GET /api/v1/search
+425.04s  INFO  INFO Registering: POST /api/v1/library/sync
+425.04s  INFO  INFO Registering: GET /api/v1/library
+425.05s  INFO [200] /subscriptions 
+425.05s  INFO [200] / 
+425.09s  INFO [404] /favicon.ico 
+425.30s  INFO [200] / 
+425.34s  INFO [404] /favicon.ico 
+425.41s  INFO [200] /api/v1/library 
+430.58s  INFO [200] / 
+430.82s  INFO [200] / 
+436.09s  INFO [200] / 
+436.34s  INFO [200] / 
+441.61s  INFO [200] / 
+441.87s  INFO [200] / 
+447.14s  INFO [200] / 
+447.38s  INFO [200] / 
+452.65s  INFO [200] / 
+452.89s  INFO [200] / 
+458.16s  INFO [200] / 
+458.41s  INFO [200] / 
+463.68s  INFO [200] / 
+463.93s  INFO [200] / 
+469.20s  INFO [200] / 
+469.44s  INFO [200] / 
+474.72s  INFO [200] / 
+474.97s  INFO [200] / 
+480.24s  INFO [200] / 
+480.48s  INFO [200] / 
+485.76s  INFO [200] / 
+486.00s  INFO [200] / 
+491.27s  INFO [200] / 
+491.52s  INFO [200] / 
+496.79s  INFO [200] / 
+497.03s  INFO [200] / 
+502.31s  INFO [200] / 
+502.56s  INFO [200] / 
+507.83s  INFO [200] / 
+508.08s  INFO [200] / 
+513.36s  INFO [200] / 
+513.60s  INFO [200] / 
+518.88s  INFO [200] / 
+519.13s  INFO [200] / 
+524.40s  INFO [200] / 
+524.65s  INFO [200] / 
+529.93s  INFO [200] / 
+530.18s  INFO [200] / 
+535.45s  INFO [200] / 
+535.70s  INFO [200] / 
+540.98s  INFO [200] / 
+541.23s  INFO [200] / 
+546.51s  INFO [200] / 
+546.76s  INFO [200] / 
+552.04s  INFO [200] / 
+552.29s  INFO [200] / 
+557.56s  INFO [200] / 
+557.81s  INFO [200] / 
+563.09s  INFO [200] / 
+563.33s  INFO [200] / 
+568.60s  INFO [200] / 
+568.85s  INFO [200] / 
+574.12s  INFO [200] / 
+574.37s  INFO [200] / 
+579.64s  INFO [200] / 
+579.88s  INFO [200] / 
+585.16s  INFO [200] / 
+585.41s  INFO [200] / 
+590.68s  INFO [200] / 
+590.92s  INFO [200] / 
+596.20s  INFO [200] / 
+596.45s  INFO [200] / 
+601.72s  INFO [200] / 
+601.96s  INFO [200] / 
+607.25s  INFO [200] / 
+607.49s  INFO [200] / 
+612.76s  INFO [200] / 
+613.02s  INFO [200] / 
+618.29s  INFO [200] / 
+618.54s  INFO [200] / 
+623.81s  INFO [200] / 
+624.06s  INFO [200] / 
+629.33s  INFO [200] / 
+629.56s  INFO [200] / 
+634.84s  INFO [200] / 
+635.09s  INFO [200] / 
+640.37s  INFO [200] / 
+640.62s  INFO [200] / 
+645.89s  INFO [200] / 
+646.14s  INFO [200] / 
+651.42s  INFO [200] / 
+651.67s  INFO [200] / 
+656.95s  INFO [200] / 
+657.20s  INFO [200] / 
+662.48s  INFO [200] / 
+662.73s  INFO [200] / 
+668.00s  INFO [200] / 
+668.25s  INFO [200] / 
+673.52s  INFO [200] / 
+673.77s  INFO [200] / 
+679.04s  INFO [200] / 
+679.29s  INFO [200] / 
+684.57s  INFO [200] / 
+684.80s  INFO [200] / 
+690.07s  INFO [200] / 
+690.32s  INFO [200] / 
+695.59s  INFO [200] / 
+695.84s  INFO [200] / 
+701.10s  INFO [200] / 
+701.35s  INFO [200] / 
+706.63s  INFO [200] / 
+706.88s  INFO [200] / 
+712.15s  INFO [200] / 
+712.39s  INFO [200] / 
+717.66s  INFO [200] / 
+717.91s  INFO [200] / 
+723.19s  INFO [200] / 
+723.44s  INFO [200] / 
+728.71s  INFO [200] / 
+728.96s  INFO [200] / 
+734.23s  INFO [200] / 
+734.48s  INFO [200] / 
+739.75s  INFO [200] / 
+740.00s  INFO [200] / 
+745.28s  INFO [200] / 
+745.53s  INFO [200] / 
+750.81s  INFO [200] / 
+751.05s  INFO [200] / 
+756.32s  INFO [200] / 
+756.57s  INFO [200] / 
+761.84s  INFO [200] / 
+762.09s  INFO [200] / 
+767.37s  INFO [200] / 
+767.62s  INFO [200] / 
+772.89s  INFO [200] / 
+773.14s  INFO [200] / 
+778.42s  INFO [200] / 
+778.67s  INFO [200] / 
+783.95s  INFO [200] / 
+784.20s  INFO [200] / 
+789.46s  INFO [200] / 
+789.71s  INFO [200] / 
+794.98s  INFO [200] / 
+795.23s  INFO [200] / 
+800.51s  INFO [200] / 
+800.76s  INFO [200] / 
+806.03s  INFO [200] / 
+806.28s  INFO [200] / 
+811.56s  INFO [200] / 
+811.81s  INFO [200] / 
+820.69s  INFO [200] / 
+825.35s  INFO [200] /subscriptions 
+825.53s  INFO [404] /favicon.ico 
+825.67s  INFO [404] /favicon.ico 
+825.71s  INFO [200] /api/v1/library 
+855.34s  INFO [200] / 
+865.61s  INFO [200] / 
+875.89s  INFO [200] / 
+886.16s  INFO [200] / 
+896.43s  INFO [200] / 
+906.71s  INFO [200] / 
+916.98s  INFO [200] / 
+927.25s  INFO [200] / 
+937.52s  INFO [200] / 
+947.78s  INFO [200] / 
+958.06s  INFO [200] / 
+968.34s  INFO [200] / 
+978.61s  INFO [200] / 
+988.89s  INFO [200] / 
+999.16s  INFO [200] / 
+1009.43s  INFO [200] / 
+1019.70s  INFO [200] / 
+1029.96s  INFO [200] / 
+1040.24s  INFO [200] / 
+1050.51s  INFO [200] / 
+1060.79s  INFO [200] / 
+1071.06s  INFO [200] / 
+1081.34s  INFO [200] / 
+1091.61s  INFO [200] / 
+1101.88s  INFO [200] / 
+1112.16s  INFO [200] / 
+1122.43s  INFO [200] / 
+1132.70s  INFO [200] / 
+1142.97s  INFO [200] / 
+1153.24s  INFO [200] / 
+1163.52s  INFO [200] / 
+1173.80s  INFO [200] / 
+1184.08s  INFO [200] / 
+1194.35s  INFO [200] / 
+1204.63s  INFO [200] / 
+1214.90s  INFO [200] / 
+1225.17s  INFO [200] / 
+1235.45s  INFO [200] / 
+1245.72s  INFO [200] / 
+1255.99s  INFO [200] / 
+1266.27s  INFO [200] / 
+1276.54s  INFO [200] / 
+1286.82s  INFO [200] / 
+1297.10s  INFO [200] / 
+1307.37s  INFO [200] / 
+1317.64s  INFO [200] / 
+1327.92s  INFO [200] / 
+1338.20s  INFO [200] / 
+1348.48s  INFO [200] / 
+1358.76s  INFO [200] / 
+1369.03s  INFO [200] / 
+1379.30s  INFO [200] / 
+1389.58s  INFO [200] / 
+1399.85s  INFO [200] / 
+1410.13s  INFO [200] / 
+1420.41s  INFO [200] / 
+1430.69s  INFO [200] / 
+1440.96s  INFO [200] / 
+1451.26s  INFO [200] / 
+1461.54s  INFO [200] / 
+1466.91s  INFO [200] /subscriptions 
+1467.12s  INFO [404] /favicon.ico 
+1467.25s  INFO [404] /favicon.ico 
+1467.29s  INFO [200] /api/v1/library 
+1471.80s  INFO [200] / 
+1475.51s  INFO [404] /favicon.ico 
+1475.51s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting channel_videos(UC-tawny-byte)
+1475.51s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting YT visitor data
+1475.51s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting channel_videos(UC-tawny-byte)
+1475.51s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting YT visitor data
+1475.51s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting channel_videos(UC-tawny-byte)
+1475.51s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting YT visitor data
+1475.91s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: visitor data CgtHZmVXYnFfeEc2OCil0PzTBjIKCgJVUxIEGgAgSGLfAgrcAjIwLllUPVlKSW5GTDYwUlh2dUJBN3pab01acTM5N0pkWU9FVGR4ZFhmdVJMd1Z5cDVfMURqdHRoVDlBWDlyWElEX0ktalFNUmxRWk9iZ1gwVGpzd09FMjBJb01UeWZSdFA1LWRWYXFJaWxyMFFLUTRKSFVoeDJsczlyRjNGRDZzeGdXMUktY3dha0VaOTFnRkFTTi1VWlJNeWNMLUtLVzItYklTeHBmNnRQQlFnOElrMUQ5SHhVeUxsZy0zRF9PWXg0RHdQY2JOVkVxYTRmQk1NMTZVYm5qQUVoTFoyQm93VHFIcGNLTUNkNnViVzNVakVDSHZTWHVRQ253a2VvWVZhcFJ0elVfekNZd2NUdkpmbEJyVUptR3JKRlc3VzBfbzVzekZHVXptS3FrOEZjeGRZNHZmcDJCUUtUWFdoUEpkMWpTMFlORHJEc21ycGFKUmthZFdta2RtYXI2QQ%3D%3D added to cache (1 ids)
+1475.96s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: fetched 11975 bytes from YT
+1475.97s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: visitor data CgtEVW9QQmRhbXN3VSil0PzTBjIKCgJVUxIEGgAgXWLfAgrcAjIwLllUPUQwbmpWOXkyeHhqa2dLa1d4eGRmNlFJdGdBOUhXY2FSM2xmZ1BqUXBsYjY3bHJjWDBtSjdoUmVmWlBzQW9DSExseUN1ZmRqZTFyQzZjT1NieW1fNEV3UkZ2a3lFT3ZaeHBWTlFlRUZoejFWNHQ3SnpEN0hmM3BGT0xHbHpwY2VRSzVwUWc3Ynp4RUNmc0VEcmJlZlNyLWxFQ3BlZ04zMnUteUE1TkRlNG14SXI0Y21iWjRtN2ZRdUFrbTlBOVJSZ2t2Qk5jRl9mMTVyTnkwUUVyU054U0JjempzY1M3UEQ1NTNkQjNXWUVEaWt6Nk5zT0VheHpZclUwTjdxRTJxRmlRN2Fma011UnZWWkk1cFV4U0pBbnBzY0dIb05rV1BJUWdzRDhISms3c3VGMEpreXJCMm1kT0JQQ1g0Rkc1dWVsX3MwTjVRTTdCUXg5eWpndDF0eko2QQ%3D%3D added to cache (2 ids)
+1476.00s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: visitor data CgtXNnJyTWRJak9KSSil0PzTBjIKCgJVUxIEGgAgIWLfAgrcAjIwLllUPU9qYU9KNzdoYWN0ZEtfVzZWVGlTdHNKM19qaG5JNWNRNXJLNHJxWXRiTkxZNXRkU0tSNzBrMzI5ZVdGMkdJRjliTndDSkt1V096TTRIMlhmeTJUWmNsWjMzbmtXU0dxV3NUdWlqcmdrdWlBUmZGMmlpWjdpeFNVRGpOODlVVTJOYmp0eFFVcThfcFY0bUVNdHBXWEVOcTB6V1FUeUxpZl9TWTNtOEFPUjdraVgwdEduMndkbFdUTmRPbkNXU0VwMjZMRTBNLXZQWlBxU1hCMUdXNVNDS1pzdHZ4MUptZlE1RDdFQmhEX3A3LXFmdVNSUGxYRi1yNXJHUmQxT0NwSGIySEtNMXRIS29jOHBKLUoyNXYtb3RJSlZJb0pJaEZ2UFNwcjhJa2dDcTVLbkVRMG1DenFTLVVTVFBrMktHTXl0MmhPazZZbGx5ajZ6VG05aFZVOU5pdw%3D%3D added to cache (3 ids)
+1476.04s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: fetched 11975 bytes from YT
+1476.12s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: fetched 11975 bytes from YT
+1476.16s  INFO [200] /api/v1/channels/UC-tawny-byte 
+1477.02s  INFO [404] /favicon.ico 
+1482.08s  INFO [200] / 
+1492.34s  INFO [200] / 
+1502.62s  INFO [200] / 
+1512.90s  INFO [200] / 
+1519.63s  INFO Build completed in [33m19.50s[0m
+ERROR: The process with PID 5744 could not be terminated.
+Reason: This process can only be terminated forcefully (with /F option).
+1521.85s  INFO Hotreloading: [32m\src\components\shell.rs[0m 
+1521.85s  INFO  INFO Starting kvs store at relative path rocksdb://C:\Users\Matthew\AppData\Local\Tawny\surrealdb
+1521.85s  INFO  INFO Background thread count: 24
+1521.85s  INFO  INFO Maximum background jobs count: 48
+1521.85s  INFO  INFO Maximum number of open files: 1024
+1521.85s  INFO  INFO Number of log files to keep: 10
+1521.85s  INFO  INFO Target file size for compaction: 67108864
+1521.85s  INFO  INFO Target file size compaction multiplier: 2
+1521.85s  INFO  INFO Number of files to trigger compaction: 4
+1521.85s  INFO  INFO Compaction readahead size: 16777216
+1521.85s  INFO  INFO Maximum concurrent subcompactions: 4
+1521.85s  INFO  INFO Use separate thread queues: true
+1521.85s  INFO  INFO Enable separation of keys and values: true
+1521.85s  INFO  INFO Minimum blob value size: 4096
+1521.85s  INFO  INFO Target blob file size: 268435456
+1521.85s  INFO  INFO Enable blob garbage collection: true
+1521.85s  INFO  INFO Blob GC age cutoff: 0.5
+1521.85s  INFO  INFO Blob GC force threshold: 0.5
+1521.85s  INFO  INFO Blob compaction readahead size: 0
+1521.85s  INFO  INFO Write-ahead-log file size limit: 0MB
+1521.85s  INFO  INFO Allow concurrent memtable writes: true
+1521.85s  INFO  INFO Avoid unnecessary blocking IO: true
+1521.85s  INFO  INFO Allow adaptive write thread yielding: true
+1521.85s  INFO  INFO Setting delete compaction factory: 1000 / 50 (0.5)
+1521.85s  INFO  INFO Setting compaction style: level
+1521.85s  INFO  INFO Setting compression level
+1521.85s  INFO  INFO Setting storage engine log level: warn
+1522.19s  INFO  INFO Memory manager: block cache size: 15670208512B
+1522.19s  INFO  INFO Memory manager: write buffer size: 134217728B
+1522.19s  INFO  INFO Memory manager: maximum write buffers: 8
+1522.19s  INFO  INFO Memory manager: minimum write buffers to merge: 2
+1522.19s  INFO  INFO Memory manager: total memory limit: 16743950336
+1522.19s  INFO  INFO Disk space manager: disabled
+1522.19s  INFO  INFO Sync mode: every transaction commit
+1522.19s  INFO  INFO Grouped commit: enabled (timeout=5000000ns, wait_threshold=12, max_batch_size=4096)
+1522.30s  INFO  INFO Started rocksdb kvs store
+1522.72s  INFO DEBUG rustypipe-botguard: using rustypipe-botguard 0.1.2 at rustypipe-botguard
+1523.62s  INFO  INFO Registering: POST /api/v1/feed/refresh
+1523.62s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}/media
+1523.62s  INFO  INFO Registering: GET /api/v1/search/page
+1523.62s  INFO  INFO Registering: GET /api/v1/channels/{channel_id}
+1523.62s  INFO  INFO Registering: GET /api/v1/videos/{video_id}
+1523.62s  INFO  INFO Registering: GET /api/v1/videos/{video_id}/comments
+1523.62s  INFO  INFO Registering: GET /api/v1/playback/{video_id}
+1523.62s  INFO  INFO Registering: GET /api/v1/search
+1523.62s  INFO  INFO Registering: POST /api/v1/library/sync
+1523.62s  INFO  INFO Registering: GET /api/v1/library
+1523.63s  INFO [200] /subscriptions 
+1523.63s  INFO [200] / 
+1523.65s  INFO [404] /favicon.ico 
+1523.93s  INFO [404] /favicon.ico 
+1524.00s  INFO [200] /api/v1/library 
+1533.91s  INFO [200] / 
+1544.19s  INFO [200] / 
+1554.47s  INFO [200] / 
+1564.77s  INFO [200] / 
+1575.04s  INFO [200] / 
+1585.32s  INFO [200] / 
+1585.57s  INFO [200] /subscriptions 
+1585.61s  INFO [404] /favicon.ico 
+1585.87s  INFO [404] /favicon.ico 
+1585.91s  INFO [200] /api/v1/library 
+1594.12s  INFO [404] /favicon.ico 
+1594.13s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting channel_videos(UC-tawny-byte)
+1594.13s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting YT visitor data
+1594.13s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting channel_videos(UC-tawny-byte)
+1594.13s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting YT visitor data
+1594.13s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting channel_videos(UC-tawny-byte)
+1594.13s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting YT visitor data
+1594.57s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: visitor data CgsxdVl2SU1VOGVzdyic0fzTBjIKCgJVUxIEGgAgVmLfAgrcAjIwLllUPXJBOS1LU085THFaeFZ3cEszWnZzbHpHNGF1WjhrYVZPMVFJdjJ1SlhWdjdsZmZTQTVSNzAxT3FaNlhna3Zray0xNmltUU9Td2pUbUc0ZkFaaEdnSm84SjlrUmFPaGlqbTEzTEFaZ2YxNWtkRDdScWFJdVNmN1FwQUVQZ2w2VUhUWmVlRjhSMWFselI4SlJxUVhWX1dsVFk5M1dLbHpPY3hzX0ZyM21oNjhxbktYUExLdDVGOFlyNjJRMC0zamJDRTF1TUcwN212bVlYY1Q2UlJCd25vUndmZHIwbnB1SVNwUnlmNzFYNUJzSUlvemJsQ3RhVE5ZS2pNcWVjNGp3LVVBcmdjRmJOcERzRE40MmdEODlkQ3NLTHJZSmtmUFJvWEE3c1ozOW1XYnNmTTVqNEdfQWphUTlVb1NVUTVkZUNTZnQ3NW9ROXNVeExkZzZqV3lKQ1V2UQ%3D%3D added to cache (1 ids)
+1594.61s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: visitor data CgtuQ0owRHg4UmhKSSic0fzTBjIKCgJVUxIEGgAgYGLfAgrcAjIwLllUPUUxcjh0MFlSa0hjYmlROGMzZEY5YW1HN0dRcWlVNTE0U00xWXRFZmh3UDZLdjJpXzZDcUQtcHdKWnhsSzhsT0wweE1ycWRSbEZIV2Q4U2hISzBxLU9PRVV0dXdaUFo4MHJZM00xUmpmV2ZDOTlzMk00bFBmQndXYXZvaVoyYlc1VG1abnc2Y000RHNqQi1zSlF2dDlsZkpEZ29WM0UzUWpwaU16WXhQaUF1RHA5ZWM4RWxaQ2tMZkdrTk9Fb3d6a3hxczRfa3N2TXB0QjdESnJ0a3M3OW0zMzF2U2M4ZnZrVjIwRjdUSzhKbGpWUUlEalZFM1B2NzFzZUIwUjhuUk9tY29MY1gycHFPaUxHcXluOW5nbEJuY0dxWFRKZDhjbXBQS1M5aU5Ka0szWUhudzd1ODZtZFctekxKUGxxSEVfRWJwMDhlRmc3UnMyc0RrU2pHRmFvdw%3D%3D added to cache (2 ids)
+1594.62s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: fetched 11975 bytes from YT
+1594.64s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: visitor data CgtkbGJubUlvc1hQVSic0fzTBjIKCgJVUxIEGgAgLWLfAgrcAjIwLllUPVVQNTNqbmxQdDZZbzg0cFpNVFQyaGtjdE5FMXZtbjNPaVlDajRFbWZ5ZWtlYWFDa0tUYlhiZTVfOEtid19sZ05uY0cybzQ5bXV1SHlpbGwzLXZkZV9Jb1JNLWZVU09HUUE3QWpvRFBrcmpibWg4dGMtLVkyaU1udWVSdTZIVGVzWHpkeFg4S0tjd0pUQ09tZi1Wenk3bERsNEpTeDlpWFRhLUFySlk3SGhMUUN0bW5PeU9rYTQwd1pNd0h5MkdzNjJTMXNqRE1wamJobGp3WVBUdzYxZ1FlMk85Wm5zNUctQlFSV2R5MWFUMXN6LU9tdnJNTE42ZENxamhuSmNkbVdtc1lJQlQ1YTE0c0hpTHp4TTg4MTVkaklYaG9QTHRNYW1qRkxmVHJVSjh6eW9jRlhxQjhnd01jR2pPVGIxUDNIRjI2ckZjTUNyMGd3cmxJY2g1NW12UQ%3D%3D added to cache (3 ids)
+1594.66s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: fetched 11975 bytes from YT
+1594.70s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: fetched 11975 bytes from YT
+1594.74s  INFO [200] /api/v1/channels/UC-tawny-byte 
+1595.54s  INFO [404] /favicon.ico 
+1595.60s  INFO [200] / 
+1605.87s  INFO [200] / 
+1606.35s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: getting channel_videos(UC-tawny-byte)
+1606.35s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: visitor data CgtuQ0owRHg4UmhKSSic0fzTBjIKCgJVUxIEGgAgYGLfAgrcAjIwLllUPUUxcjh0MFlSa0hjYmlROGMzZEY5YW1HN0dRcWlVNTE0U00xWXRFZmh3UDZLdjJpXzZDcUQtcHdKWnhsSzhsT0wweE1ycWRSbEZIV2Q4U2hISzBxLU9PRVV0dXdaUFo4MHJZM00xUmpmV2ZDOTlzMk00bFBmQndXYXZvaVoyYlc1VG1abnc2Y000RHNqQi1zSlF2dDlsZkpEZ29WM0UzUWpwaU16WXhQaUF1RHA5ZWM4RWxaQ2tMZkdrTk9Fb3d6a3hxczRfa3N2TXB0QjdESnJ0a3M3OW0zMzF2U2M4ZnZrVjIwRjdUSzhKbGpWUUlEalZFM1B2NzFzZUIwUjhuUk9tY29MY1gycHFPaUxHcXluOW5nbEJuY0dxWFRKZDhjbXBQS1M5aU5Ka0szWUhudzd1ODZtZFctekxKUGxxSEVfRWJwMDhlRmc3UnMyc0RrU2pHRmFvdw%3D%3D picked from cache
+1606.35s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: getting channel_videos(UC-tawny-byte)
+1606.35s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: visitor data CgsxdVl2SU1VOGVzdyic0fzTBjIKCgJVUxIEGgAgVmLfAgrcAjIwLllUPXJBOS1LU085THFaeFZ3cEszWnZzbHpHNGF1WjhrYVZPMVFJdjJ1SlhWdjdsZmZTQTVSNzAxT3FaNlhna3Zray0xNmltUU9Td2pUbUc0ZkFaaEdnSm84SjlrUmFPaGlqbTEzTEFaZ2YxNWtkRDdScWFJdVNmN1FwQUVQZ2w2VUhUWmVlRjhSMWFselI4SlJxUVhWX1dsVFk5M1dLbHpPY3hzX0ZyM21oNjhxbktYUExLdDVGOFlyNjJRMC0zamJDRTF1TUcwN212bVlYY1Q2UlJCd25vUndmZHIwbnB1SVNwUnlmNzFYNUJzSUlvemJsQ3RhVE5ZS2pNcWVjNGp3LVVBcmdjRmJOcERzRE40MmdEODlkQ3NLTHJZSmtmUFJvWEE3c1ozOW1XYnNmTTVqNEdfQWphUTlVb1NVUTVkZUNTZnQ3NW9ROXNVeExkZzZqV3lKQ1V2UQ%3D%3D picked from cache
+1606.35s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: getting channel_videos(UC-tawny-byte)
+1606.35s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: visitor data CgtkbGJubUlvc1hQVSic0fzTBjIKCgJVUxIEGgAgLWLfAgrcAjIwLllUPVVQNTNqbmxQdDZZbzg0cFpNVFQyaGtjdE5FMXZtbjNPaVlDajRFbWZ5ZWtlYWFDa0tUYlhiZTVfOEtid19sZ05uY0cybzQ5bXV1SHlpbGwzLXZkZV9Jb1JNLWZVU09HUUE3QWpvRFBrcmpibWg4dGMtLVkyaU1udWVSdTZIVGVzWHpkeFg4S0tjd0pUQ09tZi1Wenk3bERsNEpTeDlpWFRhLUFySlk3SGhMUUN0bW5PeU9rYTQwd1pNd0h5MkdzNjJTMXNqRE1wamJobGp3WVBUdzYxZ1FlMk85Wm5zNUctQlFSV2R5MWFUMXN6LU9tdnJNTE42ZENxamhuSmNkbVdtc1lJQlQ1YTE0c0hpTHp4TTg4MTVkaklYaG9QTHRNYW1qRkxmVHJVSjh6eW9jRlhxQjhnd01jR2pPVGIxUDNIRjI2ckZjTUNyMGd3cmxJY2g1NW12UQ%3D%3D picked from cache
+1606.35s  INFO [404] /favicon.ico 
+1606.39s  INFO DEBUG channel_videos{channel_id="UC-tawny-byte"}: fetched 11975 bytes from YT
+1606.40s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Shorts}: fetched 11975 bytes from YT
+1606.44s  INFO DEBUG channel_videos_tab{channel_id="UC-tawny-byte" tab=Live}: fetched 11975 bytes from YT
+1606.56s  INFO [200] /api/v1/channels/UC-tawny-byte 
+1616.15s  INFO [200] / 

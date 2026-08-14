@@ -76,8 +76,13 @@ pub fn AppShell() -> Element {
     let is_detail = detail.is_some();
     let title = detail.unwrap_or_default();
     // Cover routes are sheets over a nav destination: the tab bar belongs to
-    // the destination underneath, not to the sheet.
-    let is_cover = is_detail || player_expanded;
+    // the destination underneath, not to the sheet. Mirrors the
+    // `#[transition(cover)]` set rather than inferring from a title, which is
+    // absent until the channel or playlist has loaded.
+    let is_cover = !matches!(
+        route,
+        Route::Feed {} | Route::Subscriptions {} | Route::Playlists {} | Route::Explore {}
+    );
     let back_route = route.clone();
 
     // Only the two browsing surfaces carry a segmented control.
@@ -129,7 +134,7 @@ pub fn AppShell() -> Element {
     };
 
     rsx! {
-        Navbar { class: if player_expanded { "tawny-shell tawny-shell-immersive" } else { "tawny-shell" },
+        Navbar { class: if is_cover { "tawny-shell tawny-shell-cover" } else { "tawny-shell" },
             // No top bar on the player: minimize, back, and swipe-down all
             // leave the screen, so a bar would only steal height from the video.
             if !player_expanded {
@@ -169,10 +174,10 @@ pub fn AppShell() -> Element {
                 PersistentPlayer { expanded: player_expanded }
                 Outlet::<Route> {}
             }
-            // The player owns the whole screen; its own controls and gestures
-            // are the way out, so the tab bar steps aside there.
-            if !is_cover {
-                NavbarTabBar { aria_label: "Primary navigation".to_string(),
+            // Always rendered: the desktop rail is permanent chrome, and only
+            // the compact bottom bar gets out of a sheet's way. Hiding it in
+            // CSS keeps that a layout decision rather than a routing one.
+            NavbarTabBar { aria_label: "Primary navigation".to_string(),
                     NavbarTab {
                         label: "Feed".to_string(),
                         selected: matches!(route, Route::Feed {}),
@@ -197,7 +202,6 @@ pub fn AppShell() -> Element {
                         icon: rsx! { Users { size: 20 } },
                         onclick: move |_| { spawn(async move { animated_navigate(Route::Subscriptions {}).await; }); },
                     }
-                }
             }
         }
     }

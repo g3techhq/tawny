@@ -1,0 +1,58 @@
+[33mwarning[0m: Waiting for cargo-metadata...
+ 14.74s  INFO -----------------------------------------------------------------
+                Serving your app: tawny! 🚀
+                • Press [33m`ctrl+c`[0m to exit the server
+                • Press [33m`r`[0m to rebuild the app
+                • Press [33m`p`[0m to toggle automatic rebuilds
+                • Press [33m`v`[0m to toggle verbose logging
+                • Press [33m`/`[0m for more commands and shortcuts
+                Learn more at [34mhttps://dioxuslabs.com/learn/0.7/getting_started[0m
+               ----------------------------------------------------------------
+ 25.35s  INFO Build completed successfully in [33m22.94s[0m, launching app! 💫
+ 26.47s  INFO  INFO Starting kvs store at relative path rocksdb://C:\Users\Matthew\AppData\Local\Tawny\surrealdb
+ 26.47s  INFO  INFO Background thread count: 24
+ 26.47s  INFO  INFO Maximum background jobs count: 48
+ 26.47s  INFO  INFO Maximum number of open files: 1024
+ 26.47s  INFO  INFO Number of log files to keep: 10
+ 26.47s  INFO  INFO Target file size for compaction: 67108864
+ 26.47s  INFO  INFO Target file size compaction multiplier: 2
+ 26.47s  INFO  INFO Number of files to trigger compaction: 4
+ 26.49s  INFO  INFO Compaction readahead size: 16777216
+ 26.49s  INFO  INFO Maximum concurrent subcompactions: 4
+ 26.49s  INFO  INFO Use separate thread queues: true
+ 26.49s  INFO  INFO Enable separation of keys and values: true
+ 26.49s  INFO  INFO Minimum blob value size: 4096
+ 26.49s  INFO  INFO Target blob file size: 268435456
+ 26.49s  INFO  INFO Enable blob garbage collection: true
+ 26.49s  INFO  INFO Blob GC age cutoff: 0.5
+ 26.49s  INFO  INFO Blob GC force threshold: 0.5
+ 26.49s  INFO  INFO Blob compaction readahead size: 0
+ 26.49s  INFO  INFO Write-ahead-log file size limit: 0MB
+ 26.49s  INFO  INFO Allow concurrent memtable writes: true
+ 26.49s  INFO  INFO Avoid unnecessary blocking IO: true
+ 26.49s  INFO  INFO Allow adaptive write thread yielding: true
+ 26.49s  INFO  INFO Setting delete compaction factory: 1000 / 50 (0.5)
+ 26.49s  INFO  INFO Setting compaction style: level
+ 26.49s  INFO  INFO Setting compression level
+ 26.49s  INFO  INFO Setting storage engine log level: warn
+ 26.83s  INFO  INFO Memory manager: block cache size: 15670208512B
+ 26.83s  INFO  INFO Memory manager: write buffer size: 134217728B
+ 26.83s  INFO  INFO Memory manager: maximum write buffers: 8
+ 26.83s  INFO  INFO Memory manager: minimum write buffers to merge: 2
+ 26.83s  INFO  INFO Memory manager: total memory limit: 16743950336
+ 26.83s  INFO  INFO Disk space manager: disabled
+ 26.83s  INFO  INFO Sync mode: every transaction commit
+ 26.83s  INFO  INFO Grouped commit: enabled (timeout=5000000ns, wait_threshold=12, max_batch_size=4096)
+ 26.85s ERROR 
+ 26.85s ERROR thread 'main' (15840) panicked at src\main.rs:23:14:
+ 26.85s ERROR initialize Tawny server: connect to SurrealDB
+ 26.85s ERROR 
+ 26.85s ERROR Caused by:
+ 26.85s ERROR     There was a problem with a transaction: IO error: Failed to create lock file: C:\Users\Matthew\AppData\Local\Tawny\surrealdb/LOCK: The process cannot access the file because it is being used by another process.
+ 26.85s ERROR     
+ 26.85s ERROR note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ 26.85s ERROR [500] /.well-known/appspecific/com.chrome.devtools.json 
+ 26.85s ERROR Application [server] exited with error: exit code: 101
+ 59.56s ERROR [500] /watch/_1G8nrmBKeY 
+ 59.59s ERROR [500] /subscriptions 
+ 91.25s ERROR [500] /.well-known/appspecific/com.chrome.devtools.json 

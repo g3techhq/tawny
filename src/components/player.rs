@@ -196,7 +196,6 @@ fn attach_player_session(
 #[component]
 pub fn PersistentPlayer(expanded: bool) -> Element {
     let app_state = use_context::<AppState>();
-    let navigator = use_navigator();
     let mut playback_attempt = use_signal(|| 0_u8);
     // The privacy-enhanced iframe is a manual escape hatch, never an automatic
     // one. Silently swapping to it hides extraction regressions behind a player
@@ -313,8 +312,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let mut captions_enabled = app_state.captions_enabled;
     let captions_for_toggle = app_state.active_captions;
     let caption_tracks_to_render = (app_state.active_captions)();
-    let minimize_navigator = navigator.clone();
-    let minimize_swipe_navigator = navigator.clone();
     let mut chapters_sheet = app_state.chapters_sheet_open;
     let open_video_id = video.id.clone();
     let player_key = format!("{}-{}", video.id, playback_attempt());
@@ -389,7 +386,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 class: "player-control-button player-minimize-button",
                                 aria_label: "Minimize player",
                                 title: "Minimize player",
-                                onclick: move |_| { minimize_navigator.push(Route::Feed {}); },
+                                onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
                                 Minimize2 { size: 23 }
                             }
                             strong { class: "player-overlay-title", "{video.title}" }
@@ -510,7 +507,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     tabindex: "-1",
                                     aria_hidden: "true",
                                     "data-player-minimize": "",
-                                    onclick: move |_| { minimize_swipe_navigator.push(Route::Feed {}); },
+                                    onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
                                 }
                                 button {
                                     r#type: "button",

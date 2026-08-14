@@ -7,7 +7,9 @@ use crate::{
     state::{AppState, AppStateProvider},
 };
 use dioxus::prelude::*;
-use dx_route_transitions::{RouteTransitionRoot, route_transitions};
+use dx_route_transitions::{
+    Platform, ROUTE_TRANSITIONS_CSS, RouteTransitionProvider, route_transitions, set_platform,
+};
 use g3_ui::{AppWrapper, Theme};
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -83,6 +85,9 @@ fn tawny_theme(appearance: Appearance) -> Theme {
 pub fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        // Without this the browser falls back to its own root cross-fade: no
+        // cover keyframes, no base snapshot, and a transparent page behind it.
+        document::Link { rel: "stylesheet", href: ROUTE_TRANSITIONS_CSS }
         document::Script { src: SHAKA_PLAYER_JS }
         document::Script { src: TAWNY_TRANSPORT_JS }
         document::Script { src: TAWNY_PLAYER_CONTROLS_JS }
@@ -96,6 +101,12 @@ pub fn App() -> Element {
 fn ThemedApp() -> Element {
     let app_state = use_context::<AppState>();
     let appearance = app_state.settings().appearance;
+
+    // Material's Fade is a "fade through": the old page shrinks away, then the
+    // new one grows in — the zoom-out/zoom-in that made tab switches feel
+    // wrong. iOS Fade is a plain cross-dissolve, which is what a tab change
+    // should look like.
+    use_hook(|| set_platform(Platform::Ios));
 
     // View-transition snapshots are painted on the document element, outside
     // the wrapper that carries the theme variables, so the stylesheet's
@@ -120,7 +131,11 @@ fn ThemedApp() -> Element {
             key: "{appearance:?}",
             theme: tawny_theme(appearance),
             disable_text_selection: true,
-            RouteTransitionRoot {
+            // Provider only, never RouteTransitionRoot: AppWrapper already
+            // carries the cover marker, and two elements claiming
+            // `view-transition-name: cover` make the browser skip the
+            // transition outright — it ran for one frame, then snapped.
+            RouteTransitionProvider {
                 Router::<Route> {}
             }
             AppOverlays {}
