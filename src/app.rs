@@ -16,9 +16,12 @@ const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 const SHAKA_PLAYER_JS: Asset = asset!("/node_modules/shaka-player/dist/shaka-player.compiled.js");
 const TAWNY_TRANSPORT_JS: Asset = asset!("/assets/tawny_transport.js");
 const TAWNY_PLAYER_CONTROLS_JS: Asset = asset!("/assets/tawny_player_controls.js");
+const TAWNY_ROUTE_HISTORY_JS: Asset = asset!("/assets/tawny_route_history.js");
 
-/// The four nav destinations are `base` peers; everything reached *from* them
-/// is a `cover` sheet that animates up and back down.
+/// Every route is a `base` peer that cross-fades, except the watch page: it is
+/// the one true sheet, covering the shell on the way in and uncovering it on
+/// the way out. Playlists, channels and settings keep the nav in place, so
+/// sliding a sheet over it would only misrepresent where the user is.
 #[route_transitions]
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -36,22 +39,22 @@ pub enum Route {
         #[transition(base)]
         #[route("/explore")]
         Explore {},
-        #[transition(cover)]
+        #[transition(base)]
         #[route("/queue")]
         QueuePage {},
-        #[transition(cover)]
+        #[transition(base)]
         #[route("/history")]
         HistoryPage {},
         #[transition(cover)]
         #[route("/watch/:id")]
         VideoDetail { id: String },
-        #[transition(cover)]
+        #[transition(base)]
         #[route("/playlists/:id")]
         PlaylistDetail { id: String },
-        #[transition(cover)]
+        #[transition(base)]
         #[route("/settings")]
         SettingsPage {},
-        #[transition(cover)]
+        #[transition(base)]
         #[route("/channel/:id")]
         ChannelDetail { id: String },
 }
@@ -91,6 +94,8 @@ pub fn App() -> Element {
         document::Script { src: SHAKA_PLAYER_JS }
         document::Script { src: TAWNY_TRANSPORT_JS }
         document::Script { src: TAWNY_PLAYER_CONTROLS_JS }
+        // Must load before the router so its popstate listener registers first.
+        document::Script { src: TAWNY_ROUTE_HISTORY_JS }
         AppStateProvider {
             ThemedApp {}
         }

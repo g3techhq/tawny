@@ -75,14 +75,11 @@ pub fn AppShell() -> Element {
     let detail = detail_title(&route, app_state);
     let is_detail = detail.is_some();
     let title = detail.unwrap_or_default();
-    // Cover routes are sheets over a nav destination: the tab bar belongs to
-    // the destination underneath, not to the sheet. Mirrors the
-    // `#[transition(cover)]` set rather than inferring from a title, which is
-    // absent until the channel or playlist has loaded.
-    let is_cover = !matches!(
-        route,
-        Route::Feed {} | Route::Subscriptions {} | Route::Playlists {} | Route::Explore {}
-    );
+    // The watch page is the only sheet, so it is the only route that gives up
+    // the tab bar — and only on compact layouts, where the bar is the bottom
+    // strip the sheet slides over. Playlists, channels and settings are peers
+    // that keep the nav exactly where it is.
+    let is_cover = player_expanded;
     let back_route = route.clone();
 
     // Only the two browsing surfaces carry a segmented control.
