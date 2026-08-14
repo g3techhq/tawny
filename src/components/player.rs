@@ -1154,22 +1154,18 @@ fn VideoDetailInner(id: String) -> Element {
 
 #[component]
 fn CaptionPicker(tracks: Vec<CaptionTrack>, mut selected: Signal<Option<usize>>) -> Element {
+    // Chips only. The sheet's own label already names this, and the section
+    // heading it used to carry repeated that under a second title.
     rsx! {
-        section { class: "detail-section caption-panel",
-            div { class: "subsection-heading",
-                h3 { Captions { size: 18 } "Captions" }
-                span { "Choose the track here; toggle it in the player" }
-            }
-            div { class: "caption-strip",
-                for (index, track) in tracks.into_iter().enumerate() {
-                    button {
-                        class: if selected() == Some(index) { "caption-chip active" } else { "caption-chip" },
-                        onclick: move |_| {
-                            selected.set(Some(index));
-                        },
-                        "{track.label}"
-                        if track.auto_generated { small { "Auto" } }
-                    }
+        div { class: "caption-strip",
+            for (index, track) in tracks.into_iter().enumerate() {
+                button {
+                    class: if selected() == Some(index) { "caption-chip active" } else { "caption-chip" },
+                    onclick: move |_| {
+                        selected.set(Some(index));
+                    },
+                    "{track.label}"
+                    if track.auto_generated { small { "Auto" } }
                 }
             }
         }

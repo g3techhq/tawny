@@ -2194,15 +2194,23 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
-/* Opens to a fixed share of the screen rather than hugging its content, so a
-   short thread does not open as a thin strip at the bottom. */
-.comments-sheet {
+/* The sheet's own height is set by its content area, which g3_ui caps at
+   min(50dvh, 26rem) - raising the panel alone just left dead space below the
+   list. These raise the cap and let the list take whatever is left. */
+/* Doubled up on the sheet root because g3_ui's stylesheet loads after this
+   one: at equal specificity its cap would win. */
+.g3-sheet-bottom.player-sheet .g3-sheet-content {
+  max-height: 74dvh;
+}
+
+.g3-sheet-bottom.comments-sheet .g3-sheet-content {
   min-height: 70dvh;
-  max-height: 88dvh;
+  max-height: 82dvh;
 }
 
 .comments-sheet .comment-list {
-  max-height: 78dvh;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -2652,7 +2660,9 @@ textarea {
 
 /* The list is the sheet, so it gets the height the heading was using. */
 .player-sheet .chapter-sheet-list {
-  max-height: 68dvh;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
   overscroll-behavior: contain;
 }
 
@@ -2666,4 +2676,37 @@ textarea {
 
 .player-chapter-label:hover {
   color: #fff;
+}
+
+/* -- The player rides with the sheet -- */
+
+/* The persistent player lives in the shell so it survives route changes, which
+   put it in the base snapshot: the sheet slid up empty and the video appeared
+   afterwards. Naming it during cover transitions captures it as its own group
+   and moves it on exactly the sheet's curve, so the two read as one surface. */
+html[data-route-transition="cover-up"] .persistent-player-stage,
+html[data-route-transition="uncover-down"] .persistent-player-stage {
+  view-transition-name: player;
+  contain: layout paint;
+}
+
+html[data-route-transition="cover-up"]::view-transition-group(player),
+html[data-route-transition="uncover-down"]::view-transition-group(player) {
+  z-index: 10000;
+}
+
+html[data-route-transition="cover-up"]::view-transition-old(player),
+html[data-route-transition="uncover-down"]::view-transition-new(player) {
+  animation: none;
+  opacity: 0;
+}
+
+html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-new(player) {
+  animation: route-transition-ios-slide-up-cover var(--route-transition-cover-duration)
+    var(--route-transition-ios-ease) both;
+}
+
+html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-old(player) {
+  animation: route-transition-ios-slide-down-cover var(--route-transition-cover-duration)
+    var(--route-transition-ios-ease) both;
 }
