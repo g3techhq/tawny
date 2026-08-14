@@ -10,7 +10,8 @@ use crate::{
 use dioxus::prelude::*;
 use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{
-    Captions, Check, Clock, Heart, ListVideo, Maximize2, MessageSquare, Minimize2, Pause,
+    Captions, Check, ChevronLeft, Clock, Heart, ListVideo, Maximize2, MessageSquare, Minimize2,
+    Pause,
     PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, Volume2,
     VolumeX, X,
 };
@@ -381,13 +382,22 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                         aria_label: "Video controls",
                         div { class: "player-controls-scrim" }
                         div { class: "player-controls-top",
+                            // Same affordance as every other page: this leaves
+                            // the video, it does not shrink it in place.
                             button {
                                 r#type: "button",
                                 class: "player-control-button player-minimize-button",
-                                aria_label: "Minimize player",
-                                title: "Minimize player",
-                                onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
-                                Minimize2 { size: 23 }
+                                aria_label: "Back",
+                                title: "Back",
+                                onclick: move |_| {
+                                    let navigator = navigator();
+                                    if navigator.can_go_back() {
+                                        navigator.go_back();
+                                    } else {
+                                        spawn(async move { animated_navigate(Route::Feed {}).await; });
+                                    }
+                                },
+                                ChevronLeft { size: 26 }
                             }
                             strong { class: "player-overlay-title", "{video.title}" }
                             div { class: "player-controls-top-actions",
