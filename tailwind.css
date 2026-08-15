@@ -8,6 +8,16 @@
   --tawny-radius: 18px;
 }
 
+/* The theme variables live on the app wrapper, so `html` has none of them
+   until they are mirrored onto the root after hydration. Until that moment the
+   background below resolves to nothing and the document paints the browser's
+   white: a flash on load, and the colour that shows through a cross-fade.
+   Dark is the default appearance, so these are the dark theme's values. */
+:root {
+  --color-bg: #0b0f14;
+  --color-text: #f8fafc;
+}
+
 html,
 body {
   margin: 0;
