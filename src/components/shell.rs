@@ -65,6 +65,22 @@ pub fn AppShell() -> Element {
     let route: Route = use_route();
     let app_state = use_context::<AppState>();
 
+    // Take the system back press only while there is somewhere to go back to.
+    // Android sends it to the Activity rather than the WebView, so without this
+    // the first press closes the app; leaving it taken at the root would mean
+    // the press never closes the app at all. Nowhere else has a system back to
+    // claim, so the wiring is Android-only rather than inert everywhere else.
+    #[cfg(target_os = "android")]
+    {
+        let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
+        let can_go_back = navigator().can_go_back();
+        use_effect(move || {
+            if let Err(error) = plugins.back_button.write().set_intercepting(can_go_back) {
+                eprintln!("could not set back button interception: {error}");
+            }
+        });
+    }
+
 
     let player_expanded = matches!(route, Route::VideoDetail { .. });
     let detail = detail_title(&route, app_state);

@@ -558,7 +558,7 @@ dependencies = [
  "bitflags 2.13.1",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -2446,6 +2446,21 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "dx-native-plugins"
+version = "0.1.0"
+dependencies = [
+ "cfg-if",
+ "dioxus",
+ "dioxus-signals",
+ "jni 0.21.1",
+ "js-sys",
+ "manganis",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
 
 [[package]]
 name = "dx-route-transitions"
@@ -8110,6 +8125,7 @@ dependencies = [
  "dioxus",
  "dioxus-fullstack",
  "dioxus-icons",
+ "dx-native-plugins",
  "dx-route-transitions",
  "futures-util",
  "g3-ui",

@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 use dx_route_transitions::{
     Platform, ROUTE_TRANSITIONS_CSS, RouteTransitionProvider, route_transitions, set_platform,
 };
+use dx_native_plugins::NativePluginsProvider;
 use g3_ui::{AppWrapper, Theme};
 
 const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
@@ -96,8 +97,10 @@ pub fn App() -> Element {
         document::Script { src: TAWNY_PLAYER_CONTROLS_JS }
         // Must load before the router so its popstate listener registers first.
         document::Script { src: TAWNY_ROUTE_HISTORY_JS }
-        AppStateProvider {
-            ThemedApp {}
+        NativePluginsProvider {
+            AppStateProvider {
+                ThemedApp {}
+            }
         }
     }
 }
