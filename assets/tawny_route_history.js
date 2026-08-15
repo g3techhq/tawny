@@ -65,9 +65,35 @@
     });
 
   let lastPath = window.location.pathname;
-  // Set while our own replayed traversal is in flight, so the listener lets it
-  // through instead of cancelling it and looping.
-  let replaying = false;
+  // The destination key of the traversal we are replaying ourselves, so the
+  // listener lets exactly that one through instead of cancelling it and
+  // looping. A boolean here held for the whole animation instead, which meant
+  // any second back or forward during those few hundred milliseconds was
+  // mistaken for our own replay and skipped the transition entirely.
+  let replayKey = null;
+  // The transition currently running, so a new traversal can cut it short
+  // rather than being refused. Pressing back twice quickly should feel like
+  // two navigations, not one navigation and one instant jump.
+  let activeTransition = null;
+
+  const clearTransitionAttributes = () => {
+    delete document.documentElement.dataset.routeTransition;
+    delete document.documentElement.dataset.routeTransitionPlatform;
+  };
+
+  // Cut short whatever is running so its attributes cannot leak into the next
+  // one. Skipping is asynchronous, so the attributes are cleared here rather
+  // than waiting for the finished handler.
+  const interruptActiveTransition = () => {
+    if (!activeTransition) return;
+    try {
+      activeTransition.skipTransition();
+    } catch (_) {
+      // Already finished; nothing to cut short.
+    }
+    activeTransition = null;
+    clearTransitionAttributes();
+  };
 
   // Pushes bypass popstate, but they still move the path this handler
   // compares against on the next back.
@@ -86,10 +112,7 @@
     const root = document.documentElement;
     root.dataset.routeTransition = animationFor(from, to);
     root.dataset.routeTransitionPlatform = PLATFORM;
-    const clear = () => {
-      delete root.dataset.routeTransition;
-      delete root.dataset.routeTransitionPlatform;
-    };
+    const clear = () => clearTransitionAttributes();
     // The attributes set above grant view-transition-name, and they have to be
     // in computed style by the time the outgoing snapshot is captured.
     // Without this flush the sheet on its way out was captured unnamed, and
@@ -104,7 +127,12 @@
         if (commit) commit();
         await routeRendered(before);
       });
-      transition.finished.then(clear, clear);
+      activeTransition = transition;
+      const settle = () => {
+        if (activeTransition === transition) activeTransition = null;
+        clear();
+      };
+      transition.finished.then(settle, settle);
       return transition.finished;
     } catch (_) {
       if (commit) commit();
@@ -116,10 +144,7 @@
   const shouldAnimate = (from, to) =>
     from !== to &&
     Boolean(document.startViewTransition) &&
-    !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches &&
-    // A transition already running owns the attributes; starting a second one
-    // would make the browser skip both.
-    !document.documentElement.dataset.routeTransition;
+    !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 
   // The Navigation API is the only hook that runs *before* a back or forward
   // commits. popstate fires afterwards, so the snapshot was always taken of
@@ -129,7 +154,13 @@
   // navigation open until the animation finishes.
   if (window.navigation && typeof window.navigation.addEventListener === "function") {
     window.navigation.addEventListener("navigate", (event) => {
-      if (replaying) return;
+      // Our own replay, identified by the exact entry we asked for. Matching
+      // on the key rather than a flag means a second back or forward is still
+      // recognised as the user's, not as ours.
+      if (replayKey && event.destination?.key === replayKey) {
+        replayKey = null;
+        return;
+      }
       if (!event.canIntercept || event.hashChange || event.downloadRequest !== null) return;
       // Pushes come from the app and are already animated by the Rust side.
       if (event.navigationType !== "traverse") return;
@@ -152,17 +183,17 @@
       if (!event.cancelable || !key || typeof navigation.traverseTo !== "function") return;
 
       event.preventDefault();
+      interruptActiveTransition();
       lastPath = to;
-      replaying = true;
       startTransition(from, to, () => {
+        replayKey = key;
         try {
           navigation.traverseTo(key);
         } catch (_) {
           // Nothing else can move the history cursor; leave the page as it is
           // rather than stranding the user mid-transition.
+          replayKey = null;
         }
-      }).finally(() => {
-        replaying = false;
       });
     });
     return;
