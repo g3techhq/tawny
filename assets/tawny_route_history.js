@@ -24,31 +24,45 @@
     return "fade";
   };
 
-  const nextFrame = () =>
-    new Promise((resolve) => {
-      const raf = window.requestAnimationFrame ?? ((cb) => window.setTimeout(cb, 16));
-      raf(() => resolve());
-    });
+  // What the page looks like right now, as something to compare against.
+  //
+  // The route's own element is the signal: every page renders its own `main`,
+  // and the watch page is the only one carrying the cover marker.
+  const routeFingerprint = () => {
+    const main = document.querySelector("main");
+    const sheet = document.querySelector(".route-transition-cover");
+    return `${main ? main.className : ""}|${sheet ? "sheet" : ""}`;
+  };
 
-  // The router re-renders asynchronously after popstate, so the transition
-  // callback has to hold the snapshot open until the new route is in the DOM.
-  const routeRendered = () =>
+  // The router re-renders asynchronously, so the transition callback has to
+  // hold the snapshot open until the new route is actually in the DOM.
+  //
+  // Waiting for *any* mutation was not enough: the player ticks its clock and
+  // toasts come and go, so the first mutation frequently had nothing to do
+  // with the route, and the new snapshot was taken of the old page.
+  const routeRendered = (before) =>
     new Promise((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
         observer.disconnect();
+        window.clearTimeout(timer);
         resolve();
       };
-      const observer = new MutationObserver(finish);
+      const check = () => {
+        if (routeFingerprint() !== before) finish();
+      };
+      const observer = new MutationObserver(check);
       observer.observe(document.body ?? document.documentElement, {
         childList: true,
         subtree: true,
         attributes: true,
       });
-      window.setTimeout(finish, 120);
-      nextFrame().then(nextFrame).then(finish);
+      // Never hold a navigation open indefinitely: a route that renders
+      // identically still has to complete.
+      const timer = window.setTimeout(finish, 600);
+      check();
     });
 
   let lastPath = window.location.pathname;
@@ -72,8 +86,11 @@
       delete root.dataset.routeTransition;
       delete root.dataset.routeTransitionPlatform;
     };
+    // Captured before the call, so the wait inside the callback is comparing
+    // against the page that is still on screen.
+    const before = routeFingerprint();
     try {
-      const transition = document.startViewTransition(() => routeRendered());
+      const transition = document.startViewTransition(() => routeRendered(before));
       transition.finished.then(clear, clear);
       return transition.finished;
     } catch (_) {
@@ -105,40 +122,26 @@
       const to = new URL(event.destination.url).pathname;
       if (!shouldAnimate(from, to)) return;
       lastPath = to;
-      event.intercept({
-        scroll: "manual",
-        handler: () => startTransition(from, to),
-      });
+      // Snapshot here, synchronously, rather than inside the intercept
+      // handler. The handler runs later — after popstate, which is what the
+      // router listens to — so by then the new route has already rendered and
+      // been painted. That is the whole bug: the page appeared first and the
+      // animation then played over the top of it. Nothing has reacted to the
+      // traversal yet at this point, so the outgoing page is still on screen.
+      const finished = startTransition(from, to);
+      event.intercept({ scroll: "manual", handler: () => finished });
     });
     return;
   }
 
+  // Fallback for engines without the Navigation API. This one cannot help
+  // being late — popstate fires after the traversal has committed — so the
+  // animation is best-effort there.
   window.addEventListener("popstate", () => {
     const from = lastPath;
     const to = window.location.pathname;
     lastPath = to;
-
-    if (from === to) return;
-    if (!document.startViewTransition) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
-    // A transition already running owns the attributes; starting a second one
-    // would make the browser skip both.
-    if (document.documentElement.dataset.routeTransition) return;
-
-    const root = document.documentElement;
-    root.dataset.routeTransition = animationFor(from, to);
-    root.dataset.routeTransitionPlatform = PLATFORM;
-
-    const clear = () => {
-      delete root.dataset.routeTransition;
-      delete root.dataset.routeTransitionPlatform;
-    };
-
-    try {
-      const transition = document.startViewTransition(() => routeRendered());
-      transition.finished.then(clear, clear);
-    } catch (_) {
-      clear();
-    }
+    if (!shouldAnimate(from, to)) return;
+    startTransition(from, to);
   });
 })();
