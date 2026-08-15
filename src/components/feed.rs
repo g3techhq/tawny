@@ -5,9 +5,16 @@ use crate::{
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Clapperboard, Radio, Zap};
-use g3_ui::{Refresher, StatusColor};
+use g3_ui::{Button, ButtonStyle, Refresher, StatusColor};
 
 use super::VideoGrid;
+
+/// How many videos the feed renders before asking for more.
+///
+/// The whole subscription history was being laid out on every visit, which is
+/// what made opening the feed feel slow: the work grows with the cache, not
+/// with what the reader can see.
+const FEED_PAGE_SIZE: usize = 24;
 
 #[component]
 pub fn Feed() -> Element {
@@ -18,6 +25,7 @@ pub fn Feed() -> Element {
     let mut show_videos = use_signal(|| true);
     let mut show_shorts = use_signal(|| true);
     let mut show_live = use_signal(|| true);
+    let mut visible_count = use_signal(|| FEED_PAGE_SIZE);
     let filter = match filter_index() {
         1 => FeedFilter::Unwatched,
         2 => FeedFilter::Today,
@@ -70,6 +78,9 @@ pub fn Feed() -> Element {
                 || video.published_at == "Streaming now"
         });
     }
+    // Paged last, so the count reflects what the filters actually left.
+    let remaining = videos.len().saturating_sub(visible_count());
+    videos.truncate(visible_count());
 
     rsx! {
         // Pull down to refresh, replacing the button that sat in the intro row.
@@ -166,6 +177,16 @@ pub fn Feed() -> Element {
             }
 
             VideoGrid { videos, empty_message: "Try another filter or refresh when you are back online.".to_string() }
+
+            if remaining > 0 {
+                div { class: "load-more-row",
+                    Button {
+                        style: ButtonStyle::Neutral,
+                        onclick: move |_| visible_count += FEED_PAGE_SIZE,
+                        "Load {remaining.min(FEED_PAGE_SIZE)} more"
+                    }
+                }
+            }
         }
     }
 }
