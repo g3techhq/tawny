@@ -64,6 +64,55 @@
     };
   }
 
+  const startTransition = (from, to) => {
+    const root = document.documentElement;
+    root.dataset.routeTransition = animationFor(from, to);
+    root.dataset.routeTransitionPlatform = PLATFORM;
+    const clear = () => {
+      delete root.dataset.routeTransition;
+      delete root.dataset.routeTransitionPlatform;
+    };
+    try {
+      const transition = document.startViewTransition(() => routeRendered());
+      transition.finished.then(clear, clear);
+      return transition.finished;
+    } catch (_) {
+      clear();
+      return Promise.resolve();
+    }
+  };
+
+  const shouldAnimate = (from, to) =>
+    from !== to &&
+    Boolean(document.startViewTransition) &&
+    !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches &&
+    // A transition already running owns the attributes; starting a second one
+    // would make the browser skip both.
+    !document.documentElement.dataset.routeTransition;
+
+  // The Navigation API is the only hook that runs *before* a back or forward
+  // commits. popstate fires afterwards, so the snapshot was always taken of
+  // the page the browser had already swapped in - which is why the animation
+  // appeared to replay on top of the destination. Intercepting lets the
+  // snapshot be taken while the old route is still on screen, and holds the
+  // navigation open until the animation finishes.
+  if (window.navigation && typeof window.navigation.addEventListener === "function") {
+    window.navigation.addEventListener("navigate", (event) => {
+      if (!event.canIntercept || event.hashChange || event.downloadRequest !== null) return;
+      // Pushes come from the app and are already animated by the Rust side.
+      if (event.navigationType !== "traverse") return;
+      const from = window.location.pathname;
+      const to = new URL(event.destination.url).pathname;
+      if (!shouldAnimate(from, to)) return;
+      lastPath = to;
+      event.intercept({
+        scroll: "manual",
+        handler: () => startTransition(from, to),
+      });
+    });
+    return;
+  }
+
   window.addEventListener("popstate", () => {
     const from = lastPath;
     const to = window.location.pathname;
