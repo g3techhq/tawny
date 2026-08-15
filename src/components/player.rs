@@ -879,7 +879,11 @@ fn VideoDetailInner(id: String) -> Element {
     let Some(details) = details else {
         let failed = details_resource.read().as_ref().is_some();
         return rsx! {
-            main { class: "page player-loading",
+            // Carries the cover marker too: the sheet has to exist in the
+            // new DOM when the snapshot is taken, and details arrive later than
+            // that. Without it the route committed first and the animation then
+            // played over the page it had already swapped to.
+            main { class: "page player-loading route-transition-cover",
                     div { class: "empty-state",
                         if failed {
                             p { "This video is unavailable from both the local cache and configured source." }

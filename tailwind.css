@@ -2762,3 +2762,19 @@ html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]
   line-height: 1.55;
   white-space: pre-wrap;
 }
+
+/* -- Which regions take part in which transition -- */
+
+/* The library names the base region unconditionally, which lifts the whole app
+   out of the root snapshot. Cover transitions need that; a fade animates root
+   and is left with nothing visible to cross-fade, so peer routes changed with
+   no animation at all. The `html` prefix is here to out-specify the library,
+   whose stylesheet loads after this one. */
+html .route-transition-base {
+  view-transition-name: none;
+}
+
+html[data-route-transition="cover-up"] .route-transition-base,
+html[data-route-transition="uncover-down"] .route-transition-base {
+  view-transition-name: base;
+}
