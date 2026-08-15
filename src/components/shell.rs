@@ -17,15 +17,10 @@ use super::PersistentPlayer;
 /// back button, so the pages render only their content.
 fn detail_title(route: &Route, app_state: AppState) -> Option<String> {
     match route {
-        Route::ChannelDetail { id } => Some(
-            app_state
-                .library()
-                .channels
-                .iter()
-                .find(|channel| &channel.id == id)
-                .map(|channel| channel.name.clone())
-                .unwrap_or_else(|| "Channel".into()),
-        ),
+        // Deliberately untitled: the channel page leads with the name and
+        // avatar, and repeating it in the bar pushed the header actions off
+        // the edge on a long name.
+        Route::ChannelDetail { .. } => Some(String::new()),
         Route::PlaylistDetail { id } => Some(
             app_state
                 .library()

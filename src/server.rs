@@ -2488,10 +2488,29 @@ pub async fn playback_proxy(
     }
 
     let range_requested = request_headers.contains_key(header::RANGE);
-    let upstream = match request_playback_upstream(&state, &target, &request_headers).await {
+    // A refusal here is usually transient: the CDN gates a burst of ranged
+    // requests and clears within a second or so. Passing the 403 straight
+    // through instead makes it worse, because the player answers with its own
+    // four attempts per segment across every segment in flight, and that
+    // burst is what keeps the gate shut. Absorbing it here turns a retry
+    // storm into a few paced requests.
+    let mut upstream = match request_playback_upstream(&state, &target, &request_headers).await {
         Ok(response) => response,
         Err(_) => return proxy_error(StatusCode::BAD_GATEWAY, "Media source is unavailable"),
     };
+    for attempt in 0..3u32 {
+        if !matches!(
+            upstream.status(),
+            StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200 * u64::from(attempt + 1) * 2)).await;
+        match request_playback_upstream(&state, &target, &request_headers).await {
+            Ok(response) => upstream = response,
+            Err(_) => break,
+        }
+    }
     let mut status = upstream.status();
     let mut upstream_headers = upstream.headers().clone();
     let content_type = upstream_headers

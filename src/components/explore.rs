@@ -12,6 +12,9 @@ use g3_ui::{Button, StatusColor};
 
 use super::VideoGrid;
 
+/// How many recent videos stand in for a query on an empty search page.
+const SUGGESTION_COUNT: usize = 24;
+
 #[component]
 pub fn Explore() -> Element {
     let app_state = use_context::<AppState>();
@@ -36,6 +39,12 @@ pub fn Explore() -> Element {
         });
     } else {
         channels.clear();
+        // With no query this page was rendering the entire cached library as
+        // one grid, which is what made opening it feel like it was fetching
+        // something. It is a starting point, not a catalogue, so it is capped
+        // at the most recent handful.
+        videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
+        videos.truncate(SUGGESTION_COUNT);
     }
 
     if let Some(remote) = results()

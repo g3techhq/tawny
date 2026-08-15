@@ -2744,3 +2744,21 @@ html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]
 .is-fullscreen .player-fullscreen-exit-icon {
   display: inline-flex;
 }
+
+/* -- Channel description -- */
+
+.channel-description-button {
+  margin-top: 0.35rem;
+  padding-left: 0;
+}
+
+.g3-sheet-bottom.channel-description-sheet .g3-sheet-content {
+  max-height: 70dvh;
+}
+
+.channel-description-sheet .channel-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}

@@ -7,7 +7,7 @@ use crate::{
 use dioxus::prelude::*;
 use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{History, ListVideo, Play, Trash2};
-use g3_ui::{Button, ButtonStyle, Refresher, StatusColor};
+use g3_ui::{Button, ButtonSize, ButtonStyle, Refresher, Sheet, StatusColor};
 
 use super::VideoGrid;
 
@@ -184,6 +184,7 @@ pub fn ChannelDetail(id: String) -> Element {
         .filter(|video| video.channel_id == channel.id)
         .cloned()
         .collect::<Vec<_>>();
+    let mut description_open = use_signal(|| false);
     let selected_tab = match tab_index() {
         1 => ChannelMediaTab::Shorts,
         2 => ChannelMediaTab::Live,
@@ -221,6 +222,7 @@ pub fn ChannelDetail(id: String) -> Element {
     let initial = channel.name.chars().next().unwrap_or('T');
     let avatar_url = channel.avatar_url.clone();
     let banner_url = channel.banner_url.clone();
+    let description_text = channel.description.clone();
     let load_channel_id = channel.id.clone();
     let load_token = next_page.clone();
 
@@ -254,9 +256,20 @@ pub fn ChannelDetail(id: String) -> Element {
                         div { class: "channel-hero-copy",
                             span { class: "section-kicker", "{channel.handle}" }
                             h1 { "{channel.name}" }
-                            p { "{channel.subscriber_count} subscribers · {local_channel_videos.len()} cached items" }
+                            // The local cache count is an implementation
+                            // detail; it told the reader nothing about the
+                            // channel.
+                            p { "{channel.subscriber_count} subscribers" }
                             if !channel.description.is_empty() {
-                                p { class: "channel-description", "{channel.description}" }
+                                // Behind a button: a long channel description
+                                // pushed the videos off the first screen.
+                                Button {
+                                    style: ButtonStyle::Clear,
+                                    size: ButtonSize::Sm,
+                                    class: "channel-description-button",
+                                    onclick: move |_| description_open.set(true),
+                                    "Description"
+                                }
                             }
                         }
                         Button {
@@ -271,6 +284,10 @@ pub fn ChannelDetail(id: String) -> Element {
                             },
                             if is_subscribed { "Subscribed" } else { "Subscribe" }
                         }
+                    }
+                    Sheet { is_open: description_open, class: "channel-description-sheet",
+                        p { class: "sheet-label", "About" }
+                        p { class: "channel-description", "{description_text}" }
                     }
                     VideoGrid {
                         videos,

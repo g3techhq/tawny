@@ -389,14 +389,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 class: "player-control-button player-minimize-button",
                                 aria_label: "Back",
                                 title: "Back",
-                                onclick: move |_| {
-                                    let navigator = navigator();
-                                    if navigator.can_go_back() {
-                                        navigator.go_back();
-                                    } else {
-                                        spawn(async move { animated_navigate(Route::Feed {}).await; });
-                                    }
-                                },
+                                // Deliberately the same call the swipe-down
+                                // makes: popping history instead picks its
+                                // animation from whatever came before, which
+                                // is not always the page under the sheet.
+                                onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
                                 ChevronLeft { size: 26 }
                             }
                             strong { class: "player-overlay-title", "{video.title}" }
