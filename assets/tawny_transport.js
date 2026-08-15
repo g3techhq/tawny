@@ -14,6 +14,26 @@
     return entry;
   }
 
+  // Shaka packs the useful part of a network failure into `data`: the URI it
+  // asked for, then the HTTP status. A bare code like 1002 says only "bad HTTP
+  // status", which cannot distinguish a gated stream from a host the device
+  // cannot reach — the difference that matters once the app runs on a handset
+  // and the server is somewhere else.
+  function describeShakaError(detail) {
+    if (!detail) return null;
+    const data = Array.isArray(detail.data) ? detail.data : [];
+    const uri = data.find((value) => typeof value === "string" && value.includes("/"));
+    const status = data.find(
+      (value) => Number.isInteger(value) && value >= 100 && value < 600,
+    );
+    return {
+      code: detail.code,
+      category: detail.category,
+      httpStatus: status ?? null,
+      uri: uri ?? null,
+    };
+  }
+
   function playbackPosition(video) {
     const position = Number(video.currentTime);
     return Number.isFinite(position) && position > 0 ? position : 0;
@@ -321,6 +341,12 @@
           data: event.detail.data,
           severity,
         };
+        const described = describeShakaError(event.detail);
+        recordTransportEvent({
+          phase: "shaka-error",
+          ...described,
+          position: playbackPosition(video),
+        });
         const networkCategory = window.shaka.util.Error.Category.NETWORK;
         const isNetworkError = event.detail.category === networkCategory;
         const at = playbackPosition(video);

@@ -76,7 +76,8 @@ fn read_transport_failure(mut detail: Signal<String>) {
             r#"
             const events = (window.TawnyTransport && window.TawnyTransport.events) || [];
             const notable = events.filter((event) =>
-                event.phase === 'source-failed'
+                event.phase === 'shaka-error'
+                || event.phase === 'source-failed'
                 || event.phase === 'recovering'
                 || event.phase === 'retrying-stream');
             const last = notable[notable.length - 1] || window.__tawnyTransportDebug || null;
@@ -89,7 +90,13 @@ fn read_transport_failure(mut detail: Signal<String>) {
                 const at = Number.isFinite(last.position)
                     ? ` · at ${Math.floor(last.position)}s`
                     : '';
-                parts.push(`${last.phase}${source}${at}${cause}`);
+                // A bare Shaka code says almost nothing. The status and the URI
+                // it failed on are what separate a gated stream from a host the
+                // device cannot reach, and there is no console on a handset.
+                const code = last.code ? ` · code ${last.code}` : '';
+                const status = last.httpStatus ? ` · HTTP ${last.httpStatus}` : '';
+                const uri = last.uri ? ` · ${last.uri}` : '';
+                parts.push(`${last.phase}${source}${code}${status}${at}${cause}${uri}`);
             }
             const media = document.getElementById('tawny-player-media');
             if (media && media.error) {
