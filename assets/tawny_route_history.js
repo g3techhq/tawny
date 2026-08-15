@@ -2,12 +2,11 @@
 //
 // `animated_navigate` only wraps navigations the app initiates, so the toolbar
 // buttons and swipe-back went straight to a bare route swap with no view
-// transition. Popstate has no "intended destination" to hand the Rust side, so
-// the animation is derived here from the paths involved.
+// transition. A traversal has no "intended destination" to hand the Rust side,
+// so the animation is derived here from the paths involved.
 //
-// This registers before the router mounts, which matters: popstate listeners
-// run in registration order, and the snapshot has to be taken while the old
-// route is still on screen.
+// The hard part turned out to be ordering rather than intent - see the
+// navigate listener for why the traversal has to be replayed.
 (() => {
   // Mirrors the route roles in `app.rs`: the watch page is the only
   // `#[transition(cover)]`, everything else is a peer that cross-fades.
@@ -66,6 +65,9 @@
     });
 
   let lastPath = window.location.pathname;
+  // Set while our own replayed traversal is in flight, so the listener lets it
+  // through instead of cancelling it and looping.
+  let replaying = false;
 
   // Pushes bypass popstate, but they still move the path this handler
   // compares against on the next back.
@@ -78,7 +80,9 @@
     };
   }
 
-  const startTransition = (from, to) => {
+  // `commit` performs the actual route change, and is called from inside the
+  // transition callback so it happens after the outgoing snapshot is taken.
+  const startTransition = (from, to, commit) => {
     const root = document.documentElement;
     root.dataset.routeTransition = animationFor(from, to);
     root.dataset.routeTransitionPlatform = PLATFORM;
@@ -86,21 +90,24 @@
       delete root.dataset.routeTransition;
       delete root.dataset.routeTransitionPlatform;
     };
-    // The outgoing snapshot is taken synchronously inside
-    // startViewTransition, so the attributes set above have to reach computed
-    // style before that call. Without this flush the sheet on its way out was
-    // still unnamed when it was captured, and uncover-down ran with no cover
-    // group at all — while cover-up worked, because its name is only needed in
-    // the new state, which is styled later anyway.
+    // The attributes set above grant view-transition-name, and they have to be
+    // in computed style by the time the outgoing snapshot is captured.
+    // Without this flush the sheet on its way out was captured unnamed, and
+    // uncover-down ran with no cover group at all — while cover-up worked,
+    // because its name is only needed in the new state.
     void document.documentElement.offsetHeight;
     // Captured before the call, so the wait inside the callback is comparing
     // against the page that is still on screen.
     const before = routeFingerprint();
     try {
-      const transition = document.startViewTransition(() => routeRendered(before));
+      const transition = document.startViewTransition(async () => {
+        if (commit) commit();
+        await routeRendered(before);
+      });
       transition.finished.then(clear, clear);
       return transition.finished;
     } catch (_) {
+      if (commit) commit();
       clear();
       return Promise.resolve();
     }
@@ -122,21 +129,41 @@
   // navigation open until the animation finishes.
   if (window.navigation && typeof window.navigation.addEventListener === "function") {
     window.navigation.addEventListener("navigate", (event) => {
+      if (replaying) return;
       if (!event.canIntercept || event.hashChange || event.downloadRequest !== null) return;
       // Pushes come from the app and are already animated by the Rust side.
       if (event.navigationType !== "traverse") return;
       const from = window.location.pathname;
       const to = new URL(event.destination.url).pathname;
       if (!shouldAnimate(from, to)) return;
+
+      // startViewTransition does not capture the old state when it is called:
+      // it captures at the next rendering opportunity, and only then runs the
+      // callback. A traversal commits and re-renders the router before that
+      // frame, so the "old" snapshot was of the page already swapped in — the
+      // animation then played the new page over itself.
+      //
+      // In-app navigation never hit this because the library changes the route
+      // inside the callback, which by definition runs after capture. The same
+      // shape is forced here: cancel the traversal, then replay it from inside
+      // the callback. Cancelling needs a destination key, so a traversal that
+      // cannot be cancelled falls through to the browser's own handling.
+      const key = event.destination.key;
+      if (!event.cancelable || !key || typeof navigation.traverseTo !== "function") return;
+
+      event.preventDefault();
       lastPath = to;
-      // Snapshot here, synchronously, rather than inside the intercept
-      // handler. The handler runs later — after popstate, which is what the
-      // router listens to — so by then the new route has already rendered and
-      // been painted. That is the whole bug: the page appeared first and the
-      // animation then played over the top of it. Nothing has reacted to the
-      // traversal yet at this point, so the outgoing page is still on screen.
-      const finished = startTransition(from, to);
-      event.intercept({ scroll: "manual", handler: () => finished });
+      replaying = true;
+      startTransition(from, to, () => {
+        try {
+          navigation.traverseTo(key);
+        } catch (_) {
+          // Nothing else can move the history cursor; leave the page as it is
+          // rather than stranding the user mid-transition.
+        }
+      }).finally(() => {
+        replaying = false;
+      });
     });
     return;
   }
