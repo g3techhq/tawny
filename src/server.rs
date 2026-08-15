@@ -471,8 +471,16 @@ impl AppServerState {
         let mut youtube_builder = RustyPipe::builder()
             .storage_dir(extractor_cache)
             .po_token_cache();
+        // Only honoured when the path actually exists. It is an optional
+        // helper, so a stale or placeholder value should cost the feature, not
+        // the whole server — the extractor refuses to build at all when handed
+        // a binary it cannot find.
         if let Ok(botguard_bin) = std::env::var("TAWNY_BOTGUARD_BIN") {
-            youtube_builder = youtube_builder.botguard_bin(botguard_bin);
+            if std::path::Path::new(&botguard_bin).is_file() {
+                youtube_builder = youtube_builder.botguard_bin(botguard_bin);
+            } else {
+                eprintln!("ignoring TAWNY_BOTGUARD_BIN: no binary at {botguard_bin}");
+            }
         }
         let youtube = youtube_builder
             .build()
