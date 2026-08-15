@@ -86,6 +86,13 @@
       delete root.dataset.routeTransition;
       delete root.dataset.routeTransitionPlatform;
     };
+    // The outgoing snapshot is taken synchronously inside
+    // startViewTransition, so the attributes set above have to reach computed
+    // style before that call. Without this flush the sheet on its way out was
+    // still unnamed when it was captured, and uncover-down ran with no cover
+    // group at all — while cover-up worked, because its name is only needed in
+    // the new state, which is styled later anyway.
+    void document.documentElement.offsetHeight;
     // Captured before the call, so the wait inside the callback is comparing
     // against the page that is still on screen.
     const before = routeFingerprint();
