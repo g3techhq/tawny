@@ -12,6 +12,21 @@
   // `#[transition(cover)]`, everything else is a peer that cross-fades.
   const isSheet = (path) => path.startsWith("/watch/");
 
+  // Set localStorage.tawnyRouteDebug = "1" and reload to trace traversals.
+  // A view transition cannot run in a document the browser considers hidden,
+  // which is the case in an automated pane, so this behaviour can only be
+  // observed from a real browser window.
+  const DEBUG = (() => {
+    try {
+      return window.localStorage.getItem("tawnyRouteDebug") === "1";
+    } catch (_) {
+      return false;
+    }
+  })();
+  const trace = (...parts) => {
+    if (DEBUG) console.log("[route]", ...parts);
+  };
+
   // Mirrors `set_platform` in `app.rs`.
   const PLATFORM = "ios";
 
@@ -75,6 +90,24 @@
   // rather than being refused. Pressing back twice quickly should feel like
   // two navigations, not one navigation and one instant jump.
   let activeTransition = null;
+  // Bumped for every transition started. The attributes on the root element
+  // belong to whichever transition was started last, so an earlier one
+  // finishing must not clear them: interrupting a running transition made its
+  // finished handler fire *after* its replacement had set its own attributes,
+  // wiping them, and the replacement then ran with no animation named at all.
+  let generation = 0;
+
+  // The snapshot groups the browser actually built, which is the one thing
+  // that says whether a transition did anything.
+  const groupNames = () => [
+    ...new Set(
+      document
+        .getAnimations()
+        .map((animation) => String(animation.effect?.pseudoElement || ""))
+        .filter((pseudo) => pseudo.includes("view-transition"))
+        .map((pseudo) => pseudo.match(/\(([^)]+)\)/)?.[1]),
+    ),
+  ];
 
   const clearTransitionAttributes = () => {
     delete document.documentElement.dataset.routeTransition;
@@ -122,16 +155,28 @@
     // Captured before the call, so the wait inside the callback is comparing
     // against the page that is still on screen.
     const before = routeFingerprint();
+    const mine = ++generation;
     try {
       const transition = document.startViewTransition(async () => {
+        trace("callback entered", routeFingerprint());
         if (commit) commit();
         await routeRendered(before);
+        trace("callback done", routeFingerprint());
       });
       activeTransition = transition;
+      transition.ready.then(
+        () => trace("ready", root.dataset.routeTransition, groupNames()),
+        (error) => trace("ABORTED", String(error)),
+      );
       const settle = () => {
         if (activeTransition === transition) activeTransition = null;
-        clear();
+        if (mine === generation) clear();
       };
+      const startedAt = performance.now();
+      transition.finished.then(
+        () => trace("finished", Math.round(performance.now() - startedAt) + "ms"),
+        (error) => trace("finished with error", String(error)),
+      );
       transition.finished.then(settle, settle);
       return transition.finished;
     } catch (_) {
@@ -159,6 +204,7 @@
       // recognised as the user's, not as ours.
       if (replayKey && event.destination?.key === replayKey) {
         replayKey = null;
+        trace("replay passed through");
         return;
       }
       if (!event.canIntercept || event.hashChange || event.downloadRequest !== null) return;
@@ -182,6 +228,7 @@
       const key = event.destination.key;
       if (!event.cancelable || !key || typeof navigation.traverseTo !== "function") return;
 
+      trace("traverse", from, "->", to, "| cancelable", event.cancelable, "| running", Boolean(activeTransition));
       event.preventDefault();
       interruptActiveTransition();
       lastPath = to;
