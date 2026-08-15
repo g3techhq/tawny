@@ -73,10 +73,28 @@ pub fn AppShell() -> Element {
     #[cfg(target_os = "android")]
     {
         let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
-        let can_go_back = navigator().can_go_back();
-        use_effect(move || {
+        // `use_reactive` because the flag is a plain bool, not a signal: an
+        // effect that merely captured it would run once with its starting
+        // value and never again, leaving interception stuck off.
+        use_effect(use_reactive!(|route| {
+            let _ = &route;
+            let can_go_back = navigator().can_go_back();
             if let Err(error) = plugins.back_button.write().set_intercepting(can_go_back) {
                 eprintln!("could not set back button interception: {error}");
+            }
+        }));
+
+        // The plugin can only dispatch an event into the page; the router lives
+        // out here, so this is the half that actually navigates.
+        use_future(move || async move {
+            let mut presses = document::eval(
+                "window.addEventListener('dxnativeback', () => dioxus.send(true));",
+            );
+            while presses.recv::<bool>().await.is_ok() {
+                let navigator = navigator();
+                if navigator.can_go_back() {
+                    navigator.go_back();
+                }
             }
         });
     }
