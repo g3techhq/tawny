@@ -34,10 +34,3 @@ deployment_target = "15.0"
 min_sdk = 35
 target_sdk = 35
 compile_sdk = 35
-
-[android.application]
-# The dev server is plain HTTP, and Android has blocked cleartext by default
-# since API 28 — the WebView refuses the media proxy with
-# ERR_CLEARTEXT_NOT_PERMITTED even though the native side reaches it fine,
-# because only in-page requests are subject to the policy.
-uses_cleartext_traffic = true

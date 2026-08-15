@@ -39,6 +39,27 @@ No Piped instance — public or self-hosted — is required or contacted. Tawny 
 
 Feed ingestion is designed for large libraries. When WebSub is active the server rotates lightweight official RSS checks through the 48 stalest channels instead of fully extracting every subscription; without that accelerated source, RSS covers the complete library with bounded concurrency. Full Videos/Shorts/Live extraction happens when a channel is opened or an individual channel is newly subscribed. Atom timestamps and relative labels such as `2 hours ago` are normalized into one chronological sort key, and the client re-sorts cached feed entries on render for migration safety.
 
+### Running on Android
+
+Point the media proxy at the loopback address by number:
+
+```bash
+TAWNY_PUBLIC_URL=http://127.0.0.1:8080 dx serve --android
+```
+
+Android refuses plain HTTP unless the network security config allows it, and
+the one the CLI generates permits exactly one host: `127.0.0.1`. Those entries
+match by literal hostname, so `localhost` is a different entry and is not
+covered — segment requests fail with `ERR_CLEARTEXT_NOT_PERMITTED` even though
+the address is the same one.
+
+`[android.application] uses_cleartext_traffic` does not help: a manifest that
+references a network security config, as the generated one always does, has
+that attribute ignored.
+
+The default stays `localhost` because the proxy sends no CORS headers, so on
+web the media has to come from the same origin the page was served from.
+
 For push updates, deploy with a public HTTPS `TAWNY_PUBLIC_URL` (or explicit `TAWNY_WEBSUB_CALLBACK_URL`). Subscribing requests a YouTube WebSub lease; signed callbacks insert the upload immediately and enrich only that video. Lease requests are persisted, renewed after three days, and processed with bounded concurrency. The 15-minute RSS reconciliation worker remains as a recovery path for missed callbacks.
 
 Useful verification commands:
