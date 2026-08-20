@@ -1,20 +1,33 @@
-// Browser back/forward animation.
+// Browser history traversal animation.
 //
-// `animated_navigate` only wraps navigations the app initiates, so the toolbar
-// buttons and swipe-back went straight to a bare route swap with no view
-// transition. Popstate has no "intended destination" to hand the Rust side, so
-// the animation is derived here from the paths involved.
-//
-// This registers before the router mounts, which matters: popstate listeners
-// run in registration order, and the snapshot has to be taken while the old
-// route is still on screen.
+// App-initiated Back uses `animated_go_back`, which can capture the outgoing
+// page before asking Dioxus to pop its history. Browser toolbar/swipe Back does
+// not pass through Rust, so Chromium's Navigation API is used to start that
+// same snapshot during the cancellable `navigate` event, before the traversal
+// commits. `popstate` remains a best-effort fallback for older engines.
 (() => {
-  // Mirrors the route roles in `app.rs`: the watch page is the only
-  // `#[transition(cover)]`, everything else is a peer that cross-fades.
-  const isSheet = (path) => path.startsWith("/watch/");
+  "use strict";
 
-  // Mirrors `set_platform` in `app.rs`.
+  const isSheet = (route) => {
+    try {
+      return new URL(route, window.location.href).pathname.startsWith("/watch/");
+    } catch (_) {
+      return String(route).startsWith("/watch/");
+    }
+  };
+
+  // Mirrors Tawny's explicit set_platform(Platform::Ios): peer routes use a
+  // plain cross-dissolve instead of Material's sequential fade-through.
   const PLATFORM = "ios";
+
+  const routeKey = (value) => {
+    try {
+      const url = new URL(value, window.location.href);
+      return `${url.pathname}${url.search}${url.hash}`;
+    } catch (_) {
+      return String(value);
+    }
+  };
 
   const animationFor = (from, to) => {
     const leaving = isSheet(from);
@@ -24,72 +37,97 @@
     return "fade";
   };
 
-  const nextFrame = () =>
-    new Promise((resolve) => {
-      const raf = window.requestAnimationFrame ?? ((cb) => window.setTimeout(cb, 16));
-      raf(() => resolve());
-    });
-
-  // The router re-renders asynchronously after popstate, so the transition
-  // callback has to hold the snapshot open until the new route is in the DOM.
   const routeRendered = () =>
     new Promise((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
-        observer.disconnect();
+        window.clearTimeout(ceiling);
+        observer?.disconnect?.();
         resolve();
       };
-      const observer = new MutationObserver(finish);
-      observer.observe(document.body ?? document.documentElement, {
+      const observer = typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(finish);
+      observer?.observe?.(document.body ?? document.documentElement, {
         childList: true,
         subtree: true,
-        attributes: true,
       });
-      window.setTimeout(finish, 120);
-      nextFrame().then(nextFrame).then(finish);
+      const ceiling = window.setTimeout(finish, 120);
+      if (!observer) finish();
     });
 
-  let lastPath = window.location.pathname;
+  let lastRoute = routeKey(window.location.href);
 
-  // Pushes bypass popstate, but they still move the path this handler
-  // compares against on the next back.
+  // Keep the source side current for pushes, which do not emit popstate.
   for (const method of ["pushState", "replaceState"]) {
     const original = history[method];
     history[method] = function patched(...args) {
       const result = original.apply(this, args);
-      lastPath = window.location.pathname;
+      lastRoute = routeKey(window.location.href);
       return result;
     };
   }
 
-  window.addEventListener("popstate", () => {
-    const from = lastPath;
-    const to = window.location.pathname;
-    lastPath = to;
+  const canAnimate = () =>
+    Boolean(document.startViewTransition) &&
+    !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches &&
+    !document.documentElement.dataset.routeTransition;
 
-    if (from === to) return;
-    if (!document.startViewTransition) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return;
-    // A transition already running owns the attributes; starting a second one
-    // would make the browser skip both.
-    if (document.documentElement.dataset.routeTransition) return;
-
+  const startTraversalTransition = (from, to) => {
+    if (from === to || !canAnimate()) return null;
     const root = document.documentElement;
     root.dataset.routeTransition = animationFor(from, to);
     root.dataset.routeTransitionPlatform = PLATFORM;
+    // The class granting the outgoing snapshot its view-transition-name must
+    // be computed before the old state is captured.
+    void root.offsetHeight;
 
     const clear = () => {
       delete root.dataset.routeTransition;
       delete root.dataset.routeTransitionPlatform;
     };
-
     try {
       const transition = document.startViewTransition(() => routeRendered());
       transition.finished.then(clear, clear);
+      return transition;
     } catch (_) {
       clear();
+      return null;
     }
+  };
+
+  const navigationApi = window.navigation;
+  if (navigationApi?.addEventListener) {
+    navigationApi.addEventListener("navigate", (event) => {
+      if (event.navigationType !== "traverse" || !event.canIntercept) return;
+      const to = routeKey(event.destination?.url ?? window.location.href);
+      const from = lastRoute;
+      lastRoute = to;
+      const transition = startTraversalTransition(from, to);
+      if (!transition) return;
+
+      // `intercept` commits the history traversal normally (and therefore lets
+      // Dioxus receive popstate), while its handler keeps navigation pending
+      // until the transition update has observed the new route.
+      try {
+        event.intercept({
+          handler: async () => {
+            try {
+              await transition.updateCallbackDone;
+            } catch (_) {}
+          },
+        });
+      } catch (_) {}
+    });
+    return;
+  }
+
+  window.addEventListener("popstate", () => {
+    const from = lastRoute;
+    const to = routeKey(window.location.href);
+    lastRoute = to;
+    startTraversalTransition(from, to);
   });
 })();

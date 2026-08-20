@@ -108,9 +108,42 @@
     let captionsEnabled = false;
     let chapters = [];
     let previewFrames = null;
+    let playbackIntent = !video.paused && !video.ended;
+    let playbackRecoveryTimer = null;
+    let pipTransition = false;
+    let pipTransitionTimer = null;
 
     const listen = (target, name, handler, options) =>
       target.addEventListener(name, handler, { ...options, signal });
+
+    function setPlaybackIntent(shouldPlay) {
+      playbackIntent = Boolean(shouldPlay);
+      // The Android PiP actions execute outside this closure. Keeping the
+      // intent on the element lets their play/pause command participate in the
+      // same lifecycle recovery without mistaking an explicit Pause for a
+      // transient Activity pause.
+      video.__tawnyPlaybackIntent = playbackIntent;
+    }
+
+    function beginPipTransition() {
+      pipTransition = true;
+      if (pipTransitionTimer) clearTimeout(pipTransitionTimer);
+      pipTransitionTimer = setTimeout(() => {
+        pipTransition = false;
+        pipTransitionTimer = null;
+      }, 1400);
+    }
+
+    function recoverIntendedPlayback(delay = 0) {
+      if (!playbackIntent || video.ended) return;
+      if (playbackRecoveryTimer) clearTimeout(playbackRecoveryTimer);
+      playbackRecoveryTimer = setTimeout(() => {
+        playbackRecoveryTimer = null;
+        if (playbackIntent && video.paused && !video.ended) {
+          video.play().catch(() => {});
+        }
+      }, delay);
+    }
 
     function showControls(permanent) {
       controls.classList.add("controls-visible");
@@ -383,11 +416,11 @@
       switch (action) {
         case "toggle":
           if (video.paused) {
+            setPlaybackIntent(true);
             await video.play().catch(() => {});
-            root.querySelector("[data-player-native-playback-start]")?.click();
           } else {
+            setPlaybackIntent(false);
             video.pause();
-            root.querySelector("[data-player-native-playback-stop]")?.click();
           }
           break;
         case "back":
@@ -441,6 +474,8 @@
             }
           } catch (_) {}
           if (!pipChanged) {
+            beginPipTransition();
+            setPlaybackIntent(!video.paused && !video.ended);
             const portrait = video.videoHeight > video.videoWidth;
             const selector = portrait
               ? "[data-player-native-pip-portrait]"
@@ -674,18 +709,49 @@
     });
 
     listen(video, "play", () => {
+      setPlaybackIntent(true);
       updatePlaybackState();
       root.querySelector("[data-player-native-playback-start]")?.click();
     });
     listen(video, "pause", () => {
       updatePlaybackState();
-      if (document.visibilityState === "visible" || document.documentElement.dataset.androidPip === "true") {
-        root.querySelector("[data-player-native-playback-stop]")?.click();
+      if (scrubbing) return;
+      // Native PiP controls write their intent directly onto the media
+      // element before pausing. Read it first so an explicit PiP Pause is not
+      // immediately undone by lifecycle recovery.
+      if (video.__tawnyPlaybackIntent === false) playbackIntent = false;
+      if (playbackIntent) {
+        // Shaka can briefly pause the media element while recovering a range
+        // request or rebuilding a SourceBuffer. That is not a user Pause, so
+        // keep Android's audio session alive and let Shaka resume it. During an
+        // actual lifecycle edge, actively ask Chromium to resume as well.
+        if (pipTransition || document.visibilityState !== "visible") {
+          recoverIntendedPlayback(80);
+        }
+        return;
       }
+      root.querySelector("[data-player-native-playback-stop]")?.click();
     });
     listen(video, "ended", () => {
+      setPlaybackIntent(false);
       updatePlaybackState();
       root.querySelector("[data-player-native-playback-stop]")?.click();
+    });
+    listen(window, "tawnynativepiprequest", beginPipTransition);
+    listen(window, "tawnynativepictureinpicturechange", () => {
+      // Entering and leaving PiP can each pause the WebView after the native
+      // mode callback. Keep a short grace window around both edges.
+      beginPipTransition();
+      recoverIntendedPlayback(60);
+    });
+    listen(window, "tawnynativeplaybackresume", () => recoverIntendedPlayback(0));
+    listen(video, "enterpictureinpicture", () => {
+      beginPipTransition();
+      recoverIntendedPlayback(0);
+    });
+    listen(video, "leavepictureinpicture", () => {
+      beginPipTransition();
+      recoverIntendedPlayback(0);
     });
     listen(video, "durationchange", updateTimeline);
     listen(video, "durationchange", renderChapters);
@@ -718,6 +784,7 @@
     listen(video, "webkitendfullscreen", syncFullscreen);
 
     root.tabIndex = 0;
+    setPlaybackIntent(playbackIntent);
     updatePlaybackState();
     updateTimeline();
     updateSpeed();
@@ -737,6 +804,8 @@
         if (animationFrame) cancelAnimationFrame(animationFrame);
         if (hideTimer) clearTimeout(hideTimer);
         if (feedbackTimer) clearTimeout(feedbackTimer);
+        if (playbackRecoveryTimer) clearTimeout(playbackRecoveryTimer);
+        if (pipTransitionTimer) clearTimeout(pipTransitionTimer);
       },
     };
     controllers.set(video, controller);

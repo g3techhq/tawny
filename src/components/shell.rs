@@ -5,7 +5,7 @@ use dioxus_icons::lucide::{
 };
 #[cfg(target_os = "android")]
 use dx_native_plugins::NativePlugins;
-use dx_route_transitions::animated_navigate;
+use dx_route_transitions::{animated_go_back, animated_navigate};
 use g3_ui::{
     Body, Button, ButtonStyle, Header, Navbar, NavbarTab, NavbarTabBar, SegmentButton, SegmentGroup,
 };
@@ -130,7 +130,6 @@ fn navigate_to_auxiliary(from: &'static str, route: Route) {
 
 fn navigate_back_from_auxiliary(from: &'static str, fallback: Route) {
     let fallback_section = scroll_section(&fallback);
-    let navigator = navigator();
     spawn(async move {
         remember_section_scroll(from, false).await;
         let mut return_section = document::eval(
@@ -145,11 +144,7 @@ fn navigate_back_from_auxiliary(from: &'static str, fallback: Route) {
             .ok()
             .filter(|section| !section.is_empty())
             .unwrap_or_else(|| fallback_section.to_string());
-        if navigator.can_go_back() {
-            navigator.go_back();
-        } else {
-            animated_navigate(fallback).await;
-        }
+        animated_go_back(fallback).await;
         restore_section_scroll(&return_section).await;
     });
 }
@@ -162,7 +157,6 @@ fn navigate_back_from_auxiliary(from: &'static str, fallback: Route) {
 fn NativeBackCoordinator(route: Route) -> Element {
     let app_state = use_context::<AppState>();
     let mut plugins = use_context::<NativePlugins>();
-    let navigator = navigator();
     // This setter is idempotent. Updating it while rendering keeps the native
     // callback in lockstep with the visible route; a post-render effect leaves
     // a short window where Android still sees the previous page's Back state.
@@ -178,7 +172,6 @@ fn NativeBackCoordinator(route: Route) -> Element {
     }
 
     use_future(move || {
-        let navigator = navigator.clone();
         async move {
             let mut eval = document::eval(
                 r#"
@@ -229,11 +222,10 @@ fn NativeBackCoordinator(route: Route) -> Element {
                 "#,
             );
             while eval.recv::<bool>().await.is_ok() {
-                if navigator.can_go_back() {
-                    navigator.go_back();
-                } else {
-                    animated_navigate(Route::Feed {}).await;
-                }
+                // All non-player routes are base peers, so Feed selects the
+                // same fade for their history pop. The player is a cover and
+                // therefore selects its reverse uncover animation.
+                animated_go_back(Route::Feed {}).await;
                 let mut restore = document::eval(
                     r#"
                     const section = window.__tawnyPendingNativeBackScrollSection;
@@ -358,13 +350,8 @@ pub fn AppShell() -> Element {
                     // the page the user had just left. Falling back to a push
                     // covers arriving by deep link, where there is nothing to
                     // pop to.
-                    let navigator = navigator();
-                    if navigator.can_go_back() {
-                        navigator.go_back();
-                    } else {
-                        let home = back_destination(&back_route);
-                        spawn(async move { animated_navigate(home).await; });
-                    }
+                    let home = back_destination(&back_route);
+                    spawn(async move { animated_go_back(home).await; });
                 },
                 ChevronLeft { size: 22 }
             }

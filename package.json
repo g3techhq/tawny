@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Vendored browser transport runtime for Tawny's Dioxus player",
   "scripts": {
-    "test": "node --check assets/tawny_player_controls.js && node tests/tawny_transport.test.cjs"
+    "test": "node --check assets/tawny_player_controls.js && node --check assets/tawny_route_history.js && node tests/tawny_route_history.test.cjs && node tests/tawny_transport.test.cjs"
   },
   "dependencies": {
     "shaka-player": "4.16.4"

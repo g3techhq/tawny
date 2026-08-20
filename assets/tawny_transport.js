@@ -321,8 +321,11 @@
         bufferBehind: 30,
         safeSeekOffset: 1,
         stallEnabled: true,
-        stallThreshold: 1,
-        stallSkip: 0.1,
+        stallThreshold: 2,
+        // Let Chromium's media pipeline hold its audio clock during a stall.
+        // Shaka's usual 100 ms seek-forward recovery creates an audible pop
+        // each time a constrained Android decoder briefly falls behind.
+        stallSkip: 0,
       },
       abr: {
         enabled: true,

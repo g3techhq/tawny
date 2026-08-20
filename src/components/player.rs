@@ -764,6 +764,8 @@ fn toggle_picture_in_picture() {
                 }
             } catch (_) {}
             if (!changed) {
+                if (media) media.__tawnyPlaybackIntent = !media.paused && !media.ended;
+                window.dispatchEvent(new Event('tawnynativepiprequest'));
                 const portrait = media && media.videoHeight > media.videoWidth;
                 const selector = portrait
                     ? '#tawny-player [data-player-native-pip-portrait]'
