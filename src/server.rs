@@ -52,8 +52,10 @@ pub struct AppServerState {
     http: reqwest::Client,
     media_http: reqwest::Client,
     youtube: Arc<RustyPipe>,
-    /// Path to a `yt-dlp` binary used solely to obtain ungated stream URLs.
+    /// Path to a `yt-dlp` binary used solely to obtain playback stream URLs.
     ytdlp_bin: Option<std::path::PathBuf>,
+    /// Optional bgutil HTTP provider used by yt-dlp for video-bound PO tokens.
+    ytdlp_po_provider_url: Option<String>,
     public_url: String,
     websub_callback_url: Option<String>,
     websub_secret: String,
@@ -127,6 +129,33 @@ fn locate_ytdlp() -> Option<std::path::PathBuf> {
         .ok()
         .filter(|status| status.success())
         .map(|_| std::path::PathBuf::from(name))
+}
+
+fn configured_ytdlp_po_provider_url() -> Option<String> {
+    let configured = std::env::var("TAWNY_PO_TOKEN_PROVIDER_URL").ok()?;
+    let configured = configured.trim().trim_end_matches('/');
+    if configured.is_empty() {
+        return None;
+    }
+    let valid = reqwest::Url::parse(configured)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some());
+    if !valid {
+        eprintln!("ignoring TAWNY_PO_TOKEN_PROVIDER_URL: expected an absolute http(s) URL");
+        return None;
+    }
+    Some(configured.to_string())
+}
+
+fn ytdlp_po_provider_args(provider_url: Option<&str>) -> Vec<String> {
+    let Some(provider_url) = provider_url else {
+        return Vec::new();
+    };
+    vec![
+        "--extractor-args".into(),
+        format!("youtubepot-bgutilhttp:base_url={provider_url}"),
+        "--extractor-args".into(),
+        "youtube:player_client=mweb".into(),
+    ]
 }
 
 /// A stream URL yt-dlp extracted, keyed by itag.
@@ -531,6 +560,7 @@ impl AppServerState {
                 .build()?,
             youtube: Arc::new(youtube),
             ytdlp_bin: locate_ytdlp(),
+            ytdlp_po_provider_url: configured_ytdlp_po_provider_url(),
             public_url,
             websub_callback_url,
             websub_secret,
@@ -946,15 +976,13 @@ impl AppServerState {
             .collect()
     }
 
-    /// Ungated stream URLs from yt-dlp, keyed by itag.
+    /// Stream URLs from yt-dlp, keyed by itag.
     ///
-    /// rustypipe can only reach the iOS client, whose googlevideo URLs YouTube
-    /// gates: they serve roughly 6 MiB and then answer 403, which reaches the
-    /// viewer as playback dying about a minute in. yt-dlp uses the `android_vr`
-    /// client, whose URLs carry no such gate — verified on 2026-08-13 by
-    /// draining the identical itag (same `filesize`) to completion through
-    /// yt-dlp while the iOS URL 403'd at 6 MiB on the same unthrottled
-    /// connection.
+    /// YouTube increasingly gates every client behind a video-bound GVS PO
+    /// token. When `TAWNY_PO_TOKEN_PROVIDER_URL` is configured, yt-dlp uses its
+    /// bgutil HTTP provider with the mweb client so those URLs remain valid for
+    /// the full media object. Without a provider we keep yt-dlp's own default
+    /// client selection as a best-effort fallback.
     ///
     /// Only the URL is taken. The byte ranges, codecs, and sizes still come
     /// from rustypipe, which is sound because an itag identifies one specific
@@ -966,17 +994,19 @@ impl AppServerState {
         let Some(binary) = self.ytdlp_bin.as_ref() else {
             return Vec::new();
         };
-        let output = tokio::process::Command::new(binary)
-            .args([
-                "-J",
-                "--no-warnings",
-                "--no-playlist",
-                "--socket-timeout",
-                "15",
-                &format!("https://www.youtube.com/watch?v={video_id}"),
-            ])
-            .stdin(std::process::Stdio::null())
-            .output();
+        let mut command = tokio::process::Command::new(binary);
+        command.args([
+            "-J",
+            "--no-warnings",
+            "--no-playlist",
+            "--socket-timeout",
+            "15",
+        ]);
+        command.args(ytdlp_po_provider_args(
+            self.ytdlp_po_provider_url.as_deref(),
+        ));
+        command.arg(format!("https://www.youtube.com/watch?v={video_id}"));
+        let output = command.stdin(std::process::Stdio::null()).output();
         let output = match tokio::time::timeout(Duration::from_secs(30), output).await {
             Ok(Ok(output)) if output.status.success() => output,
             Ok(Ok(output)) => {
@@ -3943,7 +3973,7 @@ mod tests {
         AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters,
         mp4_segment_ranges, parse_youtube_feed, playback_proxy_options, reconciliation_limit,
         segment_ranges, sniff_media_type, url_path_ends_with, video_published_epoch,
-        webm_segment_ranges, websub_channel_from_topic,
+        webm_segment_ranges, websub_channel_from_topic, ytdlp_po_provider_args,
     };
     use crate::models::PlaybackProtocol;
 
@@ -3989,6 +4019,20 @@ mod tests {
         assert_eq!(reconciliation_limit(700, true), 48);
         assert_eq!(reconciliation_limit(700, false), 700);
         assert_eq!(reconciliation_limit(12, true), 12);
+    }
+
+    #[test]
+    fn configures_ytdlp_for_video_bound_po_tokens() {
+        assert!(ytdlp_po_provider_args(None).is_empty());
+        assert_eq!(
+            ytdlp_po_provider_args(Some("http://127.0.0.1:4416")),
+            vec![
+                "--extractor-args",
+                "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
+                "--extractor-args",
+                "youtube:player_client=mweb",
+            ]
+        );
     }
 
     #[test]

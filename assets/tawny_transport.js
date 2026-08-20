@@ -169,6 +169,15 @@
     return `${type.mime.toLowerCase()}|${codecFamily(track)}`;
   }
 
+  function audioAdaptationKey(track) {
+    const type = splitMime(track.mime_type);
+    // AAC-LC (mp4a.40.2) and HE-AAC (mp4a.40.5) share a family name but not a
+    // decoder configuration. Advertising them as interchangeable lets ABR
+    // bounce between the two, rebuilding Android's audio decoder and producing
+    // the exact pops/glitches heard at segment boundaries.
+    return `${type.mime.toLowerCase()}|${type.codecs.toLowerCase()}`;
+  }
+
   function groupTracks(tracks, keyForTrack) {
     const groups = new Map();
     for (const track of tracks) {
@@ -179,10 +188,29 @@
     return Array.from(groups.values());
   }
 
+  function compatibleAudioTracks(tracks) {
+    const identity = (track) => `${track.language || "und"}|${track.label || ""}`;
+    const aacLc = new Set(
+      tracks
+        .filter((track) => splitMime(track.mime_type).codecs.toLowerCase() === "mp4a.40.2")
+        .map(identity),
+    );
+    // Do not create Shaka variants for HE-AAC when the same language has an
+    // AAC-LC stream. Shaka may move between AdaptationSets while recovering a
+    // request, so grouping alone cannot prevent Android from alternating the
+    // incompatible decoder profiles.
+    return tracks.filter((track) => {
+      const codec = splitMime(track.mime_type).codecs.toLowerCase();
+      return codec !== "mp4a.40.5" || !aacLc.has(identity(track));
+    });
+  }
+
   function generatedDash(source) {
     const tracks = source.tracks || [];
     const videos = tracks.filter((track) => track.kind === "Video");
-    const audios = tracks.filter((track) => track.kind === "Audio");
+    const audios = compatibleAudioTracks(
+      tracks.filter((track) => track.kind === "Audio"),
+    );
     if (!videos.length || !audios.length) {
       throw new Error("Adaptive playback needs both video and audio tracks");
     }
@@ -211,7 +239,7 @@
 
     const audioGroups = groupTracks(audios, (track) => {
       const identity = `${track.language || "und"}|${track.label || ""}`;
-      return `${identity}|${adaptationKey(track)}`;
+      return `${identity}|${audioAdaptationKey(track)}`;
     });
     const audioXml = audioGroups
       .map((group, groupIndex) => {

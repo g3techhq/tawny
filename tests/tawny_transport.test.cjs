@@ -80,14 +80,22 @@ const mixedManifest = window.TawnyTransport.buildDashManifest({
       mime_type: 'audio/webm; codecs="opus"',
       bitrate: 96_000,
     },
+    {
+      ...source.tracks[1],
+      url: "http://localhost/audio-he-aac",
+      mime_type: 'audio/mp4; codecs="mp4a.40.5"',
+      bitrate: 48_000,
+    },
   ],
 });
 assert.equal((mixedManifest.match(/contentType="video"/g) || []).length, 2);
 assert.equal((mixedManifest.match(/contentType="audio"/g) || []).length, 2);
+assert.doesNotMatch(mixedManifest, /mp4a\.40\.5/);
 const adaptationSets = mixedManifest.match(/<AdaptationSet[^>]*>.*?<\/AdaptationSet>/g);
 for (const adaptationSet of adaptationSets) {
   assert.ok(!(adaptationSet.includes("avc1") && adaptationSet.includes("vp09")));
   assert.ok(!(adaptationSet.includes("mp4a") && adaptationSet.includes("opus")));
+  assert.ok(!(adaptationSet.includes("mp4a.40.2") && adaptationSet.includes("mp4a.40.5")));
 }
 
 assert.throws(
