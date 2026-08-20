@@ -393,9 +393,12 @@
         case "back":
           if (fullscreenElement()) {
             await Promise.resolve(toggleFullscreen(root)).catch(() => {});
-          } else {
-            root.querySelector("[data-player-minimize]")?.click();
+            // Let Android finish its fullscreen/orientation transition before
+            // navigating the player sheet away. Doing both in the same frame
+            // can make the system restore the just-removed fullscreen view.
+            await new Promise((resolve) => requestAnimationFrame(resolve));
           }
+          root.querySelector("[data-player-minimize]")?.click();
           break;
         case "rewind":
           seekBy(-10);
@@ -437,7 +440,13 @@
               pipChanged = true;
             }
           } catch (_) {}
-          if (!pipChanged) root.querySelector("[data-player-native-pip]")?.click();
+          if (!pipChanged) {
+            const portrait = video.videoHeight > video.videoWidth;
+            const selector = portrait
+              ? "[data-player-native-pip-portrait]"
+              : "[data-player-native-pip-landscape]";
+            root.querySelector(selector)?.click();
+          }
           break;
         case "fullscreen":
           await Promise.resolve(toggleFullscreen(root)).catch(() => {});
@@ -670,7 +679,7 @@
     });
     listen(video, "pause", () => {
       updatePlaybackState();
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === "visible" || document.documentElement.dataset.androidPip === "true") {
         root.querySelector("[data-player-native-playback-stop]")?.click();
       }
     });

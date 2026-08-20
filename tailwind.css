@@ -231,11 +231,27 @@ textarea {
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
 }
 
-.group-filter:hover,
 .group-filter.active {
   border-color: color-mix(in srgb, var(--color-focused) 58%, var(--color-card-border));
   background: var(--tawny-amber-soft);
   color: var(--color-text);
+}
+
+/* Touch browsers keep :hover latched after a tap. Keeping hover inside this
+   capability query lets a duration chip visibly clear when it is tapped a
+   second time without taking hover feedback away from mouse users. */
+@media (hover: hover) {
+  .group-filter:hover {
+    border-color: color-mix(in srgb, var(--color-focused) 58%, var(--color-card-border));
+    background: var(--tawny-amber-soft);
+    color: var(--color-text);
+  }
+}
+
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  margin: 1.25rem 0 0.35rem;
 }
 
 .feed-count {
@@ -2745,8 +2761,20 @@ textarea {
     display: none;
   }
 
-  .tawny-shell-cover > .g3-body {
+  .tawny-shell-auxiliary > .g3-navbar-tab-bar {
+    display: none;
+  }
+
+  .tawny-shell-cover > .g3-body,
+  .tawny-shell-auxiliary > .g3-body {
     padding-bottom: 0;
+  }
+
+  /* History, Queue, and Settings are launched from header actions rather than
+     from a tab. With their unselected tab bar removed, the mini player owns
+     the bottom edge instead of leaving a blank navigation-sized gap. */
+  .tawny-shell-auxiliary .persistent-player.mini {
+    bottom: env(safe-area-inset-bottom);
   }
 }
 
@@ -2890,6 +2918,74 @@ html[data-route-transition="uncover-down"] .route-transition-base {
 
 html[data-android-app="true"] .tawny-header {
   padding-top: var(--android-status-bar-inset, 0px);
+}
+
+/* Android supplies PiP chrome and native RemoteActions. Strip the WebView down
+   to the media itself while the Activity is pinned: the ordinary controls are
+   too small to receive input there and were also shifting the 16:9 image away
+   from the center of its system window. */
+html[data-android-pip="true"],
+html[data-android-pip="true"] body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+html[data-android-pip="true"] .tawny-shell {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+
+html[data-android-pip="true"] .tawny-shell > .g3-header,
+html[data-android-pip="true"] .tawny-shell > .g3-navbar-tab-bar,
+html[data-android-pip="true"] .g3-body-content > :not(.persistent-player),
+html[data-android-pip="true"] .mini-player-copy,
+html[data-android-pip="true"] .mini-player-close,
+html[data-android-pip="true"] .tawny-player-controls,
+html[data-android-pip="true"] .player-buffering-indicator,
+html[data-android-pip="true"] .player-seek-feedback {
+  display: none !important;
+}
+
+html[data-android-pip="true"] .tawny-shell > .g3-body,
+html[data-android-pip="true"] .g3-body-content {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  padding: 0 !important;
+}
+
+html[data-android-pip="true"] .persistent-player,
+html[data-android-pip="true"] .persistent-player > section,
+html[data-android-pip="true"] .persistent-player-stage {
+  position: fixed !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  aspect-ratio: auto !important;
+  box-shadow: none !important;
+}
+
+html[data-android-pip="true"] .persistent-player-stage video,
+html[data-android-pip="true"] .persistent-player-stage iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: none !important;
+  object-fit: contain;
 }
 
 .tawny-header .g3-header-row {

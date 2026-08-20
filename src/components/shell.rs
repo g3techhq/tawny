@@ -62,6 +62,98 @@ fn section_label(route: &Route) -> &'static str {
     }
 }
 
+fn scroll_section(route: &Route) -> &'static str {
+    match route {
+        Route::Playlists {} | Route::PlaylistDetail { .. } => "playlists",
+        Route::Explore {} => "search",
+        Route::Subscriptions {} | Route::ChannelDetail { .. } => "subscriptions",
+        Route::SettingsPage {} => "settings",
+        Route::QueuePage {} => "queue",
+        Route::HistoryPage {} => "history",
+        Route::VideoDetail { .. } => "player",
+        _ => "feed",
+    }
+}
+
+async fn remember_section_scroll(section: &'static str, remember_return: bool) {
+    let section = serde_json::to_string(section).unwrap_or_else(|_| "\"feed\"".into());
+    let remember_script = format!(
+        r#"
+        const scroller = document.querySelector('.g3-body-content');
+        window.__tawnySectionScrollPositions ||= {{}};
+        if (scroller) window.__tawnySectionScrollPositions[{section}] = scroller.scrollTop;
+        if ({remember_return}) {{
+            window.__tawnyAuxiliaryReturnSections ||= [];
+            window.__tawnyAuxiliaryReturnSections.push({section});
+        }}
+        dioxus.send(true);
+        "#
+    );
+    let mut remember = document::eval(&remember_script);
+    let _ = remember.recv::<bool>().await;
+}
+
+async fn restore_section_scroll(section: &str) {
+    let section = serde_json::to_string(section).unwrap_or_else(|_| "\"feed\"".into());
+    let restore_script = format!(
+        r#"
+        const scroller = document.querySelector('.g3-body-content');
+        const top = window.__tawnySectionScrollPositions?.[{section}] ?? 0;
+        const restore = () => scroller?.scrollTo({{ top, left: 0, behavior: 'instant' }});
+        requestAnimationFrame(() => requestAnimationFrame(restore));
+        dioxus.send(true);
+        "#
+    );
+    let mut restore = document::eval(&restore_script);
+    let _ = restore.recv::<bool>().await;
+}
+
+/// Bottom tabs are independent scroll surfaces even though g3_ui deliberately
+/// reuses one body scroller. Remember the surface we are leaving and restore
+/// the destination after its route transition has installed the new content.
+fn navigate_with_scroll(from: &'static str, route: Route, remember_return: bool) {
+    let to = scroll_section(&route);
+    spawn(async move {
+        remember_section_scroll(from, remember_return).await;
+        animated_navigate(route).await;
+        restore_section_scroll(to).await;
+    });
+}
+
+fn navigate_to_section(from: &'static str, route: Route) {
+    navigate_with_scroll(from, route, false);
+}
+
+fn navigate_to_auxiliary(from: &'static str, route: Route) {
+    navigate_with_scroll(from, route, true);
+}
+
+fn navigate_back_from_auxiliary(from: &'static str, fallback: Route) {
+    let fallback_section = scroll_section(&fallback);
+    let navigator = navigator();
+    spawn(async move {
+        remember_section_scroll(from, false).await;
+        let mut return_section = document::eval(
+            r#"
+            const sections = window.__tawnyAuxiliaryReturnSections || [];
+            dioxus.send(sections.pop() || '');
+            "#,
+        );
+        let return_section = return_section
+            .recv::<String>()
+            .await
+            .ok()
+            .filter(|section| !section.is_empty())
+            .unwrap_or_else(|| fallback_section.to_string());
+        if navigator.can_go_back() {
+            navigator.go_back();
+        } else {
+            animated_navigate(fallback).await;
+        }
+        restore_section_scroll(&return_section).await;
+    });
+}
+
 /// Connect Android's Activity-level Back callback to the Dioxus router. The
 /// native plugin deliberately starts disabled so Back can still leave the app
 /// on the root feed.
@@ -100,6 +192,8 @@ fn NativeBackCoordinator(route: Route) -> Element {
                         if (exit) {
                             try { await exit.call(document); } catch (_) {}
                         }
+                        await new Promise((resolve) => requestAnimationFrame(resolve));
+                        document.querySelector('[data-player-minimize]')?.click();
                         setTimeout(() => { window.__tawnyFullscreenBackPending = false; }, 350);
                         return;
                     }
@@ -118,6 +212,18 @@ fn NativeBackCoordinator(route: Route) -> Element {
                         modal.click();
                         return;
                     }
+                    const auxiliary = document.querySelector('.tawny-shell-auxiliary');
+                    if (auxiliary) {
+                        const title = (document.querySelector('.g3-header-title-text')?.textContent || '')
+                            .trim()
+                            .toLowerCase();
+                        const section = ['settings', 'queue', 'history'].includes(title) ? title : 'feed';
+                        const scroller = document.querySelector('.g3-body-content');
+                        window.__tawnySectionScrollPositions ||= {};
+                        if (scroller) window.__tawnySectionScrollPositions[section] = scroller.scrollTop;
+                        const returns = window.__tawnyAuxiliaryReturnSections || [];
+                        window.__tawnyPendingNativeBackScrollSection = returns.pop() || 'feed';
+                    }
                     dioxus.send(true);
                 });
                 "#,
@@ -128,6 +234,21 @@ fn NativeBackCoordinator(route: Route) -> Element {
                 } else {
                     animated_navigate(Route::Feed {}).await;
                 }
+                let mut restore = document::eval(
+                    r#"
+                    const section = window.__tawnyPendingNativeBackScrollSection;
+                    delete window.__tawnyPendingNativeBackScrollSection;
+                    if (section) {
+                        const scroller = document.querySelector('.g3-body-content');
+                        const top = window.__tawnySectionScrollPositions?.[section] ?? 0;
+                        requestAnimationFrame(() => requestAnimationFrame(() => {
+                            scroller?.scrollTo({ top, left: 0, behavior: 'instant' });
+                        }));
+                    }
+                    dioxus.send(true);
+                    "#,
+                );
+                let _ = restore.recv::<bool>().await;
             }
         }
     });
@@ -164,6 +285,10 @@ pub fn AppShell() -> Element {
 
     let player_expanded = matches!(route, Route::VideoDetail { .. });
     let has_mini_player = app_state.active_video().is_some() && !player_expanded;
+    let is_auxiliary = matches!(
+        route,
+        Route::SettingsPage {} | Route::QueuePage {} | Route::HistoryPage {}
+    );
     let detail = detail_title(&route, app_state);
     let is_detail = detail.is_some();
     let title = detail.unwrap_or_default();
@@ -173,6 +298,17 @@ pub fn AppShell() -> Element {
     // that keep the nav exactly where it is.
     let is_cover = player_expanded;
     let back_route = route.clone();
+    let current_scroll_section = scroll_section(&route);
+    let mut shell_class = "tawny-shell route-transition-base".to_string();
+    if is_cover {
+        shell_class.push_str(" tawny-shell-cover");
+    }
+    if has_mini_player {
+        shell_class.push_str(" has-mini-player");
+    }
+    if is_auxiliary {
+        shell_class.push_str(" tawny-shell-auxiliary");
+    }
 
     // Only the two browsing surfaces carry a segmented control.
     let toolbar = match route {
@@ -209,6 +345,13 @@ pub fn AppShell() -> Element {
                 aria_label: "Back".to_string(),
                 class: "icon-button",
                 onclick: move |_| {
+                    if is_auxiliary {
+                        navigate_back_from_auxiliary(
+                            current_scroll_section,
+                            back_destination(&back_route),
+                        );
+                        return;
+                    }
                     // Popping keeps the two back affordances agreeing. Pushing
                     // the parent instead left the detail page ahead in history,
                     // so the browser's back button walked straight back into
@@ -242,11 +385,7 @@ pub fn AppShell() -> Element {
         // ancestor's snapshot, so an outer cover would capture everything
         // except the content — an empty background sliding around.
         NativeBackCoordinator { route: route.clone() }
-        Navbar { class: match (is_cover, has_mini_player) {
-                (true, _) => "tawny-shell tawny-shell-cover route-transition-base",
-                (false, true) => "tawny-shell has-mini-player route-transition-base",
-                (false, false) => "tawny-shell route-transition-base",
-            },
+        Navbar { class: shell_class,
             // No top bar on the player: minimize, back, and swipe-down all
             // leave the screen, so a bar would only steal height from the video.
             if !player_expanded {
@@ -261,7 +400,7 @@ pub fn AppShell() -> Element {
                                     style: ButtonStyle::Clear,
                                     aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
                                     class: "icon-button",
-                                    onclick: move |_| { spawn(async move { animated_navigate(Route::QueuePage {}).await; }); },
+                                    onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::QueuePage {}),
                                     ListVideo { size: 19 }
                                 }
                             }
@@ -270,7 +409,7 @@ pub fn AppShell() -> Element {
                                     style: ButtonStyle::Clear,
                                     aria_label: "History".to_string(),
                                     class: "icon-button header-history-button",
-                                    onclick: move |_| { spawn(async move { animated_navigate(Route::HistoryPage {}).await; }); },
+                                    onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::HistoryPage {}),
                                     History { size: 19 }
                                 }
                             }
@@ -279,7 +418,7 @@ pub fn AppShell() -> Element {
                                     style: ButtonStyle::Clear,
                                     aria_label: "Settings".to_string(),
                                     class: "icon-button",
-                                    onclick: move |_| { spawn(async move { animated_navigate(Route::SettingsPage {}).await; }); },
+                                    onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::SettingsPage {}),
                                     Settings { size: 20 }
                                 }
                             }
@@ -300,25 +439,25 @@ pub fn AppShell() -> Element {
                         label: "Feed".to_string(),
                         selected: matches!(route, Route::Feed {}),
                         icon: rsx! { House { size: 20 } },
-                        onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
+                        onclick: move |_| navigate_to_section(current_scroll_section, Route::Feed {}),
                     }
                     NavbarTab {
                         label: "Playlists".to_string(),
                         selected: matches!(route, Route::Playlists {} | Route::PlaylistDetail { .. }),
                         icon: rsx! { ListIcon { size: 20 } },
-                        onclick: move |_| { spawn(async move { animated_navigate(Route::Playlists {}).await; }); },
+                        onclick: move |_| navigate_to_section(current_scroll_section, Route::Playlists {}),
                     }
                     NavbarTab {
                         label: "Search".to_string(),
                         selected: matches!(route, Route::Explore {}),
                         icon: rsx! { Search { size: 20 } },
-                        onclick: move |_| { spawn(async move { animated_navigate(Route::Explore {}).await; }); },
+                        onclick: move |_| navigate_to_section(current_scroll_section, Route::Explore {}),
                     }
                     NavbarTab {
                         label: "Subscriptions".to_string(),
                         selected: matches!(route, Route::Subscriptions {} | Route::ChannelDetail { .. }),
                         icon: rsx! { Users { size: 20 } },
-                        onclick: move |_| { spawn(async move { animated_navigate(Route::Subscriptions {}).await; }); },
+                        onclick: move |_| navigate_to_section(current_scroll_section, Route::Subscriptions {}),
                     }
             }
         }

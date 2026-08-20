@@ -96,14 +96,18 @@ fn sync_player_metadata(
 
 #[cfg(target_os = "android")]
 #[component]
-fn NativePlayerBridges(title: String, portrait: bool) -> Element {
+fn NativePlayerBridges(title: String) -> Element {
     let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
-    let (pip_width, pip_height) = if portrait { (9, 16) } else { (16, 9) };
     rsx! {
         button {
             r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
-            "data-player-native-pip": "",
-            onclick: move |_| { let _ = plugins.media.write().enter_picture_in_picture(pip_width, pip_height); },
+            "data-player-native-pip-landscape": "",
+            onclick: move |_| { let _ = plugins.media.write().enter_picture_in_picture(16, 9); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-pip-portrait": "",
+            onclick: move |_| { let _ = plugins.media.write().enter_picture_in_picture(9, 16); },
         }
         button {
             r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
@@ -130,8 +134,8 @@ fn NativePlayerBridges(title: String, portrait: bool) -> Element {
 
 #[cfg(not(target_os = "android"))]
 #[component]
-fn NativePlayerBridges(title: String, portrait: bool) -> Element {
-    let _ = (title, portrait);
+fn NativePlayerBridges(title: String) -> Element {
+    let _ = title;
     rsx! {}
 }
 
@@ -585,7 +589,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     "data-player-chapters-open": "",
                                     onclick: move |_| chapters_sheet.set(true),
                                 }
-                                NativePlayerBridges { title: playback_title.clone(), portrait: is_short }
+                                NativePlayerBridges { title: playback_title.clone() }
                                 button {
                                     r#type: "button",
                                     class: "player-caption-state-bridge",
@@ -760,8 +764,12 @@ fn toggle_picture_in_picture() {
                 }
             } catch (_) {}
             if (!changed) {
-                document.querySelector('#tawny-player [data-player-native-pip]')?.click();
-                changed = Boolean(document.querySelector('#tawny-player [data-player-native-pip]'));
+                const portrait = media && media.videoHeight > media.videoWidth;
+                const selector = portrait
+                    ? '#tawny-player [data-player-native-pip-portrait]'
+                    : '#tawny-player [data-player-native-pip-landscape]';
+                document.querySelector(selector)?.click();
+                changed = Boolean(document.querySelector(selector));
             }
             dioxus.send(changed);
         "#;

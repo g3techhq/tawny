@@ -51,7 +51,7 @@ pub fn SettingsPage() -> Element {
     let shorts_medium_seconds = use_signal(|| settings.shorts_medium_max_seconds.to_string());
 
     rsx! {
-        div { class: "settings-page",
+        div { class: "page settings-page",
                 main { class: "settings-content",
                     section { class: "settings-section",
                         span { class: "section-kicker", "GESTURES" }

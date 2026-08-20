@@ -112,6 +112,7 @@ pub fn Feed() -> Element {
             nav { class: "group-filter-row", aria_label: "Subscription groups",
                 for duration in DurationFilter::ALL {
                     button {
+                        key: "{duration.label()}",
                         class: if selected_duration() == Some(duration) { "group-filter duration-filter active" } else { "group-filter duration-filter" },
                         aria_pressed: (selected_duration() == Some(duration)).to_string(),
                         onclick: move |_| {
