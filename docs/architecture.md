@@ -6,6 +6,8 @@
 YouTube Innertube/RSS ──► source normalization
           │                       │
 YouTube WebSub ──────────► SurrealDB/RocksDB ◄──── library sync
+          │                       │
+          └──► yt-dlp sidecar ◄── PO-token provider
                                   │
                            Dioxus server functions
                                   │
@@ -14,7 +16,7 @@ YouTube WebSub ──────────► SurrealDB/RocksDB ◄───�
                        playback proxy/embed fallback
 ```
 
-Tawny is self-contained. The Dioxus server does everything a Piped backend would do — search, feeds, channels, video details, comments, captions, and stream resolution — by extracting from YouTube directly. There is no external companion service to deploy, and no Piped or third-party instance is contacted.
+Tawny is self-contained as a Compose project. The Dioxus server handles the Piped-like application work while two deployment-local sidecars isolate yt-dlp and PO-token churn from the Rust process. SurrealDB, the provider, the yt-dlp API, and the production Tawny image are defined together; no public Piped or third-party instance is contacted.
 
 The client owns interaction state, watch progress, swipe destinations, and an immediately available cached snapshot. The server owns subscription polling and the canonical multi-device data model. Playback resolution is isolated behind its own module because YouTube delivery behavior changes independently from feed and library behavior.
 
@@ -33,7 +35,7 @@ Local storage is appropriate for the initial bounded feed. Before offline downlo
 
 ## Server and SurrealDB
 
-When `SURREALDB_HOST` is absent, the server opens an embedded SurrealDB RocksDB database beneath the platform data directory (overridable with `TAWNY_DATA_DIR`). `mem://` remains available explicitly for tests or disposable sessions. The schema models:
+Compose points the server at a dedicated SurrealDB container backed by a named RocksDB volume. Outside Compose, an absent `SURREALDB_HOST` still opens embedded RocksDB beneath the platform data directory (overridable with `TAWNY_DATA_DIR`), and `mem://` remains available explicitly for tests or disposable sessions. The schema models:
 
 - channels and videos;
 - users and subscription relations;
@@ -59,11 +61,11 @@ Results are normalized into the models in `models.rs` and deduplicated before ca
 
 ## Playback model
 
-`playback_session` resolves streams in-process and returns a `PlaybackSession` (see `models.rs`) over the server function boundary. Nothing external is contacted for resolution.
+`playback_session` orchestrates direct extraction and returns a `PlaybackSession` (see `models.rs`) over the server function boundary. Stable application models remain inside Tawny; the volatile yt-dlp executable, JavaScript runtime, and provider plugin live behind a small private HTTP sidecar.
 
-A `PlaybackSource` carries a `protocol` of `Sabr`, `Hls`, `Dash`, `Progressive`, or `EmbedFallback`. Adaptive sources carry a `tracks` list holding at least one indexed `Video` and one indexed `Audio` representation, and normally every available quality so the client can select automatically. Each track keeps its codec, bitrate, duration, resolution, and DASH initialization/index byte ranges; range ends are inclusive. PO tokens are obtained per video when `rustypipe-botguard` is configured. Playback sources and PO tokens are deliberately kept out of the persistent cache because they are short-lived and request-bound.
+A `PlaybackSource` carries a `protocol` of `Sabr`, `Hls`, `Dash`, `Progressive`, or `EmbedFallback`. Adaptive sources carry a `tracks` list holding at least one indexed `Video` and one indexed `Audio` representation, and normally every available quality so the client can select automatically. Each track keeps its codec, bitrate, duration, resolution, and DASH initialization/index byte ranges; range ends are inclusive. The yt-dlp sidecar obtains a video-bound token from the bgutil provider; legacy direct extraction can additionally use `rustypipe-botguard`. Playback sources and PO tokens are deliberately kept out of the persistent cache because they are short-lived and request-bound.
 
-Stream URLs come from `yt-dlp` when it is available (`TAWNY_YTDLP_BIN`, else `yt-dlp` on PATH), joined to the extractor's stream layout by itag. This split exists because stream layout and usable URLs fail independently. Current YouTube GVS URLs can require a video-bound PO token and otherwise return 403 after an initially successful extraction. When `TAWNY_PO_TOKEN_PROVIDER_URL` is configured and its `/ping` endpoint is healthy, Tawny invokes yt-dlp's bgutil provider with the mweb client. When it is unavailable, yt-dlp's default client remains the best-effort fallback. Byte ranges, codecs, languages, and sizes still come from the extractor — an itag identifies one specific transcode, so different clients hand out different URLs for the same file. Sizes are compared per itag and a mismatch keeps the extractor's URL rather than pointing ranges at the wrong bytes.
+Stream URLs come from the Compose-managed yt-dlp service, joined to the extractor's stream layout by itag. The sidecar checks its adjacent bgutil provider before invoking the token-backed mweb client and also owns the fallback used to enumerate channel Shorts. This split exists because stream layout and usable URLs fail independently. Current YouTube GVS URLs can require a video-bound PO token and otherwise return 403 after an initially successful extraction. Byte ranges, codecs, languages, and sizes still come from the extractor — an itag identifies one specific transcode, so different clients hand out different URLs for the same file. Sizes are compared per itag and a mismatch keeps the extractor's URL rather than pointing ranges at the wrong bytes. Direct host execution remains a legacy fallback only when `TAWNY_YTDLP_SERVICE_URL` is absent.
 
 Source order is direct YouTube player extraction ranked by `playback_source_priority` — adaptive track sets first, then HLS, progressive, and plain manifests. The privacy-enhanced YouTube embed is **not** an automatic fallback: when every direct source fails, the player surfaces the transport's own error with a retry action, and the embed is offered only as an explicit user choice.
 

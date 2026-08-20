@@ -30,6 +30,7 @@ fn main() {
         server::spawn_subscription_poller(state.clone());
 
         Ok(dioxus::server::router(App)
+            .route("/api/v1/health", get(server::health))
             .route(
                 "/api/v1/playback/proxy/{token}",
                 get(server::playback_proxy).options(server::playback_proxy_options),

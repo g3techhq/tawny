@@ -1,0 +1,36 @@
+//! Style constants for List and Item components.
+#![allow(dead_code)]
+
+pub const LIST: &str = "g3-list";
+pub const LIST_IOS: &str = "g3-list-ios";
+pub const LIST_MD: &str = "g3-list-md";
+pub const LIST_INSET: &str = "g3-list-inset";
+
+pub const ITEM_ROW: &str = "g3-item-row";
+pub const ITEM: &str = "g3-item";
+pub const ITEM_IOS: &str = "g3-item-ios";
+pub const ITEM_MD: &str = "g3-item-md";
+pub const ITEM_BUTTON: &str = "g3-item-button";
+pub const ITEM_SELECTED: &str = "g3-item-selected";
+pub const ITEM_DISABLED: &str = "g3-item-disabled";
+pub const ITEM_LINES_FULL: &str = "g3-item-lines-full";
+pub const ITEM_LINES_INSET: &str = "g3-item-lines-inset";
+pub const ITEM_LINES_NONE: &str = "g3-item-lines-none";
+pub const ITEM_START: &str = "g3-item-start";
+pub const ITEM_MAIN: &str = "g3-item-main";
+pub const ITEM_OVERLINE: &str = "g3-item-overline";
+pub const ITEM_LABEL: &str = "g3-item-label";
+pub const ITEM_DESCRIPTION: &str = "g3-item-description";
+pub const ITEM_METADATA: &str = "g3-item-metadata";
+pub const ITEM_END: &str = "g3-item-end";
+pub const ITEM_DETAIL: &str = "g3-item-detail";
+pub const ITEM_DIVIDER: &str = "g3-item-divider";
+
+pub const SWIPE_ITEM: &str = "g3-swipe-item";
+pub const SWIPE_ACTIONS: &str = "g3-swipe-actions";
+pub const SWIPE_ACTIONS_START: &str = "g3-swipe-actions-start";
+pub const SWIPE_ACTIONS_END: &str = "g3-swipe-actions-end";
+pub const SWIPE_CONTENT: &str = "g3-swipe-content";
+pub const SWIPE_ACTION: &str = "g3-swipe-action";
+pub const SWIPE_ACTION_DESTRUCTIVE: &str = "g3-swipe-action-destructive";
+pub const SWIPE_ACTION_ACCENT: &str = "g3-swipe-action-accent";

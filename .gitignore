@@ -3,6 +3,7 @@
 /node_modules
 /assets/tailwind.css
 /.tawny-cache
+/.tawny-data
 /.codex
 .env
 /rustypipe_reports

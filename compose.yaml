@@ -1,0 +1,119 @@
+name: tawny
+
+services:
+  surrealdb-init:
+    image: busybox:1.37
+    user: "0:0"
+    command: ["chown", "-R", "65532:65532", "/data"]
+    volumes:
+      - surrealdb-data:/data
+    restart: "no"
+
+  surrealdb:
+    image: surrealdb/surrealdb:v${SURREALDB_VERSION:-3.0.5}
+    mem_limit: ${SURREALDB_MEMORY_LIMIT:-2g}
+    command:
+      - start
+      - --log
+      - info
+      - --user
+      - ${SURREALDB_USER:-root}
+      - --pass
+      - ${SURREALDB_PASSWORD:-root}
+      - rocksdb:/data/tawny.db
+    working_dir: /data
+    ports:
+      - "127.0.0.1:${SURREALDB_PORT:-8001}:8000"
+    volumes:
+      - surrealdb-data:/data
+    depends_on:
+      surrealdb-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/surreal", "isready", "--endpoint", "http://127.0.0.1:8000"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+    restart: unless-stopped
+
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:${POT_PROVIDER_VERSION:-1.3.1}
+    init: true
+    ports:
+      - "127.0.0.1:${POT_PROVIDER_PORT:-4416}:4416"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4416/ping').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 4s
+      start_period: 10s
+      retries: 6
+    restart: unless-stopped
+
+  yt-dlp:
+    build:
+      context: ./docker/yt-dlp-service
+      args:
+        YTDLP_VERSION: ${YTDLP_VERSION:-2026.7.4}
+        POT_PROVIDER_VERSION: ${POT_PROVIDER_VERSION:-1.3.1}
+    environment:
+      PO_TOKEN_PROVIDER_URL: http://pot-provider:4416
+      MAX_CONCURRENT_EXTRACTIONS: ${YTDLP_CONCURRENCY:-2}
+    init: true
+    ports:
+      - "127.0.0.1:${YTDLP_SERVICE_PORT:-8090}:8080"
+    depends_on:
+      pot-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
+      interval: 10s
+      timeout: 4s
+      start_period: 10s
+      retries: 6
+    restart: unless-stopped
+
+  tawny:
+    profiles: ["production"]
+    init: true
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SURREALDB_HOST: ws://surrealdb:8000
+      SURREALDB_NAMESPACE: ${SURREALDB_NAMESPACE:-tawny}
+      SURREALDB_NAME: ${SURREALDB_NAME:-main}
+      SURREALDB_USER: ${SURREALDB_USER:-root}
+      SURREALDB_PASSWORD: ${SURREALDB_PASSWORD:-root}
+      TAWNY_DATA_DIR: /data
+      TAWNY_YTDLP_SERVICE_URL: http://yt-dlp:8080
+      TAWNY_PUBLIC_URL: ${TAWNY_PUBLIC_URL:-http://localhost:8080}
+      TAWNY_WEBSUB_CALLBACK_URL: ${TAWNY_WEBSUB_CALLBACK_URL:-}
+      TAWNY_WEBSUB_SECRET: ${TAWNY_WEBSUB_SECRET:-}
+    ports:
+      - "${TAWNY_PORT:-8080}:8080"
+    volumes:
+      - tawny-data:/data
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+      yt-dlp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 4s
+      start_period: 15s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  surrealdb-data:
+  tawny-data:

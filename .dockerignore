@@ -1,0 +1,16 @@
+.git
+.agents
+.cargo/config.toml
+.claude
+.codex
+.env
+.tawny-cache
+.tawny-data
+bg_snapshot.bin
+dist
+dx*.log
+node_modules
+rustypipe_cache.json
+rustypipe_reports
+target
+docker/yt-dlp-service/__pycache__

@@ -51,7 +51,11 @@ pub struct AppServerState {
     db: Arc<Surreal<Any>>,
     http: reqwest::Client,
     media_http: reqwest::Client,
+    ytdlp_http: reqwest::Client,
     youtube: Arc<RustyPipe>,
+    /// Optional containerized yt-dlp HTTP sidecar. When configured, Tawny does
+    /// not discover or execute a host yt-dlp binary.
+    ytdlp_service_url: Option<String>,
     /// Path to a `yt-dlp` binary used solely to obtain playback stream URLs.
     ytdlp_bin: Option<std::path::PathBuf>,
     /// Optional bgutil HTTP provider used by yt-dlp for video-bound PO tokens.
@@ -132,7 +136,15 @@ fn locate_ytdlp() -> Option<std::path::PathBuf> {
 }
 
 fn configured_ytdlp_po_provider_url() -> Option<String> {
-    let configured = std::env::var("TAWNY_PO_TOKEN_PROVIDER_URL").ok()?;
+    configured_http_url("TAWNY_PO_TOKEN_PROVIDER_URL")
+}
+
+fn configured_ytdlp_service_url() -> Option<String> {
+    configured_http_url("TAWNY_YTDLP_SERVICE_URL")
+}
+
+fn configured_http_url(variable: &str) -> Option<String> {
+    let configured = std::env::var(variable).ok()?;
     let configured = configured.trim().trim_end_matches('/');
     if configured.is_empty() {
         return None;
@@ -140,10 +152,26 @@ fn configured_ytdlp_po_provider_url() -> Option<String> {
     let valid = reqwest::Url::parse(configured)
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some());
     if !valid {
-        eprintln!("ignoring TAWNY_PO_TOKEN_PROVIDER_URL: expected an absolute http(s) URL");
+        eprintln!("ignoring {variable}: expected an absolute http(s) URL");
         return None;
     }
     Some(configured.to_string())
+}
+
+fn ytdlp_service_video_url(service_url: &str, video_id: &str) -> Option<reqwest::Url> {
+    let mut url = reqwest::Url::parse(service_url).ok()?;
+    url.path_segments_mut()
+        .ok()?
+        .extend(["v1", "videos", video_id]);
+    Some(url)
+}
+
+fn ytdlp_service_channel_shorts_url(service_url: &str, channel_id: &str) -> Option<reqwest::Url> {
+    let mut url = reqwest::Url::parse(service_url).ok()?;
+    url.path_segments_mut()
+        .ok()?
+        .extend(["v1", "channels", channel_id, "shorts"]);
+    Some(url)
 }
 
 fn ytdlp_po_provider_args(provider_url: Option<&str>) -> Vec<String> {
@@ -262,6 +290,17 @@ struct YtdlpDump {
     duration: Option<f64>,
 }
 
+fn formats_from_ytdlp_dump(mut dump: YtdlpDump) -> Vec<YtdlpFormat> {
+    let duration_ms = dump
+        .duration
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .map(|seconds| (seconds * 1000.0).round() as u64);
+    for format in &mut dump.formats {
+        format.duration_ms = duration_ms;
+    }
+    dump.formats
+}
+
 #[derive(Debug, Deserialize)]
 struct YtdlpFlatEntry {
     #[serde(default)]
@@ -277,6 +316,34 @@ struct YtdlpFlatEntry {
 struct YtdlpFlatPlaylist {
     #[serde(default)]
     entries: Vec<YtdlpFlatEntry>,
+}
+
+fn ytdlp_flat_playlist_videos(
+    dump: YtdlpFlatPlaylist,
+    channel_id: &str,
+    channel_name: &str,
+) -> Vec<Video> {
+    dump.entries
+        .into_iter()
+        .filter(|entry| !entry.id.is_empty())
+        .map(|entry| Video {
+            thumbnail_url: format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id),
+            id: entry.id,
+            title: entry.title.unwrap_or_default(),
+            channel_id: channel_id.to_string(),
+            channel_name: channel_name.to_string(),
+            published_at: String::new(),
+            duration_seconds: entry.duration.unwrap_or(0.0) as u64,
+            view_count: entry
+                .view_count
+                .map(|count| compact_count(count, " views"))
+                .unwrap_or_default(),
+            progress_seconds: 0,
+            watched: false,
+            is_live: false,
+            is_short: true,
+        })
+        .collect()
 }
 
 async fn youtube_call<T, E, F>(future: F, operation: &str) -> Result<T>
@@ -529,18 +596,24 @@ impl AppServerState {
                     .then(|| format!("{public_url}/api/v1/websub/youtube"))
             });
         let websub_secret_path = data_dir.join("websub-secret");
-        let websub_secret = std::env::var("TAWNY_WEBSUB_SECRET").unwrap_or_else(|_| {
-            std::fs::read_to_string(&websub_secret_path)
-                .ok()
-                .map(|secret| secret.trim().to_string())
-                .filter(|secret| !secret.is_empty())
-                .unwrap_or_else(|| {
-                    let secret = hex::encode(rand::random::<[u8; 32]>());
-                    let _ = std::fs::write(&websub_secret_path, &secret);
-                    secret
-                })
-        });
+        let websub_secret = std::env::var("TAWNY_WEBSUB_SECRET")
+            .ok()
+            .map(|secret| secret.trim().to_string())
+            .filter(|secret| !secret.is_empty())
+            .unwrap_or_else(|| {
+                std::fs::read_to_string(&websub_secret_path)
+                    .ok()
+                    .map(|secret| secret.trim().to_string())
+                    .filter(|secret| !secret.is_empty())
+                    .unwrap_or_else(|| {
+                        let secret = hex::encode(rand::random::<[u8; 32]>());
+                        let _ = std::fs::write(&websub_secret_path, &secret);
+                        secret
+                    })
+            });
 
+        let ytdlp_service_url = configured_ytdlp_service_url();
+        let ytdlp_bin = ytdlp_service_url.is_none().then(locate_ytdlp).flatten();
         let state = Self {
             db: Arc::new(db),
             http: reqwest::Client::builder()
@@ -558,8 +631,14 @@ impl AppServerState {
                 .connect_timeout(Duration::from_secs(10))
                 .read_timeout(Duration::from_secs(20))
                 .build()?,
+            ytdlp_http: reqwest::Client::builder()
+                .user_agent("Tawny/0.1 yt-dlp sidecar client")
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(40))
+                .build()?,
             youtube: Arc::new(youtube),
-            ytdlp_bin: locate_ytdlp(),
+            ytdlp_service_url,
+            ytdlp_bin,
             ytdlp_po_provider_url: configured_ytdlp_po_provider_url(),
             public_url,
             websub_callback_url,
@@ -954,6 +1033,29 @@ impl AppServerState {
     /// parses the same tab correctly, and it is already a dependency for
     /// playback URLs, so it fills the gap rather than leaving the tab empty.
     async fn ytdlp_channel_shorts(&self, channel_id: &str, channel_name: &str) -> Vec<Video> {
+        if let Some(service_url) = self.ytdlp_service_url.as_deref() {
+            let Some(url) = ytdlp_service_channel_shorts_url(service_url, channel_id) else {
+                return Vec::new();
+            };
+            let dump = match self.ytdlp_http.get(url).send().await {
+                Ok(response) if response.status().is_success() => response
+                    .json::<YtdlpFlatPlaylist>()
+                    .await
+                    .map_err(anyhow::Error::from),
+                Ok(response) => Err(anyhow!(
+                    "yt-dlp service returned {} for channel Shorts",
+                    response.status()
+                )),
+                Err(error) => Err(error.into()),
+            };
+            return match dump {
+                Ok(dump) => ytdlp_flat_playlist_videos(dump, channel_id, channel_name),
+                Err(error) => {
+                    eprintln!("yt-dlp service could not list Shorts for {channel_id}: {error}");
+                    Vec::new()
+                }
+            };
+        }
         let Some(binary) = self.ytdlp_bin.as_ref() else {
             return Vec::new();
         };
@@ -980,27 +1082,7 @@ impl AppServerState {
         let Ok(dump) = serde_json::from_slice::<YtdlpFlatPlaylist>(&output.stdout) else {
             return Vec::new();
         };
-        dump.entries
-            .into_iter()
-            .filter(|entry| !entry.id.is_empty())
-            .map(|entry| Video {
-                thumbnail_url: format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id),
-                id: entry.id,
-                title: entry.title.unwrap_or_default(),
-                channel_id: channel_id.to_string(),
-                channel_name: channel_name.to_string(),
-                published_at: String::new(),
-                duration_seconds: entry.duration.unwrap_or(0.0) as u64,
-                view_count: entry
-                    .view_count
-                    .map(|count| compact_count(count, " views"))
-                    .unwrap_or_default(),
-                progress_seconds: 0,
-                watched: false,
-                is_live: false,
-                is_short: true,
-            })
-            .collect()
+        ytdlp_flat_playlist_videos(dump, channel_id, channel_name)
     }
 
     /// Stream URLs from yt-dlp, keyed by itag.
@@ -1017,7 +1099,46 @@ impl AppServerState {
     /// `filesize` is compared per itag so a mismatch is skipped rather than
     /// producing a manifest whose ranges point into the wrong bytes.
     /// Every format yt-dlp can see, which is the whole basis of playback now.
+    async fn ytdlp_service_formats(&self, video_id: &str) -> Option<Vec<YtdlpFormat>> {
+        let service_url = self.ytdlp_service_url.as_deref()?;
+        let url = ytdlp_service_video_url(service_url, video_id)?;
+        let response = match self.ytdlp_http.get(url).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("yt-dlp service is unavailable for {video_id}: {error}");
+                return None;
+            }
+        };
+        if !response.status().is_success() {
+            eprintln!(
+                "yt-dlp service failed for {video_id} with status {}",
+                response.status()
+            );
+            return None;
+        }
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("could not read yt-dlp service output for {video_id}: {error}");
+                return None;
+            }
+        };
+        match serde_json::from_slice::<YtdlpDump>(&bytes) {
+            Ok(dump) => Some(formats_from_ytdlp_dump(dump)),
+            Err(error) => {
+                eprintln!("could not parse yt-dlp service output for {video_id}: {error}");
+                None
+            }
+        }
+    }
+
     async fn ytdlp_formats(&self, video_id: &str) -> Vec<YtdlpFormat> {
+        if self.ytdlp_service_url.is_some() {
+            return self
+                .ytdlp_service_formats(video_id)
+                .await
+                .unwrap_or_default();
+        }
         let Some(binary) = self.ytdlp_bin.as_ref() else {
             return Vec::new();
         };
@@ -1058,15 +1179,7 @@ impl AppServerState {
                 return Vec::new();
             }
         };
-        let duration_ms = dump
-            .duration
-            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
-            .map(|seconds| (seconds * 1000.0).round() as u64);
-        let mut formats = dump.formats;
-        for format in &mut formats {
-            format.duration_ms = duration_ms;
-        }
-        formats
+        formats_from_ytdlp_dump(dump)
     }
 
     /// The itag-to-URL view the extractor-layout path still needs.
@@ -2743,6 +2856,10 @@ pub async fn playback_proxy_options() -> Response {
     response
 }
 
+pub async fn health() -> StatusCode {
+    StatusCode::OK
+}
+
 fn center_vtt_cues(input: &str) -> String {
     input
         .lines()
@@ -3996,10 +4113,11 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters,
+        AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters, health,
         mp4_segment_ranges, parse_youtube_feed, playback_proxy_options, reconciliation_limit,
         segment_ranges, sniff_media_type, url_path_ends_with, video_published_epoch,
         webm_segment_ranges, websub_channel_from_topic, ytdlp_po_provider_args,
+        ytdlp_service_channel_shorts_url, ytdlp_service_video_url,
     };
     use crate::models::PlaybackProtocol;
 
@@ -4040,6 +4158,11 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reports_container_health() {
+        assert_eq!(health().await, axum::http::StatusCode::OK);
+    }
+
     #[test]
     fn bounds_local_reconciliation_when_push_is_active() {
         assert_eq!(reconciliation_limit(700, true), 48);
@@ -4058,6 +4181,27 @@ mod tests {
                 "--extractor-args",
                 "youtube:player_client=mweb",
             ]
+        );
+    }
+
+    #[test]
+    fn builds_encoded_ytdlp_sidecar_video_urls() {
+        let url = ytdlp_service_video_url("http://yt-dlp:8080/base", "aNXB-8Aqt88").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://yt-dlp:8080/base/v1/videos/aNXB-8Aqt88"
+        );
+        assert!(ytdlp_service_video_url("not a URL", "aNXB-8Aqt88").is_none());
+    }
+
+    #[test]
+    fn builds_ytdlp_sidecar_channel_shorts_urls() {
+        let url =
+            ytdlp_service_channel_shorts_url("http://yt-dlp:8080/base", "UCsXVk37bltHxD1rDPwtNM8Q")
+                .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://yt-dlp:8080/base/v1/channels/UCsXVk37bltHxD1rDPwtNM8Q/shorts"
         );
     }
 

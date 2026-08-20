@@ -2,11 +2,11 @@
 
 Tawny is a calm, local-first YouTube client built with Dioxus and `g3_ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
 
-Tawny is a complete replacement for a LibreTube plus Piped deployment. The Dioxus backend performs every job a Piped instance would — search, feeds, channels, video details, comments, captions, and stream resolution — by extracting from YouTube directly. There is no companion backend to run and no third-party instance is contacted.
+Tawny is designed as a self-hosted replacement for a LibreTube plus Piped deployment. The Dioxus backend performs search, feeds, channels, video details, comments, captions, and stream orchestration directly against YouTube; its deployment-local yt-dlp and PO-token sidecars are included in this repository, and no public Piped instance is contacted.
 
 This repository currently contains a working local-first vertical slice:
 
-- cached subscription feed with all/unwatched/today filters;
+- cached subscription feed with All, Videos, Shorts, and Live filters;
 - real YouTube search for videos and channels with continuation paging, request coalescing, and a five-minute result cache;
 - full channel pages with Videos, Shorts, Live, refresh, and continuation paging;
 - subscription management with direct extraction, official RSS fallback, and YouTube WebSub callbacks;
@@ -20,7 +20,7 @@ This repository currently contains a working local-first vertical slice:
 - cached descriptions, chapter jumps, captions, comments, and related videos;
 - same-origin ranged media/caption proxying, HLS/DASH manifest rewriting, adaptive quality, buffered seeking, and session retry;
 - responsive mobile, web, and desktop navigation using `g3_ui`;
-- in-process playback resolution for SABR, HLS, DASH, progressive streams, and per-video PoTokens.
+- server-side playback resolution for SABR, HLS, DASH, progressive streams, and per-video PO tokens.
 
 The seeded library is intentional: it keeps the first launch useful while the real library hydrates. Library actions update the device cache immediately and then write the newer revision to SurrealDB; if another client already has a newer revision, its server snapshot wins.
 
@@ -28,8 +28,25 @@ The seeded library is intentional: it keeps the first launch useful while the re
 
 ```sh
 npm install
+docker compose up -d --build
 dx serve
 ```
+
+The default Compose project starts only Tawny's server dependencies:
+
+- SurrealDB with a persistent named volume, published on `127.0.0.1:8001`;
+- a pinned bgutil PO-token provider, published on `127.0.0.1:4416`;
+- a pinned yt-dlp sidecar with its plugin and Node challenge runtime, published on `127.0.0.1:8090`.
+
+Tawny itself is deliberately omitted from the default profile, so `dx serve`, `dx serve --android`, and the other Dioxus development targets continue to own the app build and port 8080. Copy `.env.example` to `.env` once; its host-facing URLs already match this layout. Nothing needs to be installed in `%APPDATA%/yt-dlp`, and the host does not need a yt-dlp executable or provider plugin.
+
+For a server deployment, configure the public URL, database password, and WebSub secret in `.env`, then include the production profile:
+
+```sh
+docker compose --profile production up -d --build
+```
+
+That command builds and runs Tawny plus the same three dependencies. The production image builds the Dioxus full-stack web bundle, includes the project-local Shaka asset, stores app state in `tawny-data`, and talks to the other containers over the Compose network. See [docs/docker.md](docs/docker.md) for configuration, health checks, updates, and volume backups.
 
 The pinned Shaka Player package supplies the cross-platform DASH/HLS Media Source transport. Dioxus packages its compiled browser runtime as a local app asset; playback never depends on a third-party CDN.
 
@@ -76,18 +93,13 @@ See [docs/architecture.md](docs/architecture.md) for the data flow, cache strate
 
 ## Current playback behavior
 
-Playback is resolved in-process from direct YouTube extraction, which preserves every indexed audio/video representation including codec, bitrate, duration, quality, and DASH initialization/index byte ranges.
+Playback is resolved server-side from direct YouTube extraction, which preserves every indexed audio/video representation including codec, bitrate, duration, quality, and DASH initialization/index byte ranges.
 
-Stream URLs come from a local `yt-dlp` binary when one is available (`TAWNY_YTDLP_BIN`, otherwise `yt-dlp` on PATH), matched to the extracted streams by itag. Current YouTube media URLs increasingly require a video-bound GVS PO token; without one they can return 403 partway through the file even though extraction initially succeeds. For reliable playback, install a yt-dlp PO-token provider plugin, run its bgutil HTTP provider, and set `TAWNY_PO_TOKEN_PROVIDER_URL` to its base URL (the provider's usual local value is `http://127.0.0.1:4416`). Tawny then asks yt-dlp for an mweb URL bound to the provider token. Without a configured provider, yt-dlp's default client remains a best-effort fallback. Raw media URLs are replaced with short-lived same-origin proxy URLs before reaching the client. The player turns the representation set into a local DASH manifest and uses its packaged adaptive engine for automatic quality selection, buffering, seeking, retry recovery, DASH, and HLS. A fatal media request snapshots the current timestamp and renews the active playback session first, then tries protocol fallbacks, without replaying from zero.
+Stream URLs come from the Compose-managed yt-dlp service and are matched to the extractor's streams by itag. The sidecar owns yt-dlp, its bgutil plugin, and the Node runtime used for YouTube JavaScript challenges; it requests video-bound GVS PO tokens from the adjacent provider. Raw media URLs are replaced with short-lived same-origin proxy URLs before reaching the client. The player turns the representation set into a local DASH manifest and uses its packaged adaptive engine for automatic quality selection, buffering, seeking, retry recovery, DASH, and HLS. A fatal media request snapshots the current timestamp and renews the active playback session first, then tries protocol fallbacks, without replaying from zero.
 
 ### PO-token provider setup
 
-The provider is a server-side companion process, not an Android/iOS dependency. Tawny checks its `/ping` endpoint before each extraction and only selects the token-backed mweb client while the provider is healthy. If it is offline, the server logs that state and keeps yt-dlp's default best-effort client.
-
-1. Install the [`bgutil-ytdlp-pot-provider` plugin](https://github.com/Brainicism/bgutil-ytdlp-pot-provider). A pip/pipx yt-dlp installation can use `python -m pip install -U bgutil-ytdlp-pot-provider`. For a standalone `yt-dlp.exe`, download `bgutil-ytdlp-pot-provider.zip` from the latest provider release and place the zip in `%APPDATA%\yt-dlp\plugins\`.
-2. Run the HTTP provider. With Docker: `docker run --name bgutil-provider --restart unless-stopped -d --init -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest`. The provider repository also documents a native Node.js/Deno setup.
-3. Set `TAWNY_PO_TOKEN_PROVIDER_URL=http://127.0.0.1:4416` in the Tawny server's environment and restart the server. If Tawny runs in a container, use the provider's container/service address instead of loopback.
-4. Verify the plugin with `yt-dlp -v https://www.youtube.com/watch?v=dQw4w9WgXcQ`; its debug output should list an external `bgutil:http` PO-token provider.
+There is no separate host installation step. `docker compose up -d --build` starts the provider and yt-dlp service together, and the yt-dlp health check verifies both the installed plugin and the provider's `/ping` endpoint. Development Tawny uses `TAWNY_YTDLP_SERVICE_URL=http://127.0.0.1:8090`; production Compose replaces that with the internal `http://yt-dlp:8080` address. `TAWNY_YTDLP_BIN` and `TAWNY_PO_TOKEN_PROVIDER_URL` remain supported only as a legacy non-Compose fallback.
 
 The privacy-enhanced YouTube embed is never substituted automatically. If every direct source fails, the player reports the transport's actual error and offers a retry; switching to the embed is an explicit user action.
 
