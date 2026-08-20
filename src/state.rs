@@ -136,7 +136,6 @@ impl AppState {
             library.playlists.push(Playlist {
                 id: id.clone(),
                 name,
-                description: "A local Tawny playlist.".into(),
                 video_ids: Vec::new(),
                 pinned: false,
             });
@@ -336,16 +335,7 @@ impl AppState {
                 .iter_mut()
                 .find(|channel| channel.id == discovered.id)
             {
-                let subscribed = channel.subscribed;
-                if channel.name != discovered.name
-                    || channel.handle != discovered.handle
-                    || channel.avatar_url != discovered.avatar_url
-                    || channel.subscriber_count != discovered.subscriber_count
-                {
-                    *channel = discovered.clone();
-                    channel.subscribed = subscribed;
-                    changed = true;
-                }
+                changed |= channel.merge_metadata_from(discovered);
             } else {
                 library.channels.push(discovered.clone());
                 changed = true;
@@ -400,9 +390,7 @@ impl AppState {
                 .iter_mut()
                 .find(|channel| channel.id == discovered.id)
             {
-                let subscribed = channel.subscribed;
-                *channel = discovered.clone();
-                channel.subscribed = subscribed;
+                channel.merge_metadata_from(discovered);
             } else {
                 library.channels.push(discovered.clone());
             }
@@ -434,9 +422,7 @@ impl AppState {
             .iter_mut()
             .find(|channel| channel.id == details.channel.id)
         {
-            let subscribed = channel.subscribed;
-            *channel = details.channel.clone();
-            channel.subscribed = subscribed;
+            channel.merge_metadata_from(&details.channel);
         } else {
             library.channels.push(details.channel.clone());
         }
@@ -485,7 +471,10 @@ impl AppState {
 
         let settings = self.settings();
         let (kind, playlist_id) = if start_side {
-            (settings.swipe_right_action, settings.swipe_right_playlist_id)
+            (
+                settings.swipe_right_action,
+                settings.swipe_right_playlist_id,
+            )
         } else {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };
@@ -533,7 +522,10 @@ impl AppState {
 
         let settings = self.settings();
         let (kind, playlist_id) = if start_side {
-            (settings.swipe_right_action, settings.swipe_right_playlist_id)
+            (
+                settings.swipe_right_action,
+                settings.swipe_right_playlist_id,
+            )
         } else {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };

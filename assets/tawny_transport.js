@@ -64,6 +64,54 @@
     };
   }
 
+  function playbackServerBase(options) {
+    const configured = String(options?.serverUrl || "").replace(/\/+$/, "");
+    const location = window.location;
+    const assetHosted = location && (
+      location.hostname === "dioxus.index.html"
+      || !["http:", "https:"].includes(location.protocol)
+    );
+    if (assetHosted && configured) return configured;
+    if (location && ["http:", "https:"].includes(location.protocol)) {
+      return location.origin;
+    }
+    return configured;
+  }
+
+  function normalizePlaybackUrl(value, options) {
+    if (!value) return value;
+    const base = playbackServerBase(options);
+    if (!base) return value;
+    try {
+      const parsed = new URL(value, base);
+      if (!parsed.pathname.startsWith("/api/v1/playback/proxy/")) return value;
+      return new URL(`${parsed.pathname}${parsed.search}`, `${base}/`).href;
+    } catch (_) {
+      return value;
+    }
+  }
+
+  function normalizePlaybackSource(source, options) {
+    if (!source) return source;
+    return {
+      ...source,
+      url: normalizePlaybackUrl(source.url, options),
+      tracks: (source.tracks || []).map((track) => ({
+        ...track,
+        url: normalizePlaybackUrl(track.url, options),
+      })),
+    };
+  }
+
+  function normalizePlaybackSession(session, options) {
+    return {
+      ...session,
+      primary: normalizePlaybackSource(session.primary, options),
+      alternatives: (session.alternatives || []).map((source) =>
+        normalizePlaybackSource(source, options)),
+    };
+  }
+
   function splitMime(value) {
     const mime = value || "application/octet-stream";
     const match = mime.match(/^\s*([^;]+)(?:;\s*codecs=["']?([^"']+)["']?)?/i);
@@ -248,14 +296,24 @@
     const applePlatform = /Macintosh|iPhone|iPad|iPod/i.test(
       (window.navigator && window.navigator.userAgent) || "",
     );
+    const androidPlatform = /Android/i.test(
+      (window.navigator && window.navigator.userAgent) || "",
+    );
     player.configure({
       manifest: { retryParameters: retry },
       // Shaka filters the manifest to one codec family before ABR starts.
       // Quality may still change, but the underlying decoder/container does not.
       preferredVideoCodecs: applePlatform
         ? ["avc1", "hvc1", "hev1", "vp09", "av01"]
-        : ["vp09", "av01", "avc1", "hvc1", "hev1"],
-      preferredAudioCodecs: applePlatform ? ["mp4a", "opus"] : ["opus", "mp4a"],
+        : androidPlatform
+          ? ["avc1", "vp09", "av01", "hvc1", "hev1"]
+          : ["vp09", "av01", "avc1", "hvc1", "hev1"],
+      // AVC/AAC is the most consistently hardware-decoded pair across
+      // Android System WebView versions, so prefer it there before the more
+      // device-dependent WebM and AV1 representations.
+      preferredAudioCodecs: applePlatform || androidPlatform
+        ? ["mp4a", "opus"]
+        : ["opus", "mp4a"],
       streaming: {
         retryParameters: retry,
         bufferingGoal: 40,
@@ -314,6 +372,56 @@
     const player = new window.shaka.Player();
     runtime.player = player;
     configureShaka(player);
+    const pendingRanges = new Map();
+    const networking = player.getNetworkingEngine();
+    networking.registerRequestFilter((_requestType, request) => {
+      const range = request.headers?.Range || request.headers?.range;
+      const uri = request.uris?.[0];
+      if (!range || !uri) return;
+      const queue = pendingRanges.get(uri) || [];
+      queue.push(range);
+      pendingRanges.set(uri, queue);
+    });
+    networking.registerResponseFilter((_requestType, response) => {
+      const uri = response.originalUri || response.uri;
+      const queue = uri && pendingRanges.get(uri);
+      const contentRange = response.headers?.["content-range"] || null;
+      const served = /^bytes (\d+)-(\d+)\//.exec(contentRange || "");
+      const servedRange = served ? `bytes=${served[1]}-${served[2]}` : null;
+      // Initialization, index, and media requests for one representation share
+      // a URI and run concurrently. Pair by the server's Content-Range rather
+      // than completion order, which is intentionally nondeterministic.
+      const matchingIndex = servedRange && queue
+        ? queue.indexOf(servedRange)
+        : -1;
+      const range = matchingIndex >= 0
+        ? queue.splice(matchingIndex, 1)[0]
+        : queue?.shift();
+      if (!range) return;
+      if (!queue.length) pendingRanges.delete(uri);
+      const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+      const received = response.data?.byteLength;
+      if (!match || !Number.isFinite(received)) return;
+      const start = Number(match[1]);
+      const end = Number(match[2]);
+      const expected = end - start + 1;
+      if (received !== expected) {
+        let path = uri;
+        try {
+          path = new URL(uri).pathname;
+        } catch (_) {}
+        console.warn("Tawny range mismatch", JSON.stringify({
+          path,
+          start,
+          end,
+          expected,
+          received,
+          status: response.status ?? null,
+          contentRange,
+          contentLength: response.headers?.["content-length"] || null,
+        }));
+      }
+    });
     await player.attach(video);
 
     let uri = source.url;
@@ -414,6 +522,7 @@
   }
 
   async function loadSources(video, session, options, generation, startIndex) {
+    session = normalizePlaybackSession(session, options);
     const sources = [session.primary, ...(session.alternatives || [])].filter(
       (source) => source && source.protocol !== "EmbedFallback",
     );
@@ -603,6 +712,9 @@
     },
     buildDashManifest: generatedDash,
     events: transportEvents,
+    normalizePlaybackSession,
+    normalizePlaybackUrl,
+    playbackServerBase,
     qualityState,
     setQuality,
     transportKind,

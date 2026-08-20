@@ -4,7 +4,6 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Clapperboard, Radio, Zap};
 use g3_ui::{Button, ButtonStyle, Refresher, StatusColor};
 
 use super::VideoGrid;
@@ -22,13 +21,11 @@ pub fn Feed() -> Element {
     // Owned by the header's segmented control.
     let filter_index = app_state.feed_filter_index;
     let mut selected_group = use_signal(|| "all".to_string());
-    let mut show_videos = use_signal(|| true);
-    let mut show_shorts = use_signal(|| true);
-    let mut show_live = use_signal(|| true);
     let mut visible_count = use_signal(|| FEED_PAGE_SIZE);
     let filter = match filter_index() {
-        1 => FeedFilter::Unwatched,
-        2 => FeedFilter::Today,
+        1 => FeedFilter::Videos,
+        2 => FeedFilter::Shorts,
+        3 => FeedFilter::Live,
         _ => FeedFilter::All,
     };
     let library = app_state.library();
@@ -54,29 +51,14 @@ pub fn Feed() -> Element {
     {
         videos.retain(|video| group.channel_ids.contains(&video.channel_id));
     }
-    // Each toggle is independent; turning them all off would be a blank page,
-    // so an empty selection is treated as "show everything".
-    let any_kind = show_videos() || show_shorts() || show_live();
-    if any_kind {
-        videos.retain(|video| {
-            if video.is_live {
-                show_live()
-            } else if video.is_short {
-                show_shorts()
-            } else {
-                show_videos()
-            }
-        });
+    match filter {
+        FeedFilter::All => {}
+        FeedFilter::Videos => videos.retain(|video| !video.is_live && !video.is_short),
+        FeedFilter::Shorts => videos.retain(|video| video.is_short && !video.is_live),
+        FeedFilter::Live => videos.retain(|video| video.is_live),
     }
-    if app_state.settings().hide_watched || filter == FeedFilter::Unwatched {
+    if app_state.settings().hide_watched {
         videos.retain(|video| !video.watched);
-    }
-    if filter == FeedFilter::Today {
-        videos.retain(|video| {
-            video.published_at.contains("minute")
-                || video.published_at.contains("hour")
-                || video.published_at == "Streaming now"
-        });
     }
     // Paged last, so the count reflects what the filters actually left.
     let remaining = videos.len().saturating_sub(visible_count());
@@ -86,6 +68,7 @@ pub fn Feed() -> Element {
         // Pull down to refresh, replacing the button that sat in the intro row.
         Refresher {
             refreshing: app_state.syncing(),
+            can_refresh: true,
             on_refresh: move |_| {
                 app_state.syncing.set(true);
                 spawn(async move {
@@ -121,35 +104,10 @@ pub fn Feed() -> Element {
                     app_state.syncing.set(false);
                 });
             },
-        }
-        main { class: "page feed-page",
+            main { class: "page feed-page",
             // Count and group filters share one row rather than stacking two
             // thin bands above the grid.
             nav { class: "group-filter-row", aria_label: "Subscription groups",
-                // Content-type toggles: independent switches rather than a
-                // segmented control, so any combination can be shown.
-                button {
-                    class: if show_videos() { "group-filter active" } else { "group-filter" },
-                    aria_pressed: show_videos(),
-                    onclick: move |_| show_videos.toggle(),
-                    Clapperboard { size: 14 }
-                    "Videos"
-                }
-                button {
-                    class: if show_shorts() { "group-filter active" } else { "group-filter" },
-                    aria_pressed: show_shorts(),
-                    onclick: move |_| show_shorts.toggle(),
-                    Zap { size: 14 }
-                    "Shorts"
-                }
-                button {
-                    class: if show_live() { "group-filter active" } else { "group-filter" },
-                    aria_pressed: show_live(),
-                    onclick: move |_| show_live.toggle(),
-                    Radio { size: 14 }
-                    "Live"
-                }
-                span { class: "group-filter-divider" }
                 button {
                     class: if selected_group() == "all" { "group-filter active" } else { "group-filter" },
                     onclick: move |_| selected_group.set("all".into()),
@@ -176,7 +134,11 @@ pub fn Feed() -> Element {
                 }
             }
 
-            VideoGrid { videos, empty_message: "Try another filter or refresh when you are back online.".to_string() }
+                VideoGrid {
+                    videos,
+                    shorts_layout: filter == FeedFilter::Shorts,
+                    empty_message: "Try another filter or refresh when you are back online.".to_string(),
+                }
 
             if remaining > 0 {
                 div { class: "load-more-row",
@@ -187,6 +149,7 @@ pub fn Feed() -> Element {
                     }
                 }
             }
+        }
         }
     }
 }

@@ -41,24 +41,24 @@ Feed ingestion is designed for large libraries. When WebSub is active the server
 
 ### Running on Android
 
-Point the media proxy at the loopback address by number:
+For the Android emulator, run the normal Dioxus command:
 
 ```bash
-TAWNY_PUBLIC_URL=http://127.0.0.1:8080 dx serve --android
+dx serve --android
 ```
 
-Android refuses plain HTTP unless the network security config allows it, and
-the one the CLI generates permits exactly one host: `127.0.0.1`. Those entries
-match by literal hostname, so `localhost` is a different entry and is not
-covered — segment requests fail with `ERR_CLEARTEXT_NOT_PERMITTED` even though
-the address is the same one.
+The Android client and development media proxy default to
+`http://127.0.0.1:8080`, which matches Dioxus's generated network-security
+policy and the emulator's `adb reverse` mapping. Playback URLs, captions, and
+session refreshes are all rebased to that API origin inside the Android
+WebView. The media proxy also supplies the CORS, private-network, resource, and
+range headers needed by Shaka.
 
-`[android.application] uses_cleartext_traffic` does not help: a manifest that
-references a network security config, as the generated one always does, has
-that attribute ignored.
-
-The default stays `localhost` because the proxy sends no CORS headers, so on
-web the media has to come from the same origin the page was served from.
+Do not substitute `localhost`: Android's policy entries match literal
+hostnames, and only `127.0.0.1` is permitted for cleartext development
+traffic. Set `SERVER_URL` and `TAWNY_PUBLIC_URL` explicitly when the client and
+server use a different reachable HTTPS address, such as a physical device
+connecting to a home-lab server.
 
 For push updates, deploy with a public HTTPS `TAWNY_PUBLIC_URL` (or explicit `TAWNY_WEBSUB_CALLBACK_URL`). Subscribing requests a YouTube WebSub lease; signed callbacks insert the upload immediately and enrich only that video. Lease requests are persisted, renewed after three days, and processed with bounded concurrency. The 15-minute RSS reconciliation worker remains as a recovery path for missed callbacks.
 

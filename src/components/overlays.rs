@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, ListPlus, Play, Plus, Rows3, Share2};
-use g3_ui::{Button, ButtonStyle, Item, List, Sheet, StatusColor, Toast};
+use g3_ui::{Button, ButtonStyle, Item, List, ListLines, Sheet, StatusColor, Toast};
 
 #[component]
 pub fn AppOverlays() -> Element {
@@ -48,7 +48,7 @@ pub fn AppOverlays() -> Element {
                                 p { "{video.channel_name}" }
                             }
                         }
-                        List { inset: true,
+                        List { inset: true, class: "video-action-list",
                             Item {
                                 start: rsx! { Play { size: 18 } },
                                 label: "Play next".to_string(),
@@ -99,6 +99,9 @@ pub fn AppOverlays() -> Element {
                             Item {
                                 start: rsx! { Share2 { size: 18 } },
                                 label: "Share".to_string(),
+                                // Keep the final action divider-free even when
+                                // a sheet appends animation/focus nodes after it.
+                                lines: ListLines::None,
                                 onclick: move |_| {
                                     share_video(share_id.clone(), share_title.clone());
                                     app_state.video_actions_open.set(false);
@@ -127,11 +130,17 @@ pub fn AppOverlays() -> Element {
                         let video_id = target.as_ref().map(|video| video.id.clone()).unwrap_or_default();
                         let playlist_id = playlist.id.clone();
                         let playlist_name = playlist.name.clone();
+                        let already_saved = playlist.video_ids.iter().any(|id| id == &video_id);
                         rsx! {
                             Item {
                                 key: "{playlist.id}",
+                                start: if already_saved { Some(rsx! { Check { size: 18 } }) } else { None },
                                 label: playlist.name,
-                                description: format!("{} videos", playlist.video_ids.len()),
+                                description: if already_saved {
+                                    format!("Saved · {} videos", playlist.video_ids.len())
+                                } else {
+                                    format!("{} videos", playlist.video_ids.len())
+                                },
                                 onclick: move |_| {
                                     if let Some(message) = app_state.add_to_playlist(&video_id, &playlist_id) {
                                         app_state.show_toast(message, StatusColor::Success);

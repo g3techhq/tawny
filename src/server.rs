@@ -114,7 +114,11 @@ fn locate_ytdlp() -> Option<std::path::PathBuf> {
         return None;
     }
     // Fall back to PATH. `--version` is the cheapest way to confirm it runs.
-    let name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    let name = if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
     std::process::Command::new(name)
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -311,7 +315,6 @@ struct DbVideo {
 struct DbPlaylist {
     playlist_id: String,
     name: String,
-    description: String,
     video_ids: Vec<String>,
     pinned: bool,
 }
@@ -374,7 +377,6 @@ impl From<DbPlaylist> for Playlist {
         Self {
             id: value.playlist_id,
             name: value.name,
-            description: value.description,
             video_ids: value.video_ids,
             pinned: value.pinned,
         }
@@ -486,7 +488,10 @@ impl AppServerState {
             .build()
             .context("initialize direct YouTube extractor")?;
         let public_url = std::env::var("TAWNY_PUBLIC_URL")
-            .unwrap_or_else(|_| "http://localhost:8080".into())
+            // The Android bundle's generated network-security policy permits
+            // cleartext loopback by literal IP. `localhost` is a different
+            // policy entry even though it resolves to the same interface.
+            .unwrap_or_else(|_| "http://127.0.0.1:8080".into())
             .trim_end_matches('/')
             .to_string();
         let websub_callback_url = std::env::var("TAWNY_WEBSUB_CALLBACK_URL")
@@ -559,7 +564,7 @@ impl AppServerState {
         let playlists: Vec<DbPlaylist> = self
             .db
             .query(
-                "SELECT playlist_id, name, description, video_ids, pinned FROM playlist ORDER BY pinned DESC, name",
+                "SELECT playlist_id, name, video_ids, pinned FROM playlist ORDER BY pinned DESC, name",
             )
             .await?
             .take(0)?;
@@ -1045,9 +1050,7 @@ impl AppServerState {
         // yt-dlp owns the adaptive source. The extractor is consulted only for
         // what yt-dlp does not produce — the HLS manifest a live stream needs —
         // and as a fallback when yt-dlp itself came back empty.
-        if let Some(source) =
-            ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await
-        {
+        if let Some(source) = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await {
             eprintln!(
                 "playback for {video_id}: {} yt-dlp tracks, ranges derived locally",
                 source.tracks.len()
@@ -1345,16 +1348,20 @@ impl AppServerState {
     }
 
     async fn upsert_discovered_channel(&self, channel: &Channel) -> Result<()> {
-        let existing: Vec<DbSubscriptionFlag> = self
+        let existing: Vec<DbChannel> = self
             .db
-            .query("SELECT subscribed FROM channel WHERE channel_id = $channel_id LIMIT 1")
+            .query("SELECT * FROM channel WHERE channel_id = $channel_id LIMIT 1")
             .bind(("channel_id", channel.id.clone()))
             .await?
             .take(0)?;
-        let subscribed = existing
-            .first()
-            .map(|channel| channel.subscribed)
-            .unwrap_or(false);
+        let mut merged = existing
+            .into_iter()
+            .next()
+            .map(Channel::from)
+            .unwrap_or_else(|| channel.clone());
+        if merged.id == channel.id {
+            merged.merge_metadata_from(channel);
+        }
         self.db
             .query(
                 r#"UPSERT type::record('channel', $record_key) SET
@@ -1369,13 +1376,13 @@ impl AppServerState {
             )
             .bind(("record_key", channel.id.clone()))
             .bind(("channel_id", channel.id.clone()))
-            .bind(("name", channel.name.clone()))
-            .bind(("handle", channel.handle.clone()))
-            .bind(("avatar_url", channel.avatar_url.clone()))
-            .bind(("subscriber_count", channel.subscriber_count.clone()))
-            .bind(("description", channel.description.clone()))
-            .bind(("banner_url", channel.banner_url.clone()))
-            .bind(("subscribed", subscribed))
+            .bind(("name", merged.name))
+            .bind(("handle", merged.handle))
+            .bind(("avatar_url", merged.avatar_url))
+            .bind(("subscriber_count", merged.subscriber_count))
+            .bind(("description", merged.description))
+            .bind(("banner_url", merged.banner_url))
+            .bind(("subscribed", merged.subscribed))
             .await?
             .check()?;
         Ok(())
@@ -1387,7 +1394,6 @@ impl AppServerState {
                 r#"UPSERT type::record('playlist', $record_key) SET
                     playlist_id = $playlist_id,
                     name = $name,
-                    description = $description,
                     video_ids = $video_ids,
                     pinned = $pinned,
                     updated_at = time::now()"#,
@@ -1395,7 +1401,6 @@ impl AppServerState {
             .bind(("record_key", playlist.id.clone()))
             .bind(("playlist_id", playlist.id.clone()))
             .bind(("name", playlist.name.clone()))
-            .bind(("description", playlist.description.clone()))
             .bind(("video_ids", playlist.video_ids.clone()))
             .bind(("pinned", playlist.pinned))
             .await?
@@ -1660,7 +1665,9 @@ impl AppServerState {
 
     async fn enrich_video_player(&self, mut video: Video) -> Video {
         let Ok(player) = youtube_call(
-            self.youtube.query().player_from_clients(&video.id, PLAYER_CLIENTS),
+            self.youtube
+                .query()
+                .player_from_clients(&video.id, PLAYER_CLIENTS),
             "enrich YouTube upload",
         )
         .await
@@ -2485,11 +2492,11 @@ pub async fn playback_proxy(
 ) -> Response {
     let target = state.proxy_targets.read().await.get(&token).cloned();
     let Some(target) = target else {
-        return proxy_error(StatusCode::NOT_FOUND, "Playback session was not found");
+        return media_proxy_error(StatusCode::NOT_FOUND, "Playback session was not found");
     };
     if target.expires_at <= std::time::Instant::now() {
         state.proxy_targets.write().await.remove(&token);
-        return proxy_error(
+        return media_proxy_error(
             StatusCode::GONE,
             "Playback session expired; resolve it again",
         );
@@ -2504,7 +2511,9 @@ pub async fn playback_proxy(
     // storm into a few paced requests.
     let mut upstream = match request_playback_upstream(&state, &target, &request_headers).await {
         Ok(response) => response,
-        Err(_) => return proxy_error(StatusCode::BAD_GATEWAY, "Media source is unavailable"),
+        Err(_) => {
+            return media_proxy_error(StatusCode::BAD_GATEWAY, "Media source is unavailable");
+        }
     };
     for attempt in 0..3u32 {
         if !matches!(
@@ -2541,7 +2550,9 @@ pub async fn playback_proxy(
     let body = if is_hls || is_dash {
         let bytes = match upstream.bytes().await {
             Ok(bytes) => bytes,
-            Err(_) => return proxy_error(StatusCode::BAD_GATEWAY, "Media manifest is unavailable"),
+            Err(_) => {
+                return media_proxy_error(StatusCode::BAD_GATEWAY, "Media manifest is unavailable");
+            }
         };
         let text = String::from_utf8_lossy(&bytes);
         let rewritten = if is_hls {
@@ -2553,7 +2564,9 @@ pub async fn playback_proxy(
     } else if is_vtt {
         let bytes = match upstream.bytes().await {
             Ok(bytes) => bytes,
-            Err(_) => return proxy_error(StatusCode::BAD_GATEWAY, "Caption track is unavailable"),
+            Err(_) => {
+                return media_proxy_error(StatusCode::BAD_GATEWAY, "Caption track is unavailable");
+            }
         };
         Body::from(center_vtt_cues(&String::from_utf8_lossy(&bytes)))
     } else if range_requested {
@@ -2576,7 +2589,7 @@ pub async fn playback_proxy(
             bytes = retry.bytes().await.ok();
         }
         let Some(bytes) = bytes else {
-            return proxy_error(StatusCode::BAD_GATEWAY, "Media range is unavailable");
+            return media_proxy_error(StatusCode::BAD_GATEWAY, "Media range is unavailable");
         };
         if generic_type {
             sniffed_type = sniff_media_type(&bytes);
@@ -2593,12 +2606,11 @@ pub async fn playback_proxy(
                 if generic_type {
                     sniffed_type = sniff_media_type(&head);
                 }
-                let head =
-                    futures_util::stream::once(async move { Ok::<_, reqwest::Error>(head) });
+                let head = futures_util::stream::once(async move { Ok::<_, reqwest::Error>(head) });
                 Body::from_stream(head.chain(stream))
             }
             Some(Err(_)) => {
-                return proxy_error(StatusCode::BAD_GATEWAY, "Media stream is unavailable");
+                return media_proxy_error(StatusCode::BAD_GATEWAY, "Media stream is unavailable");
             }
             None => Body::empty(),
         }
@@ -2632,6 +2644,52 @@ pub async fn playback_proxy(
             .headers_mut()
             .insert(header::CONTENT_LENGTH, value.clone());
     }
+    add_media_cors_headers(&mut response);
+    response
+}
+
+fn add_media_cors_headers(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static(
+            "Accept-Ranges, Content-Length, Content-Range, ETag, Last-Modified",
+        ),
+    );
+    headers.insert(
+        header::HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("cross-origin"),
+    );
+    // Chromium's Private Network Access preflight uses this when a secure
+    // WebView asset origin reads the loopback development server.
+    headers.insert(
+        header::HeaderName::from_static("access-control-allow-private-network"),
+        HeaderValue::from_static("true"),
+    );
+}
+
+fn media_proxy_error(status: StatusCode, message: &str) -> Response {
+    let mut response = proxy_error(status, message);
+    add_media_cors_headers(&mut response);
+    response
+}
+
+pub async fn playback_proxy_options() -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NO_CONTENT;
+    add_media_cors_headers(&mut response);
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, OPTIONS"),
+    );
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("Range, Content-Type"),
+    );
     response
 }
 
@@ -3080,7 +3138,11 @@ fn cached_segment_ranges(video_id: &str, itag: u32) -> Option<SegmentRanges> {
 }
 
 fn store_segment_ranges(video_id: &str, itag: u32, ranges: SegmentRanges) {
-    if let Some(cache) = SEGMENT_RANGE_CACHE.get_or_init(Default::default).lock().ok() {
+    if let Some(cache) = SEGMENT_RANGE_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .ok()
+    {
         let mut cache = cache;
         cache.insert((video_id.to_string(), itag), ranges);
     }
@@ -3877,9 +3939,9 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 mod tests {
     use super::{
         AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters,
-        mp4_segment_ranges, parse_youtube_feed, reconciliation_limit, segment_ranges,
-        sniff_media_type, url_path_ends_with, video_published_epoch, webm_segment_ranges,
-        websub_channel_from_topic,
+        mp4_segment_ranges, parse_youtube_feed, playback_proxy_options, reconciliation_limit,
+        segment_ranges, sniff_media_type, url_path_ends_with, video_published_epoch,
+        webm_segment_ranges, websub_channel_from_topic,
     };
     use crate::models::PlaybackProtocol;
 
@@ -3901,6 +3963,23 @@ mod tests {
             Some("UC-real-channel")
         );
         assert!(websub_channel_from_topic("https://example.com/?channel_id=UC-bad").is_none());
+    }
+
+    #[tokio::test]
+    async fn permits_android_webview_media_requests() {
+        let response = playback_proxy_options().await;
+        assert_eq!(response.status(), axum::http::StatusCode::NO_CONTENT);
+        assert_eq!(response.headers()["access-control-allow-origin"], "*");
+        assert_eq!(
+            response.headers()["access-control-allow-private-network"],
+            "true"
+        );
+        assert!(
+            response.headers()["access-control-allow-headers"]
+                .to_str()
+                .unwrap()
+                .contains("Range")
+        );
     }
 
     #[test]
@@ -3957,14 +4036,23 @@ mod tests {
     fn identifies_hls_segment_containers_youtube_serves_as_octet_stream() {
         // Packed AAC, which Shaka otherwise mistakes for fMP4 and never decodes.
         assert_eq!(sniff_media_type(b"ID3\x03\x00\x00"), Some("audio/aac"));
-        assert_eq!(sniff_media_type(&[0xFF, 0xF1, 0x50, 0x80]), Some("audio/aac"));
+        assert_eq!(
+            sniff_media_type(&[0xFF, 0xF1, 0x50, 0x80]),
+            Some("audio/aac")
+        );
         // MPEG-TS sync byte.
-        assert_eq!(sniff_media_type(&[0x47, 0x40, 0x00, 0x30]), Some("video/mp2t"));
+        assert_eq!(
+            sniff_media_type(&[0x47, 0x40, 0x00, 0x30]),
+            Some("video/mp2t")
+        );
         assert_eq!(
             sniff_media_type(b"\x00\x00\x00\x18ftypmp42"),
             Some("video/mp4")
         );
-        assert_eq!(sniff_media_type(&[0x1A, 0x45, 0xDF, 0xA3]), Some("video/webm"));
+        assert_eq!(
+            sniff_media_type(&[0x1A, 0x45, 0xDF, 0xA3]),
+            Some("video/webm")
+        );
         assert_eq!(sniff_media_type(b"not media at all"), None);
         assert_eq!(sniff_media_type(&[]), None);
     }

@@ -5,8 +5,8 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{History, ListVideo, Play, Trash2, User};
 use dx_route_transitions::animated_navigate;
-use dioxus_icons::lucide::{History, ListVideo, Play, Trash2};
 use g3_ui::{Button, ButtonSize, ButtonStyle, Refresher, Sheet, StatusColor};
 
 use super::VideoGrid;
@@ -24,42 +24,47 @@ pub fn QueuePage() -> Element {
 
     rsx! {
         main { class: "page queue-page",
-            div { class: "section-heading library-heading",
-                div {
-                    span { class: "section-kicker", "PLAYBACK QUEUE" }
-                    h2 { "Ready when you are." }
-                    p { "Play next puts a video at the front; add to queue keeps your current order." }
+            if videos.is_empty() {
+                div { class: "empty-state",
+                    div { class: "empty-icon", ListVideo { size: 25 } }
+                    h3 { "Your queue is empty" }
+                    p { "Use a video menu to play next or add something to the queue." }
                 }
-                div { class: "heading-actions",
-                    Button {
-                        disabled: first_id.is_none(),
-                        start: rsx! { Play { size: 17 } },
-                        onclick: move |_| {
-                            if let Some(id) = &first_id {
-                                app_state.record_history(id);
-                                { let v = id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
-                            }
-                        },
-                        "Play all"
+            } else {
+                div { class: "section-heading library-heading",
+                    div {
+                        span { class: "section-kicker", "PLAYBACK QUEUE" }
+                        h2 { "Ready when you are." }
                     }
-                    Button {
-                        style: ButtonStyle::Clear,
-                        disabled: videos.is_empty(),
-                        start: rsx! { Trash2 { size: 17 } },
-                        onclick: move |_| {
-                            app_state.clear_queue();
-                            app_state.show_toast("Queue cleared", StatusColor::Neutral);
-                        },
-                        "Clear"
+                    div { class: "heading-actions",
+                        Button {
+                            start: rsx! { Play { size: 17 } },
+                            onclick: move |_| {
+                                if let Some(id) = &first_id {
+                                    app_state.record_history(id);
+                                    { let v = id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
+                                }
+                            },
+                            "Play all"
+                        }
+                        Button {
+                            style: ButtonStyle::Clear,
+                            start: rsx! { Trash2 { size: 17 } },
+                            onclick: move |_| {
+                                app_state.clear_queue();
+                                app_state.show_toast("Queue cleared", StatusColor::Neutral);
+                            },
+                            "Clear"
+                        }
                     }
                 }
+                div { class: "library-summary",
+                    ListVideo { size: 18 }
+                    strong { "{videos.len()} queued" }
+                    span { "Synced with your Tawny library" }
+                }
+                VideoGrid { videos }
             }
-            div { class: "library-summary",
-                ListVideo { size: 18 }
-                strong { "{videos.len()} queued" }
-                span { "Synced with your Tawny library" }
-            }
-            VideoGrid { videos, empty_message: "Use a video menu to add something to the queue.".to_string() }
         }
     }
 }
@@ -123,6 +128,19 @@ pub fn ChannelDetail(id: String) -> Element {
     let mut live_next = use_signal(|| None::<String>);
     let mut initialized = use_signal(|| false);
     let mut page_loading = use_signal(|| false);
+    let mut previous_tab = use_signal(|| tab_index());
+    use_effect(move || {
+        let current = tab_index();
+        if previous_tab() != current {
+            previous_tab.set(current);
+            spawn(async move {
+                let mut eval = document::eval(
+                    "document.querySelector('.g3-body-content')?.scrollTo({ top: 0, behavior: 'instant' }); dioxus.send(true);",
+                );
+                let _ = eval.recv::<bool>().await;
+            });
+        }
+    });
 
     let mut details_resource = {
         let channel_id = id.clone();
@@ -156,10 +174,15 @@ pub fn ChannelDetail(id: String) -> Element {
         .iter()
         .find(|channel| channel.id == id)
         .cloned();
-    let channel = remote_details
-        .as_ref()
-        .map(|details| details.channel.clone())
-        .or(cached_channel);
+    // `cache_channel_details` has already merged this response with richer
+    // metadata discovered by the player/search surfaces. Prefer that merged
+    // record so a sparse channel tab response (for example `528` instead of
+    // `21.1M`) cannot flash the wrong count in the hero.
+    let channel = cached_channel.or_else(|| {
+        remote_details
+            .as_ref()
+            .map(|details| details.channel.clone())
+    });
 
     let Some(channel) = channel else {
         let failed = details_resource.read().as_ref().is_some();
@@ -219,7 +242,6 @@ pub fn ChannelDetail(id: String) -> Element {
         ChannelMediaTab::Live => live_next(),
     };
     let is_subscribed = channel.subscribed;
-    let initial = channel.name.chars().next().unwrap_or('T');
     let avatar_url = channel.avatar_url.clone();
     let banner_url = channel.banner_url.clone();
     let description_text = channel.description.clone();
@@ -232,6 +254,7 @@ pub fn ChannelDetail(id: String) -> Element {
                 // the toolbar next to the segments.
                 Refresher {
                     refreshing: page_loading(),
+                    can_refresh: true,
                     on_refresh: move |_| {
                         initialized.set(false);
                         extra_videos.set(Vec::new());
@@ -239,8 +262,7 @@ pub fn ChannelDetail(id: String) -> Element {
                         extra_live.set(Vec::new());
                         details_resource.restart();
                     },
-                }
-                main { class: "page",
+                    main { class: "page",
                     if let Some(banner_url) = banner_url {
                         div {
                             class: "channel-banner",
@@ -251,7 +273,7 @@ pub fn ChannelDetail(id: String) -> Element {
                         if let Some(avatar_url) = avatar_url {
                             img { class: "channel-avatar channel-avatar-hero", src: "{avatar_url}", alt: "{channel.name}" }
                         } else {
-                            div { class: "channel-avatar channel-avatar-hero", "{initial}" }
+                            div { class: "channel-avatar channel-avatar-hero channel-avatar-fallback", User { size: 30 } }
                         }
                         div { class: "channel-hero-copy",
                             span { class: "section-kicker", "{channel.handle}" }
@@ -259,7 +281,9 @@ pub fn ChannelDetail(id: String) -> Element {
                             // The local cache count is an implementation
                             // detail; it told the reader nothing about the
                             // channel.
-                            p { "{channel.subscriber_count} subscribers" }
+                            if !channel.subscriber_count.trim().is_empty() {
+                                p { "{channel.subscriber_count} subscribers" }
+                            }
                             if !channel.description.is_empty() {
                                 // Behind a button: a long channel description
                                 // pushed the videos off the first screen.
@@ -291,6 +315,7 @@ pub fn ChannelDetail(id: String) -> Element {
                     }
                     VideoGrid {
                         videos,
+                        shorts_layout: selected_tab == ChannelMediaTab::Shorts,
                         empty_message: match selected_tab {
                             ChannelMediaTab::Shorts => "No Shorts were returned for this channel.".to_string(),
                             ChannelMediaTab::Live => "No livestreams were returned for this channel.".to_string(),
@@ -343,6 +368,7 @@ pub fn ChannelDetail(id: String) -> Element {
                                 if page_loading() { "Loading…" } else { "Load more" }
                             }
                         }
+                    }
                     }
                 }
         }

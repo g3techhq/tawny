@@ -773,12 +773,16 @@ textarea {
   overflow: hidden;
 }
 
-.playlist-card .g3-card-body > p {
-  min-height: 2.5rem;
-  margin: 0.8rem 0 0.35rem;
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.45;
+.playlist-card .g3-card-header {
+  gap: 0.65rem;
+}
+
+.playlist-card .g3-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playlist-collage {
@@ -786,7 +790,7 @@ textarea {
   grid-template-columns: 2fr 1fr;
   grid-template-rows: 1fr 1fr;
   overflow: hidden;
-  aspect-ratio: 16 / 8.5;
+  aspect-ratio: 16 / 9;
   border-radius: 12px;
   background: var(--color-bg-secondary);
 }
@@ -801,6 +805,20 @@ textarea {
   grid-row: 1 / 3;
 }
 
+.playlist-collage.count-1 img:first-child {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+}
+
+.playlist-collage.count-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: 1fr;
+}
+
+.playlist-collage.count-2 img:first-child {
+  grid-row: auto;
+}
+
 .playlist-empty-art {
   display: grid;
   grid-column: 1 / -1;
@@ -811,8 +829,29 @@ textarea {
 }
 
 .playlist-count {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.playlist-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-height: 1.65rem;
+  margin-top: 0.65rem;
+}
+
+.playlist-pin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: var(--tawny-amber-soft);
   color: var(--color-focused);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 750;
 }
 
@@ -1602,15 +1641,39 @@ textarea {
 }
 
 .video-action-heading {
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(5rem, 6.75rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.8rem;
+}
+
+.video-action-heading > div {
+  min-width: 0;
+}
+
+.video-action-heading h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0.15rem 0 0.28rem;
+  font-size: 1.05rem;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .action-sheet-thumbnail {
-  width: 6.5rem;
+  width: 100%;
   aspect-ratio: 16 / 9;
-  flex: 0 0 auto;
-  border-radius: 10px;
+  border-radius: 8px;
   object-fit: cover;
+}
+
+/* Five actions plus a two-line title are slightly taller than g3_ui's generic
+   half-height sheet cap on phones. Give this sheet enough room to keep Share
+   above the system gesture area instead of clipping the final row. */
+.g3-sheet-bottom.video-actions-sheet .g3-sheet-content {
+  max-height: min(64dvh, 34rem);
 }
 
 .playlist-picker-sheet,
@@ -1855,7 +1918,7 @@ textarea {
   }
 
   .action-sheet-thumbnail {
-    width: 5rem;
+    width: 100%;
   }
 
   .persistent-player.mini {
@@ -2598,10 +2661,28 @@ textarea {
 
 .group-editor-list {
   display: flex;
-  max-height: 62vh;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
   flex-direction: column;
   gap: 0.25rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.g3-sheet-bottom.group-editor-sheet .g3-sheet-content {
+  min-height: 76dvh;
+  max-height: 84dvh;
+}
+
+.group-editor-search {
+  margin-bottom: 0.8rem;
+}
+
+.group-editor-empty {
+  margin: 1.25rem 0;
+  color: var(--color-text-secondary);
+  text-align: center;
 }
 
 .group-editor-row {
@@ -2633,15 +2714,6 @@ textarea {
 .group-editor-row.included {
   border-color: color-mix(in srgb, var(--color-focused) 45%, transparent);
   color: var(--color-focused);
-}
-
-/* Separates the content-type toggles from the group filters in the same row. */
-.group-filter-divider {
-  flex: 0 0 auto;
-  width: 1px;
-  height: 1.1rem;
-  margin: 0 0.3rem;
-  background: var(--color-card-border);
 }
 
 /* -- Sheet routes: compact chrome only -- */
@@ -2787,4 +2859,466 @@ html .route-transition-base {
 html[data-route-transition="cover-up"] .route-transition-base,
 html[data-route-transition="uncover-down"] .route-transition-base {
   view-transition-name: base;
+}
+
+/* -- Android/mobile polish pass -- */
+
+/* The center title may be intentionally empty. Give the edge slots only the
+   room they actually need so a long detail title can never sit under actions. */
+.tawny-header {
+  z-index: 70;
+}
+
+.tawny-header .g3-header-row {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  min-height: 48px;
+  padding-inline: 0.35rem;
+}
+
+.tawny-header .g3-header-title {
+  width: 100%;
+  max-width: none;
+  padding-inline: 0.35rem;
+  box-sizing: border-box;
+}
+
+.tawny-header .g3-header-title-text {
+  max-width: 100%;
+}
+
+.brand-mark {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 9px;
+  font-family: inherit;
+  box-shadow: 0 3px 12px rgba(217, 120, 22, 0.2);
+}
+
+/* g3_ui centers labels by absolutely positioning start icons. That is useful
+   for full-width actions, but compact Tawny buttons need icon and text to move
+   as one unit. */
+.tawny-shell .g3-btn-content-start,
+.g3-sheet .g3-btn-content-start,
+.g3-modal .g3-btn-content-start {
+  display: inline-flex;
+  width: auto;
+  min-width: 0;
+  align-items: center;
+  gap: 0.42rem;
+  margin: 0.125rem 0.5rem;
+  padding: 0;
+}
+
+.tawny-shell .g3-btn-start,
+.g3-sheet .g3-btn-start,
+.g3-modal .g3-btn-start {
+  position: static;
+  width: auto;
+  height: auto;
+  flex: 0 0 auto;
+}
+
+.tawny-shell .g3-btn-end-spacer,
+.g3-sheet .g3-btn-end-spacer,
+.g3-modal .g3-btn-end-spacer {
+  display: none;
+}
+
+.channel-avatar {
+  overflow: hidden;
+  font-family: inherit;
+}
+
+.channel-avatar-fallback {
+  color: color-mix(in srgb, var(--color-focused) 72%, var(--color-text-secondary));
+  background: color-mix(in srgb, var(--color-focused) 10%, var(--color-bg-secondary));
+}
+
+.empty-state {
+  min-height: 11rem;
+  padding: 1.5rem 1rem;
+}
+
+.empty-icon {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  margin: 0 auto 0.8rem;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-focused) 24%, var(--color-card-border));
+  border-radius: 50%;
+  background: var(--tawny-amber-soft);
+  color: var(--color-focused);
+}
+
+.empty-state h3 {
+  margin: 0 0 0.35rem;
+}
+
+.group-filter-row {
+  mask-image: linear-gradient(to right, transparent 0, #000 0.35rem, #000 calc(100% - 1.5rem), transparent 100%);
+  padding-inline: 0.35rem 1.5rem;
+  margin-inline: -0.35rem;
+}
+
+.video-grid-shorts {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.video-grid-shorts .thumbnail-shell {
+  aspect-ratio: 9 / 16;
+  background: #000;
+}
+
+.video-grid-shorts .video-thumbnail {
+  height: 100%;
+  object-fit: cover;
+}
+
+.video-grid-shorts .video-meta-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  padding: 0.65rem 0.45rem 0.7rem 0.6rem;
+}
+
+.video-grid-shorts .video-meta-row > .channel-avatar,
+.video-grid-shorts .video-copy > p:not(.video-stats) {
+  display: none;
+}
+
+.video-grid-shorts .video-copy h2 {
+  font-size: 0.86rem;
+}
+
+.playlist-collage img.playlist-collage-short {
+  object-fit: contain;
+  background: #05070a;
+}
+
+.search-context {
+  color: var(--color-text-secondary);
+}
+
+.subscription-groups {
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.subscription-heading {
+  flex-direction: row;
+  align-items: center;
+}
+
+.subscription-count {
+  display: inline-grid;
+  min-width: 1.65rem;
+  min-height: 1.45rem;
+  padding: 0 0.4rem;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--color-control);
+  color: var(--color-text-secondary);
+}
+
+.channel-subscribe-button {
+  max-width: 100%;
+}
+
+.settings-content {
+  gap: 1.1rem;
+}
+
+.settings-section {
+  margin-bottom: 1.15rem;
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(8rem, auto);
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.setting-row-nested {
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, auto);
+  padding-left: 2.8rem;
+}
+
+.player-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: visible;
+}
+
+.player-actions .g3-btn {
+  min-width: 0;
+}
+
+.player-actions .g3-btn-content-start {
+  margin-inline: 0.25rem;
+}
+
+.player-options-menu {
+  scrollbar-width: thin;
+}
+
+#tawny-player:fullscreen,
+#tawny-player.is-fullscreen {
+  height: 100dvh;
+}
+
+#tawny-player:fullscreen .player-controls-top,
+#tawny-player.is-fullscreen .player-controls-top {
+  padding-top: max(0.45rem, env(safe-area-inset-top));
+  padding-right: max(0.65rem, env(safe-area-inset-right));
+  padding-left: max(0.65rem, env(safe-area-inset-left));
+}
+
+#tawny-player:fullscreen .player-controls-bottom,
+#tawny-player.is-fullscreen .player-controls-bottom {
+  padding-right: max(0.7rem, env(safe-area-inset-right));
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  padding-left: max(0.7rem, env(safe-area-inset-left));
+}
+
+@media (max-width: 1020px) {
+  .video-grid-shorts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .page {
+    padding: 0.85rem;
+  }
+
+  .feed-intro,
+  .section-heading {
+    gap: 0.65rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .feed-intro h2,
+  .section-heading h2 {
+    font-size: 1.28rem;
+  }
+
+  .feed-intro p,
+  .section-heading p {
+    line-height: 1.4;
+  }
+
+  .video-grid {
+    gap: 0.9rem;
+  }
+
+  .video-grid-shorts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .video-card {
+    border-radius: 14px;
+  }
+
+  .video-meta-row {
+    padding: 0.72rem 0.55rem 0.78rem 0.68rem;
+  }
+
+  .channel-grid {
+    gap: 0.65rem;
+  }
+
+  .channel-card {
+    gap: 0.6rem;
+    padding: 0.9rem 0.55rem 0.75rem;
+  }
+
+  .channel-avatar-large {
+    width: 3.25rem;
+    height: 3.25rem;
+  }
+
+  .channel-card-copy h3 {
+    font-size: 0.86rem;
+  }
+
+  .channel-card-copy span {
+    font-size: 0.68rem;
+  }
+
+  .channel-hero {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    margin: 0.15rem 0 1rem;
+    padding: 0.85rem;
+    border-radius: 16px;
+  }
+
+  .channel-avatar-hero {
+    width: 3.7rem;
+    height: 3.7rem;
+  }
+
+  .channel-hero-copy h1 {
+    margin-block: 0.1rem;
+    font-size: 1.25rem;
+  }
+
+  .channel-hero > .g3-btn {
+    grid-column: auto;
+    width: auto;
+  }
+
+  .playlist-grid {
+    gap: 0.65rem;
+  }
+
+  .explore-search-stack {
+    margin-bottom: 0.75rem;
+  }
+
+  .setting-row,
+  .setting-row-nested {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-left: 0;
+  }
+
+  .setting-row > .g3-select-btn,
+  .setting-row-nested > .g3-select-btn,
+  .setting-copy + .g3-select-btn {
+    grid-column: 2;
+    width: auto;
+    margin-left: 0;
+  }
+
+  .data-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .data-card {
+    min-width: 0;
+  }
+
+  .data-card .g3-card-body {
+    padding: 0.7rem;
+  }
+
+  .data-card span {
+    font-size: 0.66rem;
+  }
+
+  .player-actions {
+    gap: 0.35rem;
+  }
+
+  .player-actions .g3-btn {
+    padding-inline: 0.25rem;
+    font-size: 0.72rem;
+  }
+
+  .player-options-menu {
+    top: 3rem;
+    right: 0.4rem;
+    width: min(20rem, calc(100% - 0.8rem));
+    max-height: calc(100% - 3.35rem);
+    padding: 0.55rem;
+  }
+
+  .player-options-section + .player-options-section {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+  }
+
+  .player-option-grid {
+    gap: 0.25rem;
+  }
+
+  .player-option-button {
+    min-width: 2.7rem;
+    padding: 0.32rem 0.45rem;
+  }
+
+  .player-seek-preview {
+    width: 8rem;
+  }
+
+  .player-control-row .player-captions-button {
+    display: inline-grid;
+  }
+}
+
+@container g3-app-shell (width < 48rem) {
+  .tawny-shell > .g3-header {
+    position: relative;
+    z-index: 70;
+    flex: 0 0 auto;
+  }
+
+  .tawny-shell > .g3-body {
+    position: relative;
+    z-index: 1;
+    min-height: 0;
+  }
+
+  .tawny-shell > .g3-navbar-tab-bar {
+    position: relative;
+    z-index: 60;
+    flex: 0 0 auto;
+    padding-top: 0.1rem;
+    padding-bottom: max(0.08rem, env(safe-area-inset-bottom));
+  }
+
+  .tawny-shell .g3-navbar-md .g3-navbar-tab,
+  .tawny-shell.g3-navbar-md .g3-navbar-tab {
+    min-height: 3.35rem;
+    padding: 0.25rem 0 0.08rem;
+  }
+
+  .tawny-shell .g3-navbar-tab-label {
+    font-size: 0.64rem;
+    line-height: 0.85rem;
+  }
+
+  .tawny-shell .g3-navbar-md .g3-navbar-tab-selected::after,
+  .tawny-shell.g3-navbar-md .g3-navbar-tab-selected::after {
+    bottom: 0.18rem;
+  }
+
+  .persistent-player.mini {
+    bottom: calc(3.55rem + env(safe-area-inset-bottom));
+    grid-template-columns: 6.45rem minmax(0, 1fr) 2.5rem;
+    min-height: 3.65rem;
+  }
+
+  .persistent-player.mini .persistent-player-stage {
+    height: 3.65rem;
+  }
+
+  .has-mini-player .g3-body-content {
+    padding-bottom: 4.25rem !important;
+    scroll-padding-bottom: 4.25rem;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  .persistent-player.expanded {
+    width: 100%;
+    max-width: none;
+  }
+
+  .persistent-player.expanded .persistent-player-stage {
+    width: 100%;
+    height: 100dvh;
+    aspect-ratio: auto;
+  }
+
+  .player-options-menu {
+    top: max(0.3rem, env(safe-area-inset-top));
+    max-height: calc(100dvh - 0.6rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
 }

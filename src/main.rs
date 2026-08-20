@@ -12,6 +12,12 @@ use app::App;
 #[cfg(not(feature = "server"))]
 const SERVER_URL: Option<&str> = option_env!("SERVER_URL");
 
+#[cfg(all(not(feature = "server"), target_os = "android"))]
+const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8080";
+
+#[cfg(all(not(feature = "server"), not(target_os = "android")))]
+const DEFAULT_SERVER_URL: &str = "http://localhost:8080";
+
 #[cfg(feature = "server")]
 fn main() {
     dioxus::serve(|| async move {
@@ -26,7 +32,7 @@ fn main() {
         Ok(dioxus::server::router(App)
             .route(
                 "/api/v1/playback/proxy/{token}",
-                get(server::playback_proxy),
+                get(server::playback_proxy).options(server::playback_proxy_options),
             )
             .route(
                 "/api/v1/websub/youtube",
@@ -39,6 +45,6 @@ fn main() {
 #[cfg(not(feature = "server"))]
 fn main() {
     g3_ui::init_auto_mode();
-    dioxus::fullstack::set_server_url(SERVER_URL.unwrap_or("http://localhost:8080"));
+    dioxus::fullstack::set_server_url(SERVER_URL.unwrap_or(DEFAULT_SERVER_URL));
     dioxus::launch(App);
 }

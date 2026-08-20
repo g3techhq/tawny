@@ -1,12 +1,12 @@
 use crate::{app::Route, models::Playlist, state::AppState};
 use dioxus::prelude::*;
-use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{CheckCheck, ListPlus, Pin, Plus, Trash2};
+use dx_route_transitions::animated_navigate;
 use g3_ui::{Button, ButtonStyle, Card, Field, Modal, RightSlot, StatusColor};
 
 use super::VideoGrid;
 
-fn playlist_thumbnails(state: AppState, playlist: &Playlist) -> Vec<String> {
+fn playlist_thumbnails(state: AppState, playlist: &Playlist) -> Vec<(String, bool)> {
     playlist
         .video_ids
         .iter()
@@ -16,7 +16,7 @@ fn playlist_thumbnails(state: AppState, playlist: &Playlist) -> Vec<String> {
                 .videos
                 .iter()
                 .find(|video| &video.id == id)
-                .map(|video| video.thumbnail_url.clone())
+                .map(|video| (video.thumbnail_url.clone(), video.is_short))
         })
         .take(3)
         .collect()
@@ -51,6 +51,7 @@ pub fn Playlists() -> Element {
                         let remove_id = playlist.id.clone();
                         let remove_name = playlist.name.clone();
                         let thumbs = playlist_thumbnails(app_state, &playlist);
+                        let collage_class = format!("playlist-collage count-{}", thumbs.len());
                         let video_count = playlist.video_ids.len();
                         let is_pinned = playlist.pinned;
                         rsx! {
@@ -91,17 +92,28 @@ pub fn Playlists() -> Element {
                                     }
                                 }),
                                 onclick: move |_| { { let v = playlist_id.clone(); spawn(async move { animated_navigate(Route::PlaylistDetail { id: v }).await; }); }; },
-                                div { class: "playlist-collage",
+                                div { class: collage_class,
                                     if thumbs.is_empty() {
                                         div { class: "playlist-empty-art", ListPlus { size: 30 } }
                                     } else {
-                                        for thumbnail in thumbs {
-                                            img { src: "{thumbnail}", alt: "", loading: "lazy" }
+                                        for (thumbnail, is_short) in thumbs {
+                                            img {
+                                                class: if is_short { "playlist-collage-short" } else { "" },
+                                                src: "{thumbnail}",
+                                                alt: "",
+                                                loading: "lazy"
+                                            }
                                         }
                                     }
                                 }
-                                p { "{playlist.description}" }
-                                span { class: "playlist-count", "{video_count} videos" }
+                                div { class: "playlist-card-meta",
+                                    span { class: "playlist-count",
+                                        if video_count == 1 { "1 video" } else { "{video_count} videos" }
+                                    }
+                                    if is_pinned {
+                                        span { class: "playlist-pin-status", Pin { size: 12 } "Pinned" }
+                                    }
+                                }
                             }
                         }
                     }

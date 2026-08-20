@@ -5,8 +5,8 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Search, User};
 use dx_route_transitions::animated_navigate;
-use dioxus_icons::lucide::Search;
 use g3_ui::Field;
 use g3_ui::{Button, StatusColor};
 
@@ -125,6 +125,8 @@ pub fn Explore() -> Element {
             }
             if !needle.is_empty() {
                 p { class: "search-summary", "{result_count} results for “{search_value}”" }
+            } else {
+                p { class: "search-summary search-context", "Recent from your library" }
             }
             if !channels.is_empty() {
                 section { class: "explore-channels",
@@ -136,7 +138,6 @@ pub fn Explore() -> Element {
                         for channel in channels {
                             {
                                 let channel_id = channel.id.clone();
-                                let initial = channel.name.chars().next().unwrap_or('T');
                                 rsx! {
                                     button {
                                         class: "channel-result",
@@ -145,7 +146,7 @@ pub fn Explore() -> Element {
                                         if let Some(avatar_url) = channel.avatar_url {
                                             img { src: "{avatar_url}", alt: "", loading: "lazy" }
                                         } else {
-                                            span { class: "channel-avatar", "{initial}" }
+                                            span { class: "channel-avatar channel-avatar-fallback", User { size: 18 } }
                                         }
                                         span {
                                             strong { "{channel.name}" }

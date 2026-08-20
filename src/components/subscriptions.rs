@@ -1,7 +1,7 @@
 use crate::{app::Route, models::Channel, state::AppState};
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Check, Layers, Plus, Search, Trash2, User};
 use dx_route_transitions::animated_navigate;
-use dioxus_icons::lucide::{Check, Layers, Plus, Trash2};
 use g3_ui::{Button, ButtonSize, ButtonStyle, Card, Field, Modal, Sheet, StatusColor};
 
 /// One channel tile, used by both the subscribed grid and the suggestions row.
@@ -11,7 +11,6 @@ fn ChannelCard(channel: Channel) -> Element {
     let channel_id = channel.id.clone();
     let open_channel_id = channel.id.clone();
     let is_subscribed = channel.subscribed;
-    let initial = channel.name.chars().next().unwrap_or('T');
     let avatar_url = channel.avatar_url.clone();
 
     rsx! {
@@ -28,14 +27,18 @@ fn ChannelCard(channel: Channel) -> Element {
                     loading: "lazy",
                 }
             } else {
-                div { class: "channel-avatar channel-avatar-large", "{initial}" }
+                div { class: "channel-avatar channel-avatar-large channel-avatar-fallback", User { size: 24 } }
             }
             div { class: "channel-card-copy",
                 h3 { "{channel.name}" }
-                span { "{channel.subscriber_count} subscribers" }
+                if !channel.subscriber_count.trim().is_empty() {
+                    span { "{channel.subscriber_count} subscribers" }
+                }
             }
             Button {
                 size: ButtonSize::Sm,
+                class: "channel-subscribe-button",
+                start: if is_subscribed { Some(rsx! { Check { size: 15 } }) } else { None },
                 style: if is_subscribed { ButtonStyle::Neutral } else { ButtonStyle::Solid },
                 onclick: move |event: MouseEvent| {
                     event.stop_propagation();
@@ -58,6 +61,7 @@ pub fn Subscriptions() -> Element {
     // Which group's membership sheet is open.
     let mut editing_group = use_signal(|| None::<String>);
     let mut editor_open = use_signal(|| false);
+    let mut group_search = use_signal(String::new);
 
     let library = app_state.library();
     let groups = library.subscription_groups.clone();
@@ -79,7 +83,16 @@ pub fn Subscriptions() -> Element {
         .and_then(|id| groups.iter().find(|group| &group.id == id))
         .map(|group| group.channel_ids.clone())
         .unwrap_or_default();
-    let subscribed_for_editor = subscribed.clone();
+    let group_query = group_search().trim().to_lowercase();
+    let subscribed_for_editor = subscribed
+        .iter()
+        .filter(|channel| {
+            group_query.is_empty()
+                || channel.name.to_lowercase().contains(&group_query)
+                || channel.handle.to_lowercase().contains(&group_query)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
 
     rsx! {
         main { class: "page subscriptions-page",
@@ -117,7 +130,7 @@ pub fn Subscriptions() -> Element {
                                                 for member in members.iter().take(6) {
                                                     if let Some(avatar_url) = member.avatar_url.clone() {
                                                         img {
-                                                            class: "channel-avatar",
+                                                            class: "channel-avatar channel-avatar-fallback",
                                                             key: "{member.id}",
                                                             src: "{avatar_url}",
                                                             alt: "{member.name}",
@@ -129,7 +142,7 @@ pub fn Subscriptions() -> Element {
                                                             class: "channel-avatar",
                                                             key: "{member.id}",
                                                             title: "{member.name}",
-                                                            "{member.name.chars().next().unwrap_or('T')}"
+                                                            User { size: 16 }
                                                         }
                                                     }
                                                 }
@@ -139,6 +152,7 @@ pub fn Subscriptions() -> Element {
                                                 style: ButtonStyle::Neutral,
                                                 onclick: move |_| {
                                                     editing_group.set(Some(group_id.clone()));
+                                                    group_search.set(String::new());
                                                     editor_open.set(true);
                                                 },
                                                 "Edit"
@@ -171,12 +185,14 @@ pub fn Subscriptions() -> Element {
                 }
             }
 
-            div { class: "subsection-heading",
+            div { class: "subsection-heading subscription-heading",
                 h3 { Layers { size: 18 } "Subscriptions" }
-                span { "{subscribed.len()}" }
+                span { class: "subscription-count", "{subscribed.len()}" }
             }
             if subscribed.is_empty() {
                 div { class: "empty-state",
+                    div { class: "empty-icon", User { size: 25 } }
+                    h3 { "No subscriptions yet" }
                     p { "You have not subscribed to any channels yet." }
                 }
             } else {
@@ -210,8 +226,18 @@ pub fn Subscriptions() -> Element {
                     p { "Choose which channels belong to this group" }
                 }
             }
-            if subscribed_for_editor.is_empty() {
+            Field {
+                label: "Search channels".to_string(),
+                value: group_search,
+                r#type: "search".to_string(),
+                placeholder: "Search subscribed channels".to_string(),
+                class: "group-editor-search",
+                end: rsx! { Search { size: 18 } },
+            }
+            if subscribed.is_empty() {
                 p { class: "detail-muted", "Subscribe to a channel first." }
+            } else if subscribed_for_editor.is_empty() {
+                p { class: "group-editor-empty", "No subscribed channels match your search." }
             } else {
                 div { class: "group-editor-list",
                     for channel in subscribed_for_editor {
@@ -219,7 +245,6 @@ pub fn Subscriptions() -> Element {
                             let channel_id = channel.id.clone();
                             let included = editing_members.contains(&channel.id);
                             let group_id = editing.clone().unwrap_or_default();
-                            let initial = channel.name.chars().next().unwrap_or('T');
                             rsx! {
                                 button {
                                     class: if included { "group-editor-row included" } else { "group-editor-row" },
@@ -230,7 +255,7 @@ pub fn Subscriptions() -> Element {
                                     if let Some(avatar_url) = channel.avatar_url.clone() {
                                         img { class: "channel-avatar", src: "{avatar_url}", alt: "", loading: "lazy" }
                                     } else {
-                                        div { class: "channel-avatar", "{initial}" }
+                                        div { class: "channel-avatar channel-avatar-fallback", User { size: 16 } }
                                     }
                                     span { "{channel.name}" }
                                     if included {

@@ -1,7 +1,7 @@
 use crate::{app::Route, models::Video, state::AppState};
 use dioxus::prelude::*;
+use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, User, X};
 use dx_route_transitions::animated_navigate;
-use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, X};
 use g3_ui::{
     Badge, Button, ButtonStyle, StatusColor, SwipeAction, SwipeBehavior, SwipeItem, SwipeSide,
     SwipeState,
@@ -12,6 +12,7 @@ pub fn VideoGrid(
     videos: Vec<Video>,
     empty_message: Option<String>,
     playlist_id: Option<String>,
+    shorts_layout: Option<bool>,
 ) -> Element {
     let app_state = use_context::<AppState>();
     let empty_copy =
@@ -19,12 +20,12 @@ pub fn VideoGrid(
     rsx! {
         if videos.is_empty() {
             div { class: "empty-state",
-                div { class: "empty-orbit", "◌" }
+                div { class: "empty-icon", User { size: 25 } }
                 h3 { "Nothing here yet" }
                 p { "{empty_copy}" }
             }
         } else {
-            div { class: "video-grid",
+            div { class: if shorts_layout.unwrap_or(false) { "video-grid video-grid-shorts" } else { "video-grid" },
                 for video in videos {
                     {
                         let video_id = video.id.clone();
@@ -186,7 +187,7 @@ pub fn VideoCard(video: Video) -> Element {
                             loading: "lazy",
                         }
                     } else {
-                        div { class: "channel-avatar", "{video.channel_name.chars().next().unwrap_or('T')}" }
+                        div { class: "channel-avatar channel-avatar-fallback", User { size: 18 } }
                     }
                     div {
                         class: "video-copy",

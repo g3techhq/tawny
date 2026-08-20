@@ -45,7 +45,8 @@
       root.webkitRequestFullscreen ||
       root.webkitRequestFullScreen;
     const started = request
-      ? Promise.resolve(request.call(root)).catch(() => Promise.reject())
+      ? Promise.resolve(request.call(root, { navigationUI: "hide" })).catch(() =>
+          Promise.resolve(request.call(root)).catch(() => Promise.reject()))
       : Promise.reject();
     return started
       .then(() => {
@@ -170,13 +171,21 @@
       progress.setAttribute("aria-valuetext", `${formatTime(position)} of ${formatTime(length)}`);
     }
 
+    function effectivePlaybackRate() {
+      const rate = Number(video.playbackRate);
+      if (Number.isFinite(rate) && rate > 0) return rate;
+      const fallback = Number(video.defaultPlaybackRate);
+      return Number.isFinite(fallback) && fallback > 0 ? fallback : 1;
+    }
+
     function updateSpeed() {
-      const value = `${Number(video.playbackRate.toFixed(2))}×`;
+      const rate = effectivePlaybackRate();
+      const value = `${Number(rate.toFixed(2))}×`;
       if (speedLabel) speedLabel.textContent = value;
       controls.querySelectorAll("[data-player-speed]").forEach((button) => {
         button.classList.toggle(
           "selected",
-          Math.abs(Number(button.dataset.playerSpeed) - video.playbackRate) < 0.01,
+          Math.abs(Number(button.dataset.playerSpeed) - rate) < 0.01,
         );
       });
     }
@@ -319,6 +328,7 @@
     }
 
     function setSpeed(speed) {
+      if (!Number.isFinite(speed) || speed <= 0) return;
       video.playbackRate = speed;
       video.defaultPlaybackRate = speed;
       updateSpeed();
@@ -326,7 +336,7 @@
 
     function cycleQuickSpeed() {
       const current = quickSpeedSteps.findIndex(
-        (speed) => Math.abs(speed - video.playbackRate) < 0.01,
+        (speed) => Math.abs(speed - effectivePlaybackRate()) < 0.01,
       );
       setSpeed(quickSpeedSteps[(current + 1) % quickSpeedSteps.length]);
     }
@@ -433,6 +443,27 @@
       // on the thumb) emits no `input` and no `change`, so relying on `change`
       // alone would leave the player paused with a frozen timeline, since
       // updateTimeline() bails out while `scrubbing` is set.
+      const positionScrubAt = (clientX) => {
+        const bounds = progress.getBoundingClientRect();
+        if (!bounds.width) return;
+        const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+        progress.value = String(Math.round(ratio * 10000));
+        const length = Number.isFinite(video.duration) ? video.duration : 0;
+        const position = ratio * length;
+        if (currentTime) currentTime.textContent = formatTime(position);
+        progress.style.setProperty("--player-progress", `${ratio * 100}%`);
+        progress.setAttribute("aria-valuetext", `${formatTime(position)} of ${formatTime(length)}`);
+        showScrubPreview(position);
+      };
+
+      const beginScrub = () => {
+        if (scrubbing) return;
+        scrubbing = true;
+        resumeAfterScrub = !video.paused && !video.ended;
+        if (resumeAfterScrub) video.pause();
+        showControls(true);
+      };
+
       const finishScrub = (commit) => {
         if (!scrubbing) return;
         scrubbing = false;
@@ -447,15 +478,20 @@
         scheduleHide();
       };
 
-      listen(progress, "pointerdown", () => {
-        scrubbing = true;
-        resumeAfterScrub = !video.paused && !video.ended;
-        if (resumeAfterScrub) video.pause();
-        showControls(true);
-        const length = Number.isFinite(video.duration) ? video.duration : 0;
-        showScrubPreview((Number(progress.value) / 10000) * length);
+      listen(progress, "pointerdown", (event) => {
+        beginScrub();
+        try { progress.setPointerCapture(event.pointerId); } catch (_) {}
+        positionScrubAt(event.clientX);
+      });
+      listen(progress, "pointermove", (event) => {
+        if (scrubbing) positionScrubAt(event.clientX);
       });
       listen(progress, "input", () => {
+        // Android WebView can hand a range drag directly to the native range
+        // control without first surfacing pointerdown. Treat the first input
+        // as the start so the clock freezes at the preview position and the
+        // media still pauses throughout the gesture.
+        beginScrub();
         const length = Number.isFinite(video.duration) ? video.duration : 0;
         const position = (Number(progress.value) / 10000) * length;
         if (currentTime) currentTime.textContent = formatTime(position);

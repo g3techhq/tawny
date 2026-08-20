@@ -8,16 +8,28 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{
     Captions, Check, ChevronLeft, Clock, Heart, ListVideo, Maximize2, MessageSquare, Minimize2,
-    Pause,
-    PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, Volume2,
-    VolumeX, X,
+    Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp,
+    User, Volume2, VolumeX, X,
 };
+use dx_route_transitions::animated_navigate;
 use g3_ui::{Badge, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
 
 use super::VideoGrid;
+
+const CONFIGURED_SERVER_URL: Option<&str> = option_env!("SERVER_URL");
+
+fn playback_server_url() -> &'static str {
+    if let Some(url) = CONFIGURED_SERVER_URL {
+        return url;
+    }
+    if cfg!(target_os = "android") {
+        "http://127.0.0.1:8080"
+    } else {
+        "http://localhost:8080"
+    }
+}
 
 fn sync_player_metadata(
     tracks: Vec<CaptionTrack>,
@@ -35,21 +47,37 @@ fn sync_player_metadata(
     let Ok(preview_frames) = serde_json::to_string(&preview_frames) else {
         return;
     };
+    let Ok(server_url) = serde_json::to_string(playback_server_url()) else {
+        return;
+    };
     let selected_caption = selected_caption
         .map(|index| index.to_string())
         .unwrap_or_else(|| "null".to_string());
     spawn(async move {
         let script = format!(
             r#"
-            const tracks = {tracks};
+            const rawTracks = {tracks};
             const chapters = {chapters};
             const previewFrames = {preview_frames};
+            const serverUrl = {server_url};
             let media = document.getElementById('tawny-player-media');
-            for (let attempt = 0; attempt < 800 && (!media || !window.TawnyPlayerControls); attempt++) {{
+            for (let attempt = 0; attempt < 800 && (!media || !window.TawnyPlayerControls || !window.TawnyTransport); attempt++) {{
                 await new Promise((resolve) => setTimeout(resolve, 25));
                 media = document.getElementById('tawny-player-media');
             }}
-            if (media && window.TawnyPlayerControls) {{
+            if (media && window.TawnyPlayerControls && window.TawnyTransport) {{
+                const options = {{ serverUrl }};
+                const tracks = rawTracks.map((track) => ({{
+                    ...track,
+                    url: window.TawnyTransport.normalizePlaybackUrl(track.url, options),
+                }}));
+                const elements = media.querySelectorAll('track[data-tawny-caption]');
+                tracks.forEach((track, index) => {{
+                    const element = elements[index];
+                    if (element && element.getAttribute('src') !== track.url) {{
+                        element.setAttribute('src', track.url);
+                    }}
+                }});
                 window.TawnyPlayerControls.setMetadata(media, {{
                     captions: tracks,
                     selectedCaption: {selected_caption},
@@ -159,12 +187,16 @@ fn attach_player_session(
     let Ok(session) = serde_json::to_string(&session) else {
         return;
     };
+    let Ok(server_url) = serde_json::to_string(playback_server_url()) else {
+        return;
+    };
     let video_id = video_id.to_string();
     spawn(async move {
         let script = format!(
             r#"
             const session = {session};
             const videoId = {video_id:?};
+            const serverUrl = {server_url};
             const media = document.getElementById('tawny-player-media');
             window.__tawnyAttachEval = {{ phase: 'starting', hasMedia: Boolean(media) }};
             if (!media) {{ dioxus.send(false); return; }}
@@ -181,10 +213,13 @@ fn attach_player_session(
                 if (window.TawnyPlayerControls) {{
                     window.TawnyPlayerControls.attach(media);
                 }}
+                const serverBase = window.TawnyTransport.playbackServerBase({{ serverUrl }});
+                const refreshPath = `/api/v1/playback/${{encodeURIComponent(videoId)}}?prefer_sabr={prefer_sabr}`;
                 await window.TawnyTransport.attach(media, session, {{
                     playbackRate: {playback_rate},
                     videoId,
-                    refreshUrl: `/api/v1/playback/${{encodeURIComponent(videoId)}}?prefer_sabr={prefer_sabr}`,
+                    serverUrl,
+                    refreshUrl: new URL(refreshPath, `${{serverBase}}/`).href,
                 }});
                 window.__tawnyAttachEval = {{ phase: 'attached', hasMedia: true }};
                 dioxus.send(true);
@@ -337,6 +372,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                         key: "{player_key}",
                         autoplay: true,
                         playsinline: true,
+                        crossorigin: "anonymous",
                         poster: "{video.thumbnail_url}",
                         onmounted: move |_| {
                             if let Some(session) = session_to_attach.clone() {
@@ -463,7 +499,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             div { class: "player-control-row",
                                 span { class: "player-time",
                                     span { "data-player-current-time": "", "0:00" }
-                                    span { class: "player-time-separator", " • " }
+                                    span { class: "player-time-separator", " / " }
                                     span { "data-player-duration": "", "0:00" }
                                     // Current chapter, to the right of the clock; tapping it
                                     // opens the chapter list rather than making the user scrub.
@@ -607,6 +643,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
+                                size: ButtonSize::Sm,
                                 onclick: move |_| use_embed.set(true),
                                 "Use YouTube embed"
                             }
@@ -765,7 +802,6 @@ fn source_is_transportable(source: &PlaybackSource) -> bool {
         PlaybackProtocol::EmbedFallback => false,
     }
 }
-
 
 #[component]
 pub fn VideoDetail(id: String) -> Element {
@@ -980,6 +1016,7 @@ fn VideoDetailInner(id: String) -> Element {
                         div { class: "player-actions",
                             Button {
                                 style: ButtonStyle::Neutral,
+                                size: ButtonSize::Sm,
                                 start: rsx! { Check { size: 17 } },
                                 onclick: move |_| {
                                     app_state.mark_watched(&watched_id, true);
@@ -989,6 +1026,7 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
+                                size: ButtonSize::Sm,
                                 start: rsx! { Clock { size: 17 } },
                                 onclick: move |_| {
                                     app_state.playlist_picker_video.set(Some(playlist_video.clone()));
@@ -998,6 +1036,7 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
+                                size: ButtonSize::Sm,
                                 start: rsx! { Share2 { size: 17 } },
                                 onclick: move |_| app_state.show_toast("Link ready to share", StatusColor::Neutral),
                                 "Share"
@@ -1019,11 +1058,13 @@ fn VideoDetailInner(id: String) -> Element {
                                 if let Some(avatar_url) = channel.avatar_url {
                                     img { class: "channel-avatar channel-avatar-medium", src: "{avatar_url}", alt: "" }
                                 } else {
-                                    div { class: "channel-avatar channel-avatar-medium", "{channel.name.chars().next().unwrap_or('T')}" }
+                                    div { class: "channel-avatar channel-avatar-medium channel-avatar-fallback", User { size: 20 } }
                                 }
                                 div {
                                     h3 { "{channel.name}" }
-                                    p { "{channel.subscriber_count} subscribers" }
+                                    if !channel.subscriber_count.trim().is_empty() {
+                                        p { "{channel.subscriber_count} subscribers" }
+                                    }
                                 }
                                 Button {
                                     size: ButtonSize::Sm,

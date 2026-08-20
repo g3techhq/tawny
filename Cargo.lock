@@ -2457,6 +2457,7 @@ dependencies = [
  "jni 0.21.1",
  "js-sys",
  "manganis",
+ "ndk-context",
  "serde_json",
  "wasm-bindgen",
  "web-sys",

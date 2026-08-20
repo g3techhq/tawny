@@ -3,13 +3,8 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{
-    Database, Gauge, HardDrive, ListPlus, Server, ShieldCheck,
-};
-use g3_ui::{
-    Badge, Card, Item, List, RightSlot, Select, SelectOption,
-    StatusColor, Toggle,
-};
+use dioxus_icons::lucide::{Database, Gauge, HardDrive, ListPlus, Server, ShieldCheck};
+use g3_ui::{Badge, Card, Item, List, RightSlot, Select, SelectOption, StatusColor, Toggle};
 
 #[component]
 pub fn SettingsPage() -> Element {
@@ -53,15 +48,6 @@ pub fn SettingsPage() -> Element {
     rsx! {
         div { class: "settings-page",
                 main { class: "settings-content",
-                    div { class: "settings-hero",
-                        span { class: "brand-mark brand-mark-large", "T" }
-                        div {
-                            span { class: "section-kicker", "TAWNY 0.1" }
-                            h2 { "Built to feel quiet." }
-                            p { "Your feed and library stay useful even when the network does not." }
-                        }
-                    }
-
                     section { class: "settings-section",
                         span { class: "section-kicker", "GESTURES" }
                         Card { title: "Swipe actions".to_string(),

@@ -1,9 +1,11 @@
 use crate::{app::Route, state::AppState};
 use dioxus::prelude::*;
-use dx_route_transitions::animated_navigate;
 use dioxus_icons::lucide::{
-    ChevronLeft, History, House, List as ListIcon, ListVideo, Search, Settings, Users,
+    ChevronLeft, History, House, List as ListIcon, ListVideo, Play, Search, Settings, Users,
 };
+#[cfg(target_os = "android")]
+use dx_native_plugins::NativePlugins;
+use dx_route_transitions::animated_navigate;
 use g3_ui::{
     Body, Button, ButtonStyle, Header, Navbar, NavbarTab, NavbarTabBar, SegmentButton, SegmentGroup,
 };
@@ -60,12 +62,87 @@ fn section_label(route: &Route) -> &'static str {
     }
 }
 
+/// Connect Android's Activity-level Back callback to the Dioxus router. The
+/// native plugin deliberately starts disabled so Back can still leave the app
+/// on the root feed.
+#[cfg(target_os = "android")]
+#[component]
+fn NativeBackCoordinator(route: Route) -> Element {
+    let app_state = use_context::<AppState>();
+    let mut plugins = use_context::<NativePlugins>();
+    let navigator = navigator();
+    // This setter is idempotent. Updating it while rendering keeps the native
+    // callback in lockstep with the visible route; a post-render effect leaves
+    // a short window where Android still sees the previous page's Back state.
+    let intercepting = !matches!(route, Route::Feed {})
+        || (app_state.playlist_picker_open)()
+        || (app_state.video_actions_open)()
+        || (app_state.chapters_sheet_open)();
+    {
+        let mut back_button = plugins.back_button.write();
+        let _ = back_button.prepare();
+        let _ = back_button.set_intercepting(intercepting);
+    }
+
+    use_future(move || {
+        let navigator = navigator.clone();
+        async move {
+            let mut eval = document::eval(
+                r#"
+                const tawnyNativeBackEvent = 'dxnativeback';
+                window.addEventListener(tawnyNativeBackEvent, async () => {
+                    if (document.fullscreenElement || document.webkitFullscreenElement) {
+                        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+                        if (exit) {
+                            try { await exit.call(document); } catch (_) {}
+                        }
+                        return;
+                    }
+                    const options = document.querySelector('[data-player-options-menu]:not([hidden])');
+                    if (options) {
+                        document.querySelector('[data-player-action="settings"]')?.click();
+                        return;
+                    }
+                    const sheet = document.querySelector('.g3-sheet-backdrop-open');
+                    if (sheet) {
+                        sheet.click();
+                        return;
+                    }
+                    const modal = document.querySelector('.g3-modal-overlay[data-state="open"]');
+                    if (modal) {
+                        modal.click();
+                        return;
+                    }
+                    dioxus.send(true);
+                });
+                "#,
+            );
+            while eval.recv::<bool>().await.is_ok() {
+                if navigator.can_go_back() {
+                    navigator.go_back();
+                } else {
+                    animated_navigate(Route::Feed {}).await;
+                }
+            }
+        }
+    });
+    rsx! {}
+}
+
+#[cfg(not(target_os = "android"))]
+#[component]
+fn NativeBackCoordinator(route: Route) -> Element {
+    let _ = route;
+    rsx! {}
+}
+
 #[component]
 pub fn AppShell() -> Element {
     let route: Route = use_route();
     let app_state = use_context::<AppState>();
 
     let player_expanded = matches!(route, Route::VideoDetail { .. });
+    let has_mini_player = app_state.active_video().is_some() && !player_expanded;
     let detail = detail_title(&route, app_state);
     let is_detail = detail.is_some();
     let title = detail.unwrap_or_default();
@@ -81,8 +158,9 @@ pub fn AppShell() -> Element {
         Route::Feed {} => Some(rsx! {
             SegmentGroup { active: app_state.feed_filter_index,
                 SegmentButton { index: 0, "All" }
-                SegmentButton { index: 1, "Unwatched" }
-                SegmentButton { index: 2, "Today" }
+                SegmentButton { index: 1, "Videos" }
+                SegmentButton { index: 2, "Shorts" }
+                SegmentButton { index: 3, "Live" }
             }
         }),
         Route::Explore {} => Some(rsx! {
@@ -129,7 +207,7 @@ pub fn AppShell() -> Element {
     } else {
         rsx! {
             div { class: "brand-lockup",
-                span { class: "brand-mark", "T" }
+                span { class: "brand-mark", Play { size: 16, fill: "currentColor" } }
                 span { class: "header-eyebrow", "{section_label(&route)}" }
             }
         }
@@ -140,7 +218,12 @@ pub fn AppShell() -> Element {
         // sit on an ancestor of this: a named descendant is lifted out of its
         // ancestor's snapshot, so an outer cover would capture everything
         // except the content — an empty background sliding around.
-        Navbar { class: if is_cover { "tawny-shell tawny-shell-cover route-transition-base" } else { "tawny-shell route-transition-base" },
+        NativeBackCoordinator { key: "{route:?}", route: route.clone() }
+        Navbar { class: match (is_cover, has_mini_player) {
+                (true, _) => "tawny-shell tawny-shell-cover route-transition-base",
+                (false, true) => "tawny-shell has-mini-player route-transition-base",
+                (false, false) => "tawny-shell route-transition-base",
+            },
             // No top bar on the player: minimize, back, and swipe-down all
             // leave the screen, so a bar would only steal height from the video.
             if !player_expanded {
@@ -150,26 +233,32 @@ pub fn AppShell() -> Element {
                     start_button,
                     end_button: rsx! {
                         div { class: "header-actions",
-                            Button {
-                                style: ButtonStyle::Clear,
-                                aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
-                                class: "icon-button",
-                                onclick: move |_| { spawn(async move { animated_navigate(Route::QueuePage {}).await; }); },
-                                ListVideo { size: 19 }
+                            if !matches!(route, Route::QueuePage {}) {
+                                Button {
+                                    style: ButtonStyle::Clear,
+                                    aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
+                                    class: "icon-button",
+                                    onclick: move |_| { spawn(async move { animated_navigate(Route::QueuePage {}).await; }); },
+                                    ListVideo { size: 19 }
+                                }
                             }
-                            Button {
-                                style: ButtonStyle::Clear,
-                                aria_label: "History".to_string(),
-                                class: "icon-button header-history-button",
-                                onclick: move |_| { spawn(async move { animated_navigate(Route::HistoryPage {}).await; }); },
-                                History { size: 19 }
+                            if !matches!(route, Route::HistoryPage {}) {
+                                Button {
+                                    style: ButtonStyle::Clear,
+                                    aria_label: "History".to_string(),
+                                    class: "icon-button header-history-button",
+                                    onclick: move |_| { spawn(async move { animated_navigate(Route::HistoryPage {}).await; }); },
+                                    History { size: 19 }
+                                }
                             }
-                            Button {
-                                style: ButtonStyle::Clear,
-                                aria_label: "Settings".to_string(),
-                                class: "icon-button",
-                                onclick: move |_| { spawn(async move { animated_navigate(Route::SettingsPage {}).await; }); },
-                                Settings { size: 20 }
+                            if !matches!(route, Route::SettingsPage {}) {
+                                Button {
+                                    style: ButtonStyle::Clear,
+                                    aria_label: "Settings".to_string(),
+                                    class: "icon-button",
+                                    onclick: move |_| { spawn(async move { animated_navigate(Route::SettingsPage {}).await; }); },
+                                    Settings { size: 20 }
+                                }
                             }
                         }
                     },

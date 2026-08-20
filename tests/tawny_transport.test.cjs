@@ -44,6 +44,26 @@ assert.match(manifest, /value="main"/);
 assert.match(manifest, /video\?x=1&amp;y=2/);
 assert.equal(window.TawnyTransport.transportKind(source), "generated-dash");
 
+const mobileSession = window.TawnyTransport.normalizePlaybackSession(
+  {
+    primary: source,
+    alternatives: [],
+  },
+  { serverUrl: "http://127.0.0.1:8080" },
+);
+assert.equal(
+  mobileSession.primary.tracks[0].url,
+  "http://localhost/video?x=1&y=2",
+  "third-party media URLs are not rewritten",
+);
+assert.equal(
+  window.TawnyTransport.normalizePlaybackUrl(
+    "http://localhost:8080/api/v1/playback/proxy/token?part=1",
+    { serverUrl: "http://127.0.0.1:8080" },
+  ),
+  "http://127.0.0.1:8080/api/v1/playback/proxy/token?part=1",
+);
+
 const mixedManifest = window.TawnyTransport.buildDashManifest({
   ...source,
   tracks: [
