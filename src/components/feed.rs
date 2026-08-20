@@ -1,6 +1,6 @@
 use crate::{
     api::{refresh_subscription_feed, sync_library},
-    models::FeedFilter,
+    models::{DurationFilter, FeedFilter},
     state::AppState,
 };
 use dioxus::prelude::*;
@@ -21,6 +21,7 @@ pub fn Feed() -> Element {
     // Owned by the header's segmented control.
     let filter_index = app_state.feed_filter_index;
     let mut selected_group = use_signal(|| "all".to_string());
+    let mut selected_duration = use_signal(|| None::<DurationFilter>);
     let mut visible_count = use_signal(|| FEED_PAGE_SIZE);
     let filter = match filter_index() {
         1 => FeedFilter::Videos,
@@ -57,6 +58,10 @@ pub fn Feed() -> Element {
         FeedFilter::Shorts => videos.retain(|video| video.is_short && !video.is_live),
         FeedFilter::Live => videos.retain(|video| video.is_live),
     }
+    if let Some(duration) = selected_duration() {
+        let settings = app_state.settings();
+        videos.retain(|video| duration.matches(video, &settings));
+    }
     if app_state.settings().hide_watched {
         videos.retain(|video| !video.watched);
     }
@@ -88,11 +93,8 @@ pub fn Feed() -> Element {
                             } else if refresh.failed_channels == 0 {
                                 format!("Feed refreshed from {}", refresh.sources.join(" + "))
                             } else {
-                                format!(
-                                    "Feed updated; {} channel{} will retry later",
-                                    refresh.failed_channels,
-                                    if refresh.failed_channels == 1 { "" } else { "s" }
-                                )
+                                "Feed refreshed; cached results filled the few sources that were unavailable"
+                                    .to_string()
                             };
                             app_state.show_toast(message, StatusColor::Success);
                         }
@@ -108,6 +110,21 @@ pub fn Feed() -> Element {
             // Count and group filters share one row rather than stacking two
             // thin bands above the grid.
             nav { class: "group-filter-row", aria_label: "Subscription groups",
+                for duration in DurationFilter::ALL {
+                    button {
+                        class: if selected_duration() == Some(duration) { "group-filter duration-filter active" } else { "group-filter duration-filter" },
+                        aria_pressed: (selected_duration() == Some(duration)).to_string(),
+                        onclick: move |_| {
+                            selected_duration.set(if selected_duration() == Some(duration) {
+                                None
+                            } else {
+                                Some(duration)
+                            });
+                        },
+                        "{duration.label()}"
+                    }
+                }
+                span { class: "filter-divider", aria_hidden: "true" }
                 button {
                     class: if selected_group() == "all" { "group-filter active" } else { "group-filter" },
                     onclick: move |_| selected_group.set("all".into()),
@@ -136,7 +153,6 @@ pub fn Feed() -> Element {
 
                 VideoGrid {
                     videos,
-                    shorts_layout: filter == FeedFilter::Shorts,
                     empty_message: "Try another filter or refresh when you are back online.".to_string(),
                 }
 

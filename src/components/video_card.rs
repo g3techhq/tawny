@@ -1,6 +1,6 @@
 use crate::{app::Route, models::Video, state::AppState};
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, User, X};
+use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, Trash2, User};
 use dx_route_transitions::animated_navigate;
 use g3_ui::{
     Badge, Button, ButtonStyle, StatusColor, SwipeAction, SwipeBehavior, SwipeItem, SwipeSide,
@@ -47,7 +47,7 @@ pub fn VideoGrid(
                                                 app_state.show_toast("Removed from playlist", StatusColor::Neutral);
                                             }
                                         },
-                                        X { size: 15 }
+                                        Trash2 { size: 15 }
                                     }
                                 }
                             }
@@ -74,6 +74,7 @@ pub fn VideoCard(video: Video) -> Element {
     let start_video_id = video.id.clone();
     let end_video_id = video.id.clone();
     let full_video_id = video.id.clone();
+    let avatar_channel_id = video.channel_id.clone();
     let watched_video_id = video.id.clone();
     let menu_video = video.clone();
     let channel_avatar_url = app_state
@@ -179,15 +180,24 @@ pub fn VideoCard(video: Video) -> Element {
                     }
                 }
                 div { class: "video-meta-row",
-                    if let Some(avatar_url) = channel_avatar_url {
-                        img {
-                            class: "channel-avatar",
-                            src: "{avatar_url}",
-                            alt: "{video.channel_name}",
-                            loading: "lazy",
+                    button {
+                        class: "channel-avatar-link",
+                        aria_label: "Open {video.channel_name}",
+                        onclick: move |event: MouseEvent| {
+                            event.stop_propagation();
+                            let id = avatar_channel_id.clone();
+                            spawn(async move { animated_navigate(Route::ChannelDetail { id }).await; });
+                        },
+                        if let Some(avatar_url) = channel_avatar_url {
+                            img {
+                                class: "channel-avatar",
+                                src: "{avatar_url}",
+                                alt: "",
+                                loading: "lazy",
+                            }
+                        } else {
+                            span { class: "channel-avatar channel-avatar-fallback", User { size: 18 } }
                         }
-                    } else {
-                        div { class: "channel-avatar channel-avatar-fallback", User { size: 18 } }
                     }
                     div {
                         class: "video-copy",

@@ -77,6 +77,7 @@ fn NativeBackCoordinator(route: Route) -> Element {
     let intercepting = !matches!(route, Route::Feed {})
         || (app_state.playlist_picker_open)()
         || (app_state.video_actions_open)()
+        || (app_state.share_open)()
         || (app_state.chapters_sheet_open)();
     {
         let mut back_button = plugins.back_button.write();
@@ -92,10 +93,14 @@ fn NativeBackCoordinator(route: Route) -> Element {
                 const tawnyNativeBackEvent = 'dxnativeback';
                 window.addEventListener(tawnyNativeBackEvent, async () => {
                     if (document.fullscreenElement || document.webkitFullscreenElement) {
+                        if (window.__tawnyFullscreenBackPending) return;
+                        window.__tawnyFullscreenBackPending = true;
+                        document.querySelector('[data-player-native-orientation-unlock]')?.click();
                         const exit = document.exitFullscreen || document.webkitExitFullscreen;
                         if (exit) {
                             try { await exit.call(document); } catch (_) {}
                         }
+                        setTimeout(() => { window.__tawnyFullscreenBackPending = false; }, 350);
                         return;
                     }
                     const options = document.querySelector('[data-player-options-menu]:not([hidden])');
@@ -126,6 +131,22 @@ fn NativeBackCoordinator(route: Route) -> Element {
             }
         }
     });
+    rsx! {}
+}
+
+#[cfg(target_os = "android")]
+#[component]
+fn NativeMediaCoordinator() -> Element {
+    let mut plugins = use_context::<NativePlugins>();
+    use_hook(move || {
+        let _ = plugins.media.write().prepare();
+    });
+    rsx! {}
+}
+
+#[cfg(not(target_os = "android"))]
+#[component]
+fn NativeMediaCoordinator() -> Element {
     rsx! {}
 }
 
@@ -172,9 +193,10 @@ pub fn AppShell() -> Element {
         }),
         Route::ChannelDetail { .. } => Some(rsx! {
             SegmentGroup { active: app_state.channel_tab_index,
-                SegmentButton { index: 0, "Videos" }
-                SegmentButton { index: 1, "Shorts" }
-                SegmentButton { index: 2, "Live" }
+                SegmentButton { index: 0, "All" }
+                SegmentButton { index: 1, "Videos" }
+                SegmentButton { index: 2, "Shorts" }
+                SegmentButton { index: 3, "Live" }
             }
         }),
         _ => None,
@@ -214,11 +236,12 @@ pub fn AppShell() -> Element {
     };
 
     rsx! {
+        NativeMediaCoordinator {}
         // The shell is the base the sheet covers. The cover marker must never
         // sit on an ancestor of this: a named descendant is lifted out of its
         // ancestor's snapshot, so an outer cover would capture everything
         // except the content — an empty background sliding around.
-        NativeBackCoordinator { key: "{route:?}", route: route.clone() }
+        NativeBackCoordinator { route: route.clone() }
         Navbar { class: match (is_cover, has_mini_player) {
                 (true, _) => "tawny-shell tawny-shell-cover route-transition-base",
                 (false, true) => "tawny-shell has-mini-player route-transition-base",

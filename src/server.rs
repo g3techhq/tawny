@@ -316,7 +316,6 @@ struct DbPlaylist {
     playlist_id: String,
     name: String,
     video_ids: Vec<String>,
-    pinned: bool,
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
@@ -378,7 +377,6 @@ impl From<DbPlaylist> for Playlist {
             id: value.playlist_id,
             name: value.name,
             video_ids: value.video_ids,
-            pinned: value.pinned,
         }
     }
 }
@@ -563,9 +561,7 @@ impl AppServerState {
             .take(0)?;
         let playlists: Vec<DbPlaylist> = self
             .db
-            .query(
-                "SELECT playlist_id, name, video_ids, pinned FROM playlist ORDER BY pinned DESC, name",
-            )
+            .query("SELECT playlist_id, name, video_ids FROM playlist ORDER BY name")
             .await?
             .take(0)?;
         let subscription_groups: Vec<DbSubscriptionGroup> = self
@@ -1395,14 +1391,12 @@ impl AppServerState {
                     playlist_id = $playlist_id,
                     name = $name,
                     video_ids = $video_ids,
-                    pinned = $pinned,
                     updated_at = time::now()"#,
             )
             .bind(("record_key", playlist.id.clone()))
             .bind(("playlist_id", playlist.id.clone()))
             .bind(("name", playlist.name.clone()))
             .bind(("video_ids", playlist.video_ids.clone()))
-            .bind(("pinned", playlist.pinned))
             .await?
             .check()?;
         Ok(())
@@ -3594,9 +3588,17 @@ fn extract_chapters(description: &str) -> Vec<VideoChapter> {
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            let (timestamp, title) = line.split_once(char::is_whitespace)?;
-            let start_seconds = parse_timestamp(timestamp)?;
-            let title = title.trim().trim_start_matches(['-', '–', '—', ':']).trim();
+            // Chapter lists are often bulleted or numbered, so the timestamp
+            // is not guaranteed to be the very first token.
+            let (timestamp, start_seconds) = line
+                .split_whitespace()
+                .take(3)
+                .find_map(|token| parse_timestamp(token).map(|seconds| (token, seconds)))?;
+            let timestamp_end = line.find(timestamp)? + timestamp.len();
+            let title = line[timestamp_end..]
+                .trim()
+                .trim_start_matches(['-', '–', '—', ':', ')', ']'])
+                .trim();
             (!title.is_empty()).then(|| VideoChapter {
                 title: title.to_string(),
                 start_seconds,
@@ -4006,6 +4008,9 @@ mod tests {
         assert_eq!(chapters[1].title, "First idea");
         assert_eq!(chapters[1].start_seconds, 65);
         assert_eq!(chapters[3].start_seconds, 3723);
+        let bulleted = extract_chapters("• 0:00 Opening\n2. (1:05) First idea\n- 2:10 Closing");
+        assert_eq!(bulleted.len(), 3);
+        assert_eq!(bulleted[1].title, "First idea");
         assert!(extract_chapters("1:22 One stray timestamp").is_empty());
     }
 

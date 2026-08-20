@@ -1,31 +1,53 @@
 use crate::state::AppState;
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Check, ListPlus, Play, Plus, Rows3, Share2};
-use g3_ui::{Button, ButtonStyle, Item, List, ListLines, Sheet, StatusColor, Toast};
+use dioxus_icons::lucide::{Check, Clock3, Copy, ListPlus, Play, Plus, Rows3, Share2};
+use g3_ui::{Button, ButtonStyle, Item, List, ListLines, Modal, Sheet, StatusColor, Toast, Toggle};
+
+fn youtube_share_url(video_id: &str, with_timestamp: bool, timestamp_seconds: u64) -> String {
+    let mut url = format!("https://www.youtube.com/watch?v={video_id}");
+    if with_timestamp && timestamp_seconds > 0 {
+        url.push_str(&format!("&t={timestamp_seconds}s"));
+    }
+    url
+}
+
+fn timestamp_label(seconds: u64) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
 
 #[component]
 pub fn AppOverlays() -> Element {
     let mut app_state = use_context::<AppState>();
+    #[cfg(any(
+        target_arch = "wasm32",
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos"
+    ))]
+    let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
     let (message, color) = app_state.toast();
     let target = app_state.playlist_picker_video();
     let action_target = (app_state.video_actions_video)();
-
-    let share_video = move |video_id: String, title: String| {
-        spawn(async move {
-            let url = format!("https://www.youtube.com/watch?v={video_id}");
-            let payload = serde_json::to_string(&(title, url)).unwrap_or_default();
-            let script = format!(
-                r#"
-                const [title, url] = {payload};
-                if (navigator.share) await navigator.share({{ title, url }});
-                else await navigator.clipboard.writeText(url);
-                dioxus.send(true);
-                "#
-            );
-            let mut eval = document::eval(&script);
-            let _ = eval.recv::<bool>().await;
-        });
-    };
+    let share_target = (app_state.share_video)();
+    let share_url = share_target
+        .as_ref()
+        .map(|video| {
+            youtube_share_url(
+                &video.id,
+                (app_state.share_with_timestamp)(),
+                (app_state.share_timestamp_seconds)(),
+            )
+        })
+        .unwrap_or_default();
+    let share_action_url = share_url.clone();
+    let copy_action_url = share_url.clone();
 
     rsx! {
         Sheet { is_open: app_state.video_actions_open, class: "video-actions-sheet",
@@ -35,8 +57,7 @@ pub fn AppOverlays() -> Element {
                     let queue_id = video.id.clone();
                     let save_video = video.clone();
                     let watched_id = video.id.clone();
-                    let share_id = video.id.clone();
-                    let share_title = video.title.clone();
+                    let share_video = video.clone();
                     let is_queued = app_state.library().queue.iter().any(|id| id == &video.id);
                     let is_watched = video.watched;
                     rsx! {
@@ -103,9 +124,8 @@ pub fn AppOverlays() -> Element {
                                 // a sheet appends animation/focus nodes after it.
                                 lines: ListLines::None,
                                 onclick: move |_| {
-                                    share_video(share_id.clone(), share_title.clone());
                                     app_state.video_actions_open.set(false);
-                                    app_state.show_toast("Share sheet opened", StatusColor::Neutral);
+                                    app_state.open_share(share_video.clone());
                                 },
                             }
                         }
@@ -163,6 +183,82 @@ pub fn AppOverlays() -> Element {
                     app_state.show_toast("Create playlists from the Playlists tab", StatusColor::Neutral);
                 },
                 "New playlist"
+            }
+        }
+        Modal {
+            open: app_state.share_open,
+            title: "Share video".to_string(),
+            class: "share-video-modal",
+            description: if let Some(video) = &share_target {
+                Some(rsx! {
+                    div { class: "share-video-summary",
+                        strong { "{video.title}" }
+                        code { "{share_url}" }
+                    }
+                })
+            } else {
+                None
+            },
+            actions: rsx! {
+                Button {
+                    style: ButtonStyle::Clear,
+                    onclick: move |_| app_state.share_open.set(false),
+                    "Cancel"
+                }
+                Button {
+                    start: rsx! { Share2 { size: 17 } },
+                    onclick: move |_| {
+                        let link = share_action_url.clone();
+                        let text = share_target
+                            .as_ref()
+                            .map(|video| format!("{}\n{}", video.title, link))
+                            .unwrap_or(link);
+                        cfg_if::cfg_if! {
+                            if #[cfg(any(target_arch = "wasm32", target_os = "android", target_os = "ios", target_os = "macos"))] {
+                                if let Err(error) = plugins.clipboard.write().share(text) {
+                                    app_state.show_toast(error, StatusColor::Warning);
+                                }
+                            } else {
+                                let _ = text;
+                                app_state.show_toast("Sharing is not available on this platform", StatusColor::Warning);
+                            }
+                        }
+                        app_state.share_open.set(false);
+                    },
+                    "Share"
+                }
+            },
+            div { class: "share-video-options",
+                div { class: "share-time-row",
+                    Clock3 { size: 19 }
+                    div {
+                        strong { "Start at {timestamp_label((app_state.share_timestamp_seconds)())}" }
+                        span { "Add the current playback position to the link" }
+                    }
+                    Toggle {
+                        checked: app_state.share_with_timestamp,
+                    }
+                }
+                Button {
+                    style: ButtonStyle::Neutral,
+                    expand: true,
+                    start: rsx! { Copy { size: 17 } },
+                    onclick: move |_| {
+                        let link = copy_action_url.clone();
+                        cfg_if::cfg_if! {
+                            if #[cfg(any(target_arch = "wasm32", target_os = "android", target_os = "ios", target_os = "macos"))] {
+                                match plugins.clipboard.write().copy_to_clipboard(link) {
+                                    Ok(()) => app_state.show_toast("Link copied", StatusColor::Success),
+                                    Err(error) => app_state.show_toast(error, StatusColor::Warning),
+                                }
+                            } else {
+                                let _ = link;
+                                app_state.show_toast("Copy is not available on this platform", StatusColor::Warning);
+                            }
+                        }
+                    },
+                    "Copy link"
+                }
             }
         }
         Toast {

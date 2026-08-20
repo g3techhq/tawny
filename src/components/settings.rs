@@ -3,8 +3,8 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Database, Gauge, HardDrive, ListPlus, Server, ShieldCheck};
-use g3_ui::{Badge, Card, Item, List, RightSlot, Select, SelectOption, StatusColor, Toggle};
+use dioxus_icons::lucide::{Database, Gauge, HardDrive, ListPlus, RotateCw, Server, ShieldCheck};
+use g3_ui::{Badge, Card, Field, Item, List, RightSlot, Select, SelectOption, StatusColor, Toggle};
 
 #[component]
 pub fn SettingsPage() -> Element {
@@ -44,6 +44,11 @@ pub fn SettingsPage() -> Element {
     let prefer_sabr = use_signal(|| settings.prefer_sabr);
     let dark_appearance = use_signal(|| settings.appearance == Appearance::Dark);
     let hide_watched = use_signal(|| settings.hide_watched);
+    let auto_landscape = use_signal(|| settings.auto_landscape_fullscreen);
+    let video_short_minutes = use_signal(|| (settings.video_short_max_seconds / 60).to_string());
+    let video_medium_minutes = use_signal(|| (settings.video_medium_max_seconds / 60).to_string());
+    let shorts_short_seconds = use_signal(|| settings.shorts_short_max_seconds.to_string());
+    let shorts_medium_seconds = use_signal(|| settings.shorts_medium_max_seconds.to_string());
 
     rsx! {
         div { class: "settings-page",
@@ -147,6 +152,17 @@ pub fn SettingsPage() -> Element {
                                 },
                             }
                             Item {
+                                start: rsx! { RotateCw { size: 19 } },
+                                label: "Rotate horizontal fullscreen video".to_string(),
+                                description: "Switch phones to landscape automatically".to_string(),
+                                end: rsx! {
+                                    Toggle {
+                                        checked: auto_landscape,
+                                        onchange: move |enabled| app_state.settings.write().auto_landscape_fullscreen = enabled,
+                                    }
+                                },
+                            }
+                            Item {
                                 start: rsx! { ShieldCheck { size: 19 } },
                                 label: "Prefer SABR".to_string(),
                                 description: "Use adaptive streaming when the stream supports it".to_string(),
@@ -184,6 +200,65 @@ pub fn SettingsPage() -> Element {
                                         onchange: move |hidden| app_state.settings.write().hide_watched = hidden,
                                     }
                                 },
+                            }
+                        }
+                        Card { class: "duration-settings-card", title: "Duration filters".to_string(),
+                            p { class: "settings-card-copy", "Set where Short ends and Medium begins for each kind of upload." }
+                            div { class: "duration-settings-grid",
+                                Field {
+                                    label: "Video · Short max (minutes)".to_string(),
+                                    value: video_short_minutes,
+                                    r#type: "number".to_string(),
+                                    min: 1,
+                                    max: 240,
+                                    onchange: move |event: Event<FormData>| {
+                                        if let Ok(minutes) = event.value().parse::<u64>() {
+                                            let mut settings = app_state.settings.write();
+                                            settings.video_short_max_seconds = minutes * 60;
+                                            settings.video_medium_max_seconds = settings.video_medium_max_seconds.max((minutes + 1) * 60);
+                                        }
+                                    },
+                                }
+                                Field {
+                                    label: "Video · Medium max (minutes)".to_string(),
+                                    value: video_medium_minutes,
+                                    r#type: "number".to_string(),
+                                    min: 2,
+                                    max: 600,
+                                    onchange: move |event: Event<FormData>| {
+                                        if let Ok(minutes) = event.value().parse::<u64>() {
+                                            let mut settings = app_state.settings.write();
+                                            settings.video_medium_max_seconds = (minutes * 60).max(settings.video_short_max_seconds + 60);
+                                        }
+                                    },
+                                }
+                                Field {
+                                    label: "Shorts · Short max (seconds)".to_string(),
+                                    value: shorts_short_seconds,
+                                    r#type: "number".to_string(),
+                                    min: 5,
+                                    max: 170,
+                                    onchange: move |event: Event<FormData>| {
+                                        if let Ok(seconds) = event.value().parse::<u64>() {
+                                            let mut settings = app_state.settings.write();
+                                            settings.shorts_short_max_seconds = seconds;
+                                            settings.shorts_medium_max_seconds = settings.shorts_medium_max_seconds.max(seconds + 1);
+                                        }
+                                    },
+                                }
+                                Field {
+                                    label: "Shorts · Medium max (seconds)".to_string(),
+                                    value: shorts_medium_seconds,
+                                    r#type: "number".to_string(),
+                                    min: 6,
+                                    max: 180,
+                                    onchange: move |event: Event<FormData>| {
+                                        if let Ok(seconds) = event.value().parse::<u64>() {
+                                            let mut settings = app_state.settings.write();
+                                            settings.shorts_medium_max_seconds = seconds.max(settings.shorts_short_max_seconds + 1);
+                                        }
+                                    },
+                                }
                             }
                         }
                     }

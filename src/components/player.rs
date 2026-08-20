@@ -94,6 +94,47 @@ fn sync_player_metadata(
     });
 }
 
+#[cfg(target_os = "android")]
+#[component]
+fn NativePlayerBridges(title: String, portrait: bool) -> Element {
+    let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
+    let (pip_width, pip_height) = if portrait { (9, 16) } else { (16, 9) };
+    rsx! {
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-pip": "",
+            onclick: move |_| { let _ = plugins.media.write().enter_picture_in_picture(pip_width, pip_height); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-landscape": "",
+            onclick: move |_| { let _ = plugins.media.write().set_orientation("landscape"); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-orientation-unlock": "",
+            onclick: move |_| { let _ = plugins.media.write().set_orientation("unspecified"); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-playback-start": "",
+            onclick: move |_| { let _ = plugins.media.write().set_playback_active(true, title.clone()); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-playback-stop": "",
+            onclick: move |_| { let _ = plugins.media.write().set_playback_active(false, String::new()); },
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[component]
+fn NativePlayerBridges(title: String, portrait: bool) -> Element {
+    let _ = (title, portrait);
+    rsx! {}
+}
+
 /// Pull the transport's own account of why playback stopped.
 ///
 /// `TawnyTransport.events` outlives the media element, so this stays readable
@@ -343,7 +384,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let captions_enabled_to_sync = app_state.captions_enabled;
     let chapters_to_sync = app_state.active_chapters;
     let preview_frames_to_sync = app_state.active_preview_frames;
+    let playback_attempt_to_sync = playback_attempt;
     use_effect(move || {
+        // Re-send metadata when a failed stream creates a replacement video
+        // element. The chapter/controller state is attached per element.
+        let _ = playback_attempt_to_sync();
         sync_player_metadata(
             captions_to_sync(),
             selected_caption_to_sync(),
@@ -358,6 +403,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let mut chapters_sheet = app_state.chapters_sheet_open;
     let open_video_id = video.id.clone();
     let player_key = format!("{}-{}", video.id, playback_attempt());
+    let auto_landscape = app_state.settings().auto_landscape_fullscreen;
+    let playback_title = video.title.clone();
 
     rsx! {
         div { class: if expanded { "persistent-player expanded" } else { "persistent-player mini" },
@@ -366,6 +413,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                 class: "persistent-player-stage",
                 "data-video-id": "{video.id}",
                 "data-thumbnail": "{video.thumbnail_url}",
+                "data-auto-landscape": auto_landscape.to_string(),
                 if direct_stream {
                     video {
                         id: "tawny-player-media",
@@ -436,7 +484,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 // makes: popping history instead picks its
                                 // animation from whatever came before, which
                                 // is not always the page under the sheet.
-                                onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
+                                "data-player-action": "back",
                                 ChevronLeft { size: 26 }
                             }
                             strong { class: "player-overlay-title", "{video.title}" }
@@ -537,6 +585,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     "data-player-chapters-open": "",
                                     onclick: move |_| chapters_sheet.set(true),
                                 }
+                                NativePlayerBridges { title: playback_title.clone(), portrait: is_short }
                                 button {
                                     r#type: "button",
                                     class: "player-caption-state-bridge",
@@ -710,6 +759,10 @@ fn toggle_picture_in_picture() {
                     changed = true;
                 }
             } catch (_) {}
+            if (!changed) {
+                document.querySelector('#tawny-player [data-player-native-pip]')?.click();
+                changed = Boolean(document.querySelector('#tawny-player [data-player-native-pip]'));
+            }
             dioxus.send(changed);
         "#;
         let mut eval = document::eval(script);
@@ -959,6 +1012,7 @@ fn VideoDetailInner(id: String) -> Element {
     };
     let watched_id = video.id.clone();
     let playlist_video = video.clone();
+    let share_video = video.clone();
     let channel_id = video.channel_id.clone();
     let open_channel_id = video.channel_id.clone();
     let is_subscribed = channel
@@ -1038,7 +1092,7 @@ fn VideoDetailInner(id: String) -> Element {
                                 style: ButtonStyle::Neutral,
                                 size: ButtonSize::Sm,
                                 start: rsx! { Share2 { size: 17 } },
-                                onclick: move |_| app_state.show_toast("Link ready to share", StatusColor::Neutral),
+                                onclick: move |_| app_state.open_share(share_video.clone()),
                                 "Share"
                             }
                             Button {

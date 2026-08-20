@@ -9,6 +9,7 @@ use dioxus_icons::lucide::{Search, User};
 use dx_route_transitions::animated_navigate;
 use g3_ui::Field;
 use g3_ui::{Button, StatusColor};
+use std::collections::{HashMap, HashSet};
 
 use super::VideoGrid;
 
@@ -26,8 +27,8 @@ pub fn Explore() -> Element {
     let needle = search().trim().to_lowercase();
     let can_search = search().trim().chars().count() >= 2;
     let library = app_state.library();
-    let mut videos = library.videos;
-    let mut channels = library.channels;
+    let mut videos = library.videos.clone();
+    let mut channels = library.channels.clone();
     if !needle.is_empty() {
         videos.retain(|video| {
             video.title.to_lowercase().contains(&needle)
@@ -39,12 +40,64 @@ pub fn Explore() -> Element {
         });
     } else {
         channels.clear();
-        // With no query this page was rendering the entire cached library as
-        // one grid, which is what made opening it feel like it was fetching
-        // something. It is a starting point, not a catalogue, so it is capped
-        // at the most recent handful.
+        let subscribed_ids = library
+            .channels
+            .iter()
+            .filter(|channel| channel.subscribed)
+            .map(|channel| channel.id.as_str())
+            .collect::<HashSet<_>>();
+        videos.retain(|video| subscribed_ids.contains(video.channel_id.as_str()) && !video.watched);
         videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
-        videos.truncate(SUGGESTION_COUNT);
+
+        // Keep the page fresh, then mix in missed uploads from channels the
+        // viewer actually returns to. History only records distinct videos,
+        // so this is affinity rather than a replay-count feedback loop.
+        let video_channels = library
+            .videos
+            .iter()
+            .map(|video| (video.id.as_str(), video.channel_id.as_str()))
+            .collect::<HashMap<_, _>>();
+        let mut affinity = HashMap::<&str, usize>::new();
+        for entry in &library.history {
+            if let Some(channel_id) = video_channels.get(entry.video_id.as_str()) {
+                *affinity.entry(channel_id).or_default() += 1;
+            }
+        }
+        let recent = videos
+            .iter()
+            .take(SUGGESTION_COUNT)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut familiar = videos.clone();
+        familiar.sort_by_cached_key(|video| {
+            (
+                std::cmp::Reverse(*affinity.get(video.channel_id.as_str()).unwrap_or(&0)),
+                std::cmp::Reverse(video.published_epoch()),
+            )
+        });
+        let mut ranked = Vec::with_capacity(SUGGESTION_COUNT);
+        let mut seen = HashSet::new();
+        for index in 0..SUGGESTION_COUNT {
+            let candidate = if index % 3 == 2 {
+                familiar.get(index / 3)
+            } else {
+                recent.get(index - index / 3)
+            };
+            if let Some(video) = candidate
+                && seen.insert(video.id.clone())
+            {
+                ranked.push(video.clone());
+            }
+        }
+        for video in recent.into_iter().chain(familiar) {
+            if ranked.len() >= SUGGESTION_COUNT {
+                break;
+            }
+            if seen.insert(video.id.clone()) {
+                ranked.push(video);
+            }
+        }
+        videos = ranked;
     }
 
     if let Some(remote) = results()
@@ -126,7 +179,7 @@ pub fn Explore() -> Element {
             if !needle.is_empty() {
                 p { class: "search-summary", "{result_count} results for “{search_value}”" }
             } else {
-                p { class: "search-summary search-context", "Recent from your library" }
+                p { class: "search-summary search-context", "Unwatched recents, mixed with channels you watch often" }
             }
             if !channels.is_empty() {
                 section { class: "explore-channels",

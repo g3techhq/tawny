@@ -31,10 +31,10 @@ pub fn QueuePage() -> Element {
                     p { "Use a video menu to play next or add something to the queue." }
                 }
             } else {
-                div { class: "section-heading library-heading",
-                    div {
-                        span { class: "section-kicker", "PLAYBACK QUEUE" }
-                        h2 { "Ready when you are." }
+                div { class: "queue-toolbar",
+                    div { class: "queue-count-label",
+                        ListVideo { size: 18 }
+                        strong { "{videos.len()} queued" }
                     }
                     div { class: "heading-actions",
                         Button {
@@ -57,11 +57,6 @@ pub fn QueuePage() -> Element {
                             "Clear"
                         }
                     }
-                }
-                div { class: "library-summary",
-                    ListVideo { size: 18 }
-                    strong { "{videos.len()} queued" }
-                    span { "Synced with your Tawny library" }
                 }
                 VideoGrid { videos }
             }
@@ -128,6 +123,8 @@ pub fn ChannelDetail(id: String) -> Element {
     let mut live_next = use_signal(|| None::<String>);
     let mut initialized = use_signal(|| false);
     let mut page_loading = use_signal(|| false);
+    let mut channel_refreshing = use_signal(|| false);
+    let mut refreshed_details = use_signal(|| None::<crate::models::ChannelDetails>);
     let mut previous_tab = use_signal(|| tab_index());
     use_effect(move || {
         let current = tab_index();
@@ -142,18 +139,20 @@ pub fn ChannelDetail(id: String) -> Element {
         }
     });
 
-    let mut details_resource = {
+    let details_resource = {
         let channel_id = id.clone();
         use_resource(move || {
             let channel_id = channel_id.clone();
             async move { get_channel_details(channel_id).await }
         })
     };
-    let remote_details = details_resource
-        .read()
-        .as_ref()
-        .and_then(|result| result.as_ref().ok())
-        .cloned();
+    let remote_details = refreshed_details().or_else(|| {
+        details_resource
+            .read()
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned()
+    });
     let details_to_cache = remote_details.clone();
     use_effect(move || {
         if initialized() {
@@ -209,37 +208,55 @@ pub fn ChannelDetail(id: String) -> Element {
         .collect::<Vec<_>>();
     let mut description_open = use_signal(|| false);
     let selected_tab = match tab_index() {
-        1 => ChannelMediaTab::Shorts,
-        2 => ChannelMediaTab::Live,
-        _ => ChannelMediaTab::Videos,
+        1 => Some(ChannelMediaTab::Videos),
+        2 => Some(ChannelMediaTab::Shorts),
+        3 => Some(ChannelMediaTab::Live),
+        _ => None,
     };
     let mut videos = if let Some(details) = remote_details.as_ref() {
         match selected_tab {
-            ChannelMediaTab::Videos => details.videos.videos.clone(),
-            ChannelMediaTab::Shorts => details.shorts.videos.clone(),
-            ChannelMediaTab::Live => details.live.videos.clone(),
+            Some(ChannelMediaTab::Videos) => details.videos.videos.clone(),
+            Some(ChannelMediaTab::Shorts) => details.shorts.videos.clone(),
+            Some(ChannelMediaTab::Live) => details.live.videos.clone(),
+            None => details
+                .videos
+                .videos
+                .iter()
+                .chain(&details.shorts.videos)
+                .chain(&details.live.videos)
+                .cloned()
+                .collect(),
         }
     } else {
         local_channel_videos
             .iter()
             .filter(|video| match selected_tab {
-                ChannelMediaTab::Videos => !video.is_short && !video.is_live,
-                ChannelMediaTab::Shorts => video.is_short,
-                ChannelMediaTab::Live => video.is_live,
+                Some(ChannelMediaTab::Videos) => !video.is_short && !video.is_live,
+                Some(ChannelMediaTab::Shorts) => video.is_short,
+                Some(ChannelMediaTab::Live) => video.is_live,
+                None => true,
             })
             .cloned()
             .collect::<Vec<_>>()
     };
     match selected_tab {
-        ChannelMediaTab::Videos => videos.extend(extra_videos()),
-        ChannelMediaTab::Shorts => videos.extend(extra_shorts()),
-        ChannelMediaTab::Live => videos.extend(extra_live()),
+        Some(ChannelMediaTab::Videos) => videos.extend(extra_videos()),
+        Some(ChannelMediaTab::Shorts) => videos.extend(extra_shorts()),
+        Some(ChannelMediaTab::Live) => videos.extend(extra_live()),
+        None => {
+            videos.extend(extra_videos());
+            videos.extend(extra_shorts());
+            videos.extend(extra_live());
+        }
     }
-    videos.dedup_by(|left, right| left.id == right.id);
+    videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
+    let mut seen_ids = std::collections::HashSet::new();
+    videos.retain(|video| seen_ids.insert(video.id.clone()));
     let next_page = match selected_tab {
-        ChannelMediaTab::Videos => videos_next(),
-        ChannelMediaTab::Shorts => shorts_next(),
-        ChannelMediaTab::Live => live_next(),
+        Some(ChannelMediaTab::Videos) => videos_next(),
+        Some(ChannelMediaTab::Shorts) => shorts_next(),
+        Some(ChannelMediaTab::Live) => live_next(),
+        None => None,
     };
     let is_subscribed = channel.subscribed;
     let avatar_url = channel.avatar_url.clone();
@@ -247,20 +264,38 @@ pub fn ChannelDetail(id: String) -> Element {
     let description_text = channel.description.clone();
     let load_channel_id = channel.id.clone();
     let load_token = next_page.clone();
+    let refresh_channel_id = channel.id.clone();
 
     rsx! {
         div { class: "channel-detail-page",
                 // Pull down to refresh replaces the button that used to sit in
                 // the toolbar next to the segments.
                 Refresher {
-                    refreshing: page_loading(),
+                    refreshing: channel_refreshing(),
                     can_refresh: true,
                     on_refresh: move |_| {
-                        initialized.set(false);
+                        let channel_id = refresh_channel_id.clone();
+                        channel_refreshing.set(true);
                         extra_videos.set(Vec::new());
                         extra_shorts.set(Vec::new());
                         extra_live.set(Vec::new());
-                        details_resource.restart();
+                        spawn(async move {
+                            match get_channel_details(channel_id).await {
+                                Ok(details) => {
+                                    app_state.cache_channel_details(&details);
+                                    videos_next.set(details.videos.next_page.clone());
+                                    shorts_next.set(details.shorts.next_page.clone());
+                                    live_next.set(details.live.next_page.clone());
+                                    refreshed_details.set(Some(details));
+                                    app_state.show_toast("Channel refreshed", StatusColor::Success);
+                                }
+                                Err(_) => app_state.show_toast(
+                                    "Could not refresh this channel — showing cached videos",
+                                    StatusColor::Warning,
+                                ),
+                            }
+                            channel_refreshing.set(false);
+                        });
                     },
                     main { class: "page",
                     if let Some(banner_url) = banner_url {
@@ -315,11 +350,12 @@ pub fn ChannelDetail(id: String) -> Element {
                     }
                     VideoGrid {
                         videos,
-                        shorts_layout: selected_tab == ChannelMediaTab::Shorts,
+                        shorts_layout: selected_tab == Some(ChannelMediaTab::Shorts),
                         empty_message: match selected_tab {
-                            ChannelMediaTab::Shorts => "No Shorts were returned for this channel.".to_string(),
-                            ChannelMediaTab::Live => "No livestreams were returned for this channel.".to_string(),
-                            ChannelMediaTab::Videos => "No videos were returned for this channel.".to_string(),
+                            Some(ChannelMediaTab::Shorts) => "No Shorts were returned for this channel.".to_string(),
+                            Some(ChannelMediaTab::Live) => "No livestreams were returned for this channel.".to_string(),
+                            Some(ChannelMediaTab::Videos) => "No videos were returned for this channel.".to_string(),
+                            None => "No uploads were returned for this channel.".to_string(),
                         }
                     }
                     if let Some(load_token) = load_token {
@@ -335,27 +371,29 @@ pub fn ChannelDetail(id: String) -> Element {
                                         match get_channel_media_page(
                                             channel_id,
                                             match selected_tab {
-                                                ChannelMediaTab::Shorts => "shorts".into(),
-                                                ChannelMediaTab::Live => "live".into(),
-                                                ChannelMediaTab::Videos => "videos".into(),
+                                                Some(ChannelMediaTab::Shorts) => "shorts".into(),
+                                                Some(ChannelMediaTab::Live) => "live".into(),
+                                                Some(ChannelMediaTab::Videos) => "videos".into(),
+                                                None => "videos".into(),
                                             },
                                             token,
                                         )
                                         .await
                                         {
                                             Ok(page) => match selected_tab {
-                                                ChannelMediaTab::Videos => {
+                                                Some(ChannelMediaTab::Videos) => {
                                                     extra_videos.write().extend(page.videos);
                                                     videos_next.set(page.next_page);
                                                 }
-                                                ChannelMediaTab::Shorts => {
+                                                Some(ChannelMediaTab::Shorts) => {
                                                     extra_shorts.write().extend(page.videos);
                                                     shorts_next.set(page.next_page);
                                                 }
-                                                ChannelMediaTab::Live => {
+                                                Some(ChannelMediaTab::Live) => {
                                                     extra_live.write().extend(page.videos);
                                                     live_next.set(page.next_page);
                                                 }
+                                                None => {}
                                             },
                                             Err(_) => app_state.show_toast(
                                                 "Could not load the next page",

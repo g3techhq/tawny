@@ -289,7 +289,6 @@ pub struct Playlist {
     pub id: String,
     pub name: String,
     pub video_ids: Vec<String>,
-    pub pinned: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
@@ -437,6 +436,49 @@ pub enum FeedFilter {
     Live,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DurationFilter {
+    Short,
+    Medium,
+    Long,
+}
+
+impl DurationFilter {
+    pub const ALL: [Self; 3] = [Self::Short, Self::Medium, Self::Long];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Short => "Short",
+            Self::Medium => "Medium",
+            Self::Long => "Long",
+        }
+    }
+
+    pub fn matches(self, video: &Video, settings: &AppSettings) -> bool {
+        if video.is_live || video.duration_seconds == 0 {
+            return false;
+        }
+        let (short_max, medium_max) = if video.is_short {
+            (
+                settings.shorts_short_max_seconds,
+                settings.shorts_medium_max_seconds,
+            )
+        } else {
+            (
+                settings.video_short_max_seconds,
+                settings.video_medium_max_seconds,
+            )
+        };
+        match self {
+            Self::Short => video.duration_seconds <= short_max,
+            Self::Medium => {
+                video.duration_seconds > short_max && video.duration_seconds <= medium_max
+            }
+            Self::Long => video.duration_seconds > medium_max,
+        }
+    }
+}
+
 impl Default for FeedFilter {
     fn default() -> Self {
         Self::All
@@ -473,12 +515,42 @@ pub struct AppSettings {
     pub swipe_left_action: SwipeActionKind,
     pub hide_watched: bool,
     pub autoplay: bool,
+    #[serde(default = "default_true")]
+    pub auto_landscape_fullscreen: bool,
+    #[serde(default = "default_video_short_max_seconds")]
+    pub video_short_max_seconds: u64,
+    #[serde(default = "default_video_medium_max_seconds")]
+    pub video_medium_max_seconds: u64,
+    #[serde(default = "default_shorts_short_max_seconds")]
+    pub shorts_short_max_seconds: u64,
+    #[serde(default = "default_shorts_medium_max_seconds")]
+    pub shorts_medium_max_seconds: u64,
     pub prefer_sabr: bool,
     pub po_token_provider_url: Option<String>,
 }
 
 fn default_speed() -> f64 {
     1.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_video_short_max_seconds() -> u64 {
+    5 * 60
+}
+
+fn default_video_medium_max_seconds() -> u64 {
+    20 * 60
+}
+
+fn default_shorts_short_max_seconds() -> u64 {
+    30
+}
+
+fn default_shorts_medium_max_seconds() -> u64 {
+    60
 }
 
 /// What a swipe on a video card does.
@@ -547,6 +619,11 @@ impl Default for AppSettings {
             swipe_left_playlist_id: "deep-dives".to_string(),
             hide_watched: false,
             autoplay: true,
+            auto_landscape_fullscreen: true,
+            video_short_max_seconds: default_video_short_max_seconds(),
+            video_medium_max_seconds: default_video_medium_max_seconds(),
+            shorts_short_max_seconds: default_shorts_short_max_seconds(),
+            shorts_medium_max_seconds: default_shorts_medium_max_seconds(),
             prefer_sabr: true,
             po_token_provider_url: None,
         }
@@ -705,19 +782,16 @@ impl LibrarySnapshot {
                 id: "watch-later".into(),
                 name: "Watch later".into(),
                 video_ids: vec![videos[1].id.clone(), videos[2].id.clone()],
-                pinned: true,
             },
             Playlist {
                 id: "deep-dives".into(),
                 name: "Deep dives".into(),
                 video_ids: vec![videos[3].id.clone(), videos[5].id.clone()],
-                pinned: true,
             },
             Playlist {
                 id: "weekend-queue".into(),
                 name: "Weekend queue".into(),
                 video_ids: vec![videos[0].id.clone()],
-                pinned: false,
             },
         ];
 

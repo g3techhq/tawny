@@ -20,6 +20,10 @@ pub struct AppState {
     pub playlist_picker_open: Signal<bool>,
     pub video_actions_video: Signal<Option<Video>>,
     pub video_actions_open: Signal<bool>,
+    pub share_video: Signal<Option<Video>>,
+    pub share_open: Signal<bool>,
+    pub share_with_timestamp: Signal<bool>,
+    pub share_timestamp_seconds: Signal<u64>,
     pub active_video: Signal<Option<Video>>,
     pub active_captions: Signal<Vec<CaptionTrack>>,
     pub selected_caption: Signal<Option<usize>>,
@@ -137,7 +141,6 @@ impl AppState {
                 id: id.clone(),
                 name,
                 video_ids: Vec::new(),
-                pinned: false,
             });
             library.cache_revision += 1;
         }
@@ -164,20 +167,6 @@ impl AppState {
         drop(settings);
         self.sync_in_background();
         Some(removed.name)
-    }
-
-    pub fn toggle_playlist_pin(mut self, playlist_id: &str) -> Option<bool> {
-        let mut library = self.library.write();
-        let playlist = library
-            .playlists
-            .iter_mut()
-            .find(|playlist| playlist.id == playlist_id)?;
-        playlist.pinned = !playlist.pinned;
-        let pinned = playlist.pinned;
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        Some(pinned)
     }
 
     pub fn remove_from_playlist(mut self, video_id: &str, playlist_id: &str) -> bool {
@@ -497,22 +486,37 @@ impl AppState {
                 self.show_toast("Marked watched", StatusColor::Neutral);
             }
             SwipeActionKind::Share => {
-                let url = format!("https://www.youtube.com/watch?v={video_id}");
-                let payload = serde_json::to_string(&url).unwrap_or_default();
-                spawn(async move {
-                    let script = format!(
-                        r#"
-                        const url = {payload};
-                        if (navigator.share) await navigator.share({{ url }});
-                        else await navigator.clipboard.writeText(url);
-                        dioxus.send(true);
-                        "#
-                    );
-                    let mut eval = document::eval(&script);
-                    let _ = eval.recv::<bool>().await;
-                });
-                self.show_toast("Link shared", StatusColor::Neutral);
+                if let Some(video) = self
+                    .library()
+                    .videos
+                    .into_iter()
+                    .find(|video| video.id == video_id)
+                {
+                    self.open_share(video);
+                }
             }
+        }
+    }
+
+    pub fn open_share(mut self, video: Video) {
+        self.share_timestamp_seconds.set(0);
+        self.share_with_timestamp.set(false);
+        self.share_video.set(Some(video.clone()));
+        self.share_open.set(true);
+
+        if self
+            .active_video()
+            .as_ref()
+            .is_some_and(|active| active.id == video.id)
+        {
+            spawn(async move {
+                let mut eval = document::eval(
+                    "dioxus.send(Math.max(0, Math.floor(document.querySelector('#tawny-player video')?.currentTime || 0)));",
+                );
+                if let Ok(seconds) = eval.recv::<u64>().await {
+                    self.share_timestamp_seconds.set(seconds);
+                }
+            });
         }
     }
 
@@ -674,6 +678,10 @@ pub fn AppStateProvider(children: Element) -> Element {
         playlist_picker_open: Signal::new(false),
         video_actions_video: Signal::new(None),
         video_actions_open: Signal::new(false),
+        share_video: Signal::new(None),
+        share_open: Signal::new(false),
+        share_with_timestamp: Signal::new(false),
+        share_timestamp_seconds: Signal::new(0),
         active_video: Signal::new(None),
         active_captions: Signal::new(Vec::new()),
         selected_caption: Signal::new(None),

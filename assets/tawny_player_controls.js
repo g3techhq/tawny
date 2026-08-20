@@ -25,13 +25,14 @@
       if (screen.orientation && typeof screen.orientation.unlock === "function") {
         try { screen.orientation.unlock(); } catch (_) {}
       }
+      root.querySelector("[data-player-native-orientation-unlock]")?.click();
       return exit ? exit.call(document) : undefined;
     }
     return enterFullscreenFor(root);
   }
 
-  /// Go fullscreen and, on a handset, rotate to suit the content: Shorts are
-  /// portrait, everything else is landscape. Orientation locking only exists on
+  /// Go fullscreen and, when enabled, rotate horizontal video to landscape.
+  /// Orientation locking only exists on
   /// mobile and rejects when unsupported, so failures are ignored.
   ///
   /// iOS Safari never implemented fullscreen on ordinary elements, so the video
@@ -39,7 +40,8 @@
   /// button did nothing at all on a handset.
   function enterFullscreenFor(root) {
     const media = root.querySelector("video");
-    const portrait = media && media.videoHeight > media.videoWidth;
+    const horizontal = media && media.videoWidth > media.videoHeight;
+    const autoLandscape = root.dataset.autoLandscape !== "false";
     const request =
       root.requestFullscreen ||
       root.webkitRequestFullscreen ||
@@ -50,9 +52,12 @@
       : Promise.reject();
     return started
       .then(() => {
-        const orientation = screen.orientation;
-        if (orientation && typeof orientation.lock === "function") {
-          return orientation.lock(portrait ? "portrait" : "landscape").catch(() => {});
+        if (horizontal && autoLandscape) {
+          root.querySelector("[data-player-native-landscape]")?.click();
+          const orientation = screen.orientation;
+          if (orientation && typeof orientation.lock === "function") {
+            return orientation.lock("landscape").catch(() => {});
+          }
         }
       })
       .catch(() => {
@@ -377,8 +382,20 @@
     async function runAction(action) {
       switch (action) {
         case "toggle":
-          if (video.paused) await video.play().catch(() => {});
-          else video.pause();
+          if (video.paused) {
+            await video.play().catch(() => {});
+            root.querySelector("[data-player-native-playback-start]")?.click();
+          } else {
+            video.pause();
+            root.querySelector("[data-player-native-playback-stop]")?.click();
+          }
+          break;
+        case "back":
+          if (fullscreenElement()) {
+            await Promise.resolve(toggleFullscreen(root)).catch(() => {});
+          } else {
+            root.querySelector("[data-player-minimize]")?.click();
+          }
           break;
         case "rewind":
           seekBy(-10);
@@ -407,11 +424,20 @@
           toggleOptions();
           break;
         case "pip":
+          let pipChanged = false;
           try {
-            if (document.pictureInPictureElement) await document.exitPictureInPicture();
-            else if (video.requestPictureInPicture) await video.requestPictureInPicture();
-            else if (video.webkitSupportsPresentationMode) video.webkitSetPresentationMode("picture-in-picture");
+            if (document.pictureInPictureElement) {
+              await document.exitPictureInPicture();
+              pipChanged = true;
+            } else if (video.requestPictureInPicture) {
+              await video.requestPictureInPicture();
+              pipChanged = true;
+            } else if (video.webkitSupportsPresentationMode) {
+              video.webkitSetPresentationMode("picture-in-picture");
+              pipChanged = true;
+            }
           } catch (_) {}
+          if (!pipChanged) root.querySelector("[data-player-native-pip]")?.click();
           break;
         case "fullscreen":
           await Promise.resolve(toggleFullscreen(root)).catch(() => {});
@@ -638,9 +664,20 @@
       else if (key === "c") runAction("captions");
     });
 
-    listen(video, "play", updatePlaybackState);
-    listen(video, "pause", updatePlaybackState);
-    listen(video, "ended", updatePlaybackState);
+    listen(video, "play", () => {
+      updatePlaybackState();
+      root.querySelector("[data-player-native-playback-start]")?.click();
+    });
+    listen(video, "pause", () => {
+      updatePlaybackState();
+      if (document.visibilityState === "visible") {
+        root.querySelector("[data-player-native-playback-stop]")?.click();
+      }
+    });
+    listen(video, "ended", () => {
+      updatePlaybackState();
+      root.querySelector("[data-player-native-playback-stop]")?.click();
+    });
     listen(video, "durationchange", updateTimeline);
     listen(video, "durationchange", renderChapters);
     listen(video, "progress", updateTimeline);
@@ -660,6 +697,7 @@
       // root, so anything inside this player counts.
       const active = fullscreenElement();
       const fullscreen = Boolean(active && (active === root || root.contains(active)));
+      if (!fullscreen) root.querySelector("[data-player-native-orientation-unlock]")?.click();
       root.classList.toggle("is-fullscreen", fullscreen);
       controls.classList.toggle("is-fullscreen", fullscreen);
       fullscreenButton?.setAttribute("aria-label", fullscreen ? "Exit fullscreen" : "Enter fullscreen");

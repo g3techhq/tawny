@@ -1,6 +1,6 @@
 use crate::{app::Route, models::Playlist, state::AppState};
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{CheckCheck, ListPlus, Pin, Plus, Trash2};
+use dioxus_icons::lucide::{CheckCheck, ListPlus, Plus, Trash2};
 use dx_route_transitions::animated_navigate;
 use g3_ui::{Button, ButtonStyle, Card, Field, Modal, RightSlot, StatusColor};
 
@@ -47,37 +47,18 @@ pub fn Playlists() -> Element {
                 for playlist in playlists {
                     {
                         let playlist_id = playlist.id.clone();
-                        let pin_id = playlist.id.clone();
                         let remove_id = playlist.id.clone();
                         let remove_name = playlist.name.clone();
                         let thumbs = playlist_thumbnails(app_state, &playlist);
                         let collage_class = format!("playlist-collage count-{}", thumbs.len());
                         let video_count = playlist.video_ids.len();
-                        let is_pinned = playlist.pinned;
                         rsx! {
                             Card {
                                 key: "{playlist.id}",
                                 class: "playlist-card",
                                 title: playlist.name.clone(),
-                                // Pin and delete live with the playlist itself
-                                // rather than in a second top bar on its page.
                                 right_slot: RightSlot::Element(rsx! {
                                     div { class: "playlist-card-actions",
-                                        button {
-                                            class: if is_pinned { "playlist-card-action pinned" } else { "playlist-card-action" },
-                                            aria_label: if is_pinned { "Unpin playlist" } else { "Pin playlist" },
-                                            title: if is_pinned { "Unpin playlist" } else { "Pin playlist" },
-                                            onclick: move |event: MouseEvent| {
-                                                event.stop_propagation();
-                                                if let Some(pinned) = app_state.toggle_playlist_pin(&pin_id) {
-                                                    app_state.show_toast(
-                                                        if pinned { "Playlist pinned" } else { "Playlist unpinned" },
-                                                        StatusColor::Neutral,
-                                                    );
-                                                }
-                                            },
-                                            Pin { size: 15 }
-                                        }
                                         button {
                                             class: "playlist-card-action danger",
                                             aria_label: "Delete playlist".to_string(),
@@ -109,9 +90,6 @@ pub fn Playlists() -> Element {
                                 div { class: "playlist-card-meta",
                                     span { class: "playlist-count",
                                         if video_count == 1 { "1 video" } else { "{video_count} videos" }
-                                    }
-                                    if is_pinned {
-                                        span { class: "playlist-pin-status", Pin { size: 12 } "Pinned" }
                                     }
                                 }
                             }
