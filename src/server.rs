@@ -631,6 +631,33 @@ impl AppServerState {
         })
     }
 
+    async fn reachable_ytdlp_po_provider_url(&self) -> Option<&str> {
+        let provider_url = self.ytdlp_po_provider_url.as_deref()?;
+        let ping_url = format!("{provider_url}/ping");
+        match tokio::time::timeout(Duration::from_secs(2), self.http.get(&ping_url).send()).await {
+            Ok(Ok(response)) if response.status().is_success() => Some(provider_url),
+            Ok(Ok(response)) => {
+                eprintln!(
+                    "PO-token provider at {provider_url} returned {} from /ping; using yt-dlp's default client",
+                    response.status()
+                );
+                None
+            }
+            Ok(Err(error)) => {
+                eprintln!(
+                    "PO-token provider at {provider_url} is unavailable ({error}); using yt-dlp's default client"
+                );
+                None
+            }
+            Err(_) => {
+                eprintln!(
+                    "PO-token provider at {provider_url} did not answer /ping; using yt-dlp's default client"
+                );
+                None
+            }
+        }
+    }
+
     pub async fn sync_library(&self, snapshot: LibrarySnapshot) -> Result<LibrarySnapshot> {
         let guard = self.sync_lock.lock().await;
         let server_revision = self.library_revision().await?;
@@ -1002,9 +1029,8 @@ impl AppServerState {
             "--socket-timeout",
             "15",
         ]);
-        command.args(ytdlp_po_provider_args(
-            self.ytdlp_po_provider_url.as_deref(),
-        ));
+        let po_provider_url = self.reachable_ytdlp_po_provider_url().await;
+        command.args(ytdlp_po_provider_args(po_provider_url));
         command.arg(format!("https://www.youtube.com/watch?v={video_id}"));
         let output = command.stdin(std::process::Stdio::null()).output();
         let output = match tokio::time::timeout(Duration::from_secs(30), output).await {
