@@ -11,6 +11,6 @@ same Tawny commit.
 
 Current source revisions:
 
-- `g3_ui`: `64da199659cefe89663288c7157f34262bb62a7c`
-- `dx_route_transitions`: `2c1550465c5558de192e046f49c63b8b01456f5e`
-- `dx_native_plugins`: `9d71f4adf5784fc55aeef64cd188d69491d2923d`
+- `g3_ui`: `5c29f3605d3ee41ac8a73019e4e2d112824dc7ab`
+- `dx_route_transitions`: `60d4d8f4efdce16292f3cffac0af3bb570742691`
+- `dx_native_plugins`: `4cb16d6ea5a0c3b155b276b6c54dfb941bfa41e3`

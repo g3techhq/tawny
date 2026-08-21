@@ -10,7 +10,7 @@ documentation = "https://docs.rs/g3-ui"
 license = "MIT OR Apache-2.0"
 keywords = ["dioxus", "ui", "components", "mobile"]
 categories = ["gui", "wasm", "web-programming"]
-include = ["Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "src/**", "assets/**"]
+include = ["Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE", "src/**", "assets/**"]
 
 [lib]
 name = "g3_ui"

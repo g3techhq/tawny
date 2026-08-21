@@ -20,22 +20,46 @@ pub enum ComponentMode {
 /// CSS custom-property theme tokens for g3_ui components.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
+    /// Accent color: focus rings, selected segments, active toggles, links.
+    /// Tints elsewhere are derived from this with `color-mix`, so it is the
+    /// one token that most changes an app's character.
     pub focused: String,
+    /// Primary label text inside list rows and fields.
     pub label_primary: String,
+    /// Secondary label text - helper copy, row detail, placeholder values.
     pub label_secondary: String,
+    /// Hairline border around cards and inset groups.
     pub card_border: String,
+    /// The app's base background, behind everything else.
     pub bg: String,
+    /// A recessed background for grouped content, matching the iOS grouped
+    /// table style where rows sit on a slightly darker ground.
     pub bg_secondary: String,
+    /// Card fill.
     pub card: String,
+    /// Fill for a card nested inside another card.
     pub card_inset: String,
+    /// Fill for raised surfaces that float above the page: sheets, modals,
+    /// popovers, toasts.
     pub surface: String,
+    /// Fill for interactive controls - inputs, selects, unselected segments.
     pub control: String,
+    /// Body text.
     pub text: String,
+    /// De-emphasized body text: captions, timestamps, disabled labels.
     pub text_secondary: String,
+    /// Shadow color, including its alpha. Elevation is expressed by varying
+    /// blur and offset against this single color.
     pub shadow: String,
+    /// Semantic color for success states and confirmations.
     pub success: String,
+    /// Semantic color for warnings and states needing attention.
     pub warning: String,
+    /// Semantic color for errors and destructive actions.
     pub danger: String,
+    /// The CSS `color-scheme` value (`"light"` or `"dark"`). Drives native
+    /// form controls, scrollbars, and the browser's own default surfaces so
+    /// they match the rest of the theme.
     pub color_scheme: String,
 }
 
@@ -46,6 +70,7 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// The built-in light theme: iOS system colors on a near-white ground.
     pub fn default_light() -> Self {
         Self {
             focused: "#007aff".into(),
@@ -68,6 +93,9 @@ impl Theme {
         }
     }
 
+    /// The built-in dark theme. Not a mechanical inversion of
+    /// [`Theme::default_light`] - contrast and accent brightness are tuned
+    /// separately for a dark ground.
     pub fn default_dark() -> Self {
         Self {
             focused: "#0a84ff".into(),
@@ -90,11 +118,17 @@ impl Theme {
         }
     }
 
+    /// Return this theme with a different accent color. The common way to
+    /// brand an app is to start from a default theme and override this one
+    /// token.
     pub fn with_focused(mut self, focused: impl Into<String>) -> Self {
         self.focused = focused.into();
         self
     }
 
+    /// Render every token as a CSS custom-property declaration, suitable for
+    /// an inline `style` attribute. `AppWrapper` applies this to the shell
+    /// root, which is how the tokens reach the stylesheet.
     pub fn to_style_attr(&self) -> String {
         format!(
             "--color-focused: {}; --color-label-primary: {}; --color-label-secondary: {}; --color-card-border: {}; --color-bg: {}; --color-bg-secondary: {}; --color-card: {}; --color-card-inset: {}; --color-surface: {}; --color-control: {}; --color-text: {}; --color-text-secondary: {}; --color-shadow: {}; --color-success: {}; --color-warning: {}; --color-danger: {}; color-scheme: {};",
@@ -122,6 +156,7 @@ impl Theme {
 /// Runtime mode context for g3_ui components.
 #[derive(Clone, Copy, PartialEq)]
 pub struct G3Mode {
+    /// The platform styling mode in effect for this subtree.
     pub mode: ComponentMode,
 }
 
@@ -270,6 +305,7 @@ pub(crate) fn G3PreloadStyle() -> Element {
 }
 
 impl ComponentMode {
+    /// The `data-g3-mode` attribute value the stylesheet keys on.
     pub fn as_str(self) -> &'static str {
         match self {
             ComponentMode::Md => "md",

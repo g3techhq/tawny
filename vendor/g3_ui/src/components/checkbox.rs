@@ -7,12 +7,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CHECKBOX_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Where a checkbox, radio, or toggle sits relative to its label.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ControlLabelPlacement {
+    /// Label on the leading side, control on the trailing side.
     #[default]
     Start,
+    /// Control on the leading side, label on the trailing side.
     End,
+    /// Label in a fixed-width leading column, so labels line up across rows
+    /// of differing length.
     Fixed,
+    /// Label above the control, for narrow layouts and long labels.
     Stacked,
 }
 

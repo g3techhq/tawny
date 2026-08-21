@@ -3,17 +3,26 @@
 #[cfg(feature = "playground")]
 use dioxus::prelude::*;
 
+/// Name and one-line summary for a component, used by the playground and
+/// by generated documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComponentDescriptor {
+    /// The component's public name, e.g. `"G3Button"`.
     pub name: &'static str,
+    /// One sentence describing what the component is for.
     pub description: &'static str,
 }
 
+/// A runnable playground entry: a descriptor plus the demo that renders it
+/// and the source shown alongside.
 #[cfg(feature = "playground")]
 #[derive(Clone, Copy)]
 pub struct ComponentPlaygroundDemo {
+    /// Which component this demo is for.
     pub descriptor: ComponentDescriptor,
+    /// Renders the live demo.
     pub render: fn() -> dioxus::prelude::Element,
+    /// The demo's source, displayed next to it so the example can be copied.
     pub source: &'static str,
 }
 
@@ -24,10 +33,12 @@ impl PartialEq for ComponentPlaygroundDemo {
     }
 }
 
+/// Every component in the library, with its description.
 pub fn component_descriptors() -> Vec<ComponentDescriptor> {
     crate::components::component_descriptors()
 }
 
+/// Every playground demo in the library. Requires the `playground` feature.
 #[cfg(feature = "playground")]
 pub fn component_playground_demos() -> Vec<ComponentPlaygroundDemo> {
     crate::components::component_playground_demos()
@@ -68,6 +79,10 @@ pub fn PlaygroundDemoFrame(
     }
 }
 
+/// Declare a component's playground entry: its `DESCRIPTOR` constant and the
+/// demo wiring the playground collects.
+///
+/// Expands to items in the calling module, so invoke it once per component.
 #[macro_export]
 macro_rules! g3_playground {
     (

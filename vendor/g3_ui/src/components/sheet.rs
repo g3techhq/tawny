@@ -67,11 +67,15 @@ if (dialog && handle && handle.dataset.g3SheetDragBound !== "true") {
 }
 "#;
 
+/// Which edge a sheet slides in from.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum SheetPlacement {
+    /// Rises from the bottom - the standard mobile action sheet.
     #[default]
     Bottom,
+    /// Slides in from the leading edge, as a navigation drawer does.
     Left,
+    /// Slides in from the trailing edge, for inspectors and filters.
     Right,
 }
 

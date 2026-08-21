@@ -9,7 +9,7 @@ documentation = "https://docs.rs/dx-route-transitions"
 license = "MIT OR Apache-2.0"
 keywords = ["dioxus", "router", "transitions", "view-transitions"]
 categories = ["gui", "wasm", "web-programming"]
-include = ["Cargo.toml", "README.md", "src/**", "assets/**"]
+include = ["Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE", "src/**", "assets/**"]
 
 [lib]
 name = "dx_route_transitions"

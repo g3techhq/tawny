@@ -7,10 +7,16 @@ use dioxus::prelude::*;
 /// Visual variant of the button.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum ButtonStyle {
+    /// Filled with the accent color. The primary action on a screen.
     #[default]
     Solid,
+    /// Accent-colored border and label over a transparent fill - a secondary
+    /// action sitting beside a `Solid` one.
     Outline,
+    /// Text only, no fill or border. For low-emphasis and inline actions.
     Clear,
+    /// Filled, but in a neutral surface color rather than the accent. Use
+    /// where a button needs presence without claiming primacy.
     Neutral,
     /// Destructive action (delete, remove, sign out) — same weight as
     /// `Clear` (text-only, no fill/border) but tinted with the theme's
@@ -21,9 +27,12 @@ pub enum ButtonStyle {
 /// Button size.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum ButtonSize {
+    /// Compact, for toolbars and dense rows.
     Sm,
+    /// Standard size.
     #[default]
     Md,
+    /// Prominent, for a full-width primary call to action.
     Lg,
 }
 

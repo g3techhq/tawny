@@ -59,33 +59,31 @@ pub fn Field(
     });
 
     let mut check_validity = move |new_value: String| -> bool {
-        if let Some(max) = max {
-            if let Ok(v) = new_value.parse::<isize>() {
-                if v > max {
-                    reapply_value.toggle();
-                    return false;
-                }
-            }
+        if let Some(max) = max
+            && let Ok(v) = new_value.parse::<isize>()
+            && v > max
+        {
+            reapply_value.toggle();
+            return false;
         }
-        if let Some(min) = min {
-            if let Ok(v) = new_value.parse::<isize>() {
-                if v < min {
-                    reapply_value.toggle();
-                    return false;
-                }
-            }
+        if let Some(min) = min
+            && let Ok(v) = new_value.parse::<isize>()
+            && v < min
+        {
+            reapply_value.toggle();
+            return false;
         }
-        if let Some(minlength) = minlength {
-            if new_value.len() < minlength {
-                reapply_value.toggle();
-                return false;
-            }
+        if let Some(minlength) = minlength
+            && new_value.len() < minlength
+        {
+            reapply_value.toggle();
+            return false;
         }
-        if let Some(maxlength) = maxlength {
-            if new_value.len() > maxlength {
-                reapply_value.toggle();
-                return false;
-            }
+        if let Some(maxlength) = maxlength
+            && new_value.len() > maxlength
+        {
+            reapply_value.toggle();
+            return false;
         }
         true
     };

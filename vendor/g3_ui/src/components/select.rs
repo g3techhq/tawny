@@ -6,6 +6,8 @@ use crate::theme::{ComponentMode, merge_classes, use_component_mode};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::ChevronDown;
 
+/// One option in a `G3Select`. Construct with `SelectOption::new`, then
+/// optionally give it display text that differs from its value.
 #[derive(Clone, PartialEq)]
 pub struct SelectOption {
     option_value: String,

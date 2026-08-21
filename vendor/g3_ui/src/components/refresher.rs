@@ -10,10 +10,17 @@ pub const REFRESH_ELASTIC_FACTOR: f64 = 0.42;
 
 static REFRESHER_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Live state of a pull-to-refresh gesture, handed to the refresher's
+/// render callback so a custom indicator can follow the pull.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RefresherState {
+    /// Current pull distance in pixels.
     pub pull: f64,
+    /// `pull` as a fraction of the trigger threshold; reaches `1.0` at the
+    /// point where releasing would start a refresh.
     pub progress: f64,
+    /// Whether a refresh is currently running. Stays `true` from release
+    /// until the refresh completes.
     pub refreshing: bool,
 }
 

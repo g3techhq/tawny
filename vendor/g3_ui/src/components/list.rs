@@ -6,17 +6,26 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::ChevronRight;
 use std::time::Duration;
 
+/// Which edge of a list row a swipe gesture belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwipeSide {
+    /// The leading edge - swiping from it drags content toward the trailing side.
     Start,
+    /// The trailing edge - the conventional side for destructive actions.
     End,
 }
 
+/// What a swipe does once it passes the commit threshold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SwipeBehavior {
+    /// Swiping uncovers the actions and holds them open until one is tapped
+    /// or the row is swiped closed.
     #[default]
     Reveal,
+    /// Swiping past the threshold fires the leading action directly, without
+    /// leaving the actions on screen.
     Activate,
+    /// Swiping past the threshold removes the row entirely.
     Dismiss,
 }
 
@@ -179,11 +188,16 @@ impl DismissPhase {
     }
 }
 
+/// How separators are drawn between list rows.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ListLines {
+    /// Separators span the full width of the list.
     Full,
+    /// Separators are inset to align with row text, leaving leading icons
+    /// and avatars clear.
     #[default]
     Inset,
+    /// No separators.
     None,
 }
 
@@ -197,27 +211,46 @@ impl ListLines {
     }
 }
 
+/// What a list row behaves as, which determines its semantics and
+/// keyboard handling as well as its look.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub enum ItemKind {
+    /// Plain content. Not focusable and not interactive.
     #[default]
     Static,
+    /// Behaves as a button: focusable, keyboard-activatable, and it shows
+    /// a press state.
     Button,
+    /// Navigates to the given href. Renders as an anchor, so it supports
+    /// middle-click and open-in-new-tab.
     Link(String),
 }
 
+/// Whether a list row shows a trailing detail chevron.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ItemDetail {
+    /// Show the chevron when the row is interactive, hide it otherwise.
     #[default]
     Auto,
+    /// Always show the trailing chevron.
     Show,
+    /// Never show the trailing chevron.
     Hide,
 }
 
+/// Live state of an in-progress swipe, handed to swipe-action render
+/// callbacks so they can track the gesture.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwipeState {
+    /// Which edge the gesture started from.
     pub side: SwipeSide,
+    /// Current horizontal displacement of the row, in pixels.
     pub offset: f64,
+    /// `offset` as a fraction of the width of the revealed actions, so `1.0`
+    /// means the actions are fully open.
     pub ratio: f64,
+    /// Whether the swipe has passed the threshold at which `Activate` or
+    /// `Dismiss` would commit on release.
     pub full: bool,
 }
 
@@ -626,11 +659,10 @@ pub fn SwipeItem(
                     }
                     SwipeBehavior::Activate => should_activate_swipe(next, action_width),
                 };
-                if let Some(state) = swipe_state(next, action_width, active) {
-                    if let Some(on_drag) = on_drag_move {
+                if let Some(state) = swipe_state(next, action_width, active)
+                    && let Some(on_drag) = on_drag_move {
                         on_drag.call(state);
                     }
-                }
             },
             onpointerup: move |_| {
                 if disabled || dismiss_phase() != DismissPhase::Idle {
@@ -650,8 +682,7 @@ pub fn SwipeItem(
                                 has_start_actions,
                                 has_end_actions,
                             )
-                        {
-                            if let Some(state) = swipe_state(current, action_width, true) {
+                            && let Some(state) = swipe_state(current, action_width, true) {
                                 if let Some(on_drag) = on_drag_up {
                                     on_drag.call(state);
                                 }
@@ -659,7 +690,6 @@ pub fn SwipeItem(
                                     on_swipe_action.call(state);
                                 }
                             }
-                        }
                         offset.set(0.0);
                     }
                     SwipeBehavior::Dismiss => {

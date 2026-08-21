@@ -4,10 +4,13 @@ use super::toggle_styles as s;
 use crate::theme::{ComponentMode, merge_classes, use_component_mode};
 use dioxus::prelude::*;
 
+/// Size of a toggle switch.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum ToggleSize {
+    /// Compact, for list rows and settings tables.
     #[default]
     Sm,
+    /// Standard size.
     Md,
 }
 

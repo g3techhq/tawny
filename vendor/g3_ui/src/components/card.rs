@@ -4,9 +4,13 @@ use super::card_styles as s;
 use crate::theme::{ComponentMode, merge_classes, use_component_mode};
 use dioxus::prelude::*;
 
+/// Content for the trailing side of a card header - a value, a badge, or
+/// any element.
 #[derive(Clone, PartialEq)]
 pub enum RightSlot {
+    /// Plain text, styled as secondary detail.
     Text(String),
+    /// An arbitrary element, rendered as-is.
     Element(Element),
 }
 

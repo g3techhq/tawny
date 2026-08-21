@@ -9,36 +9,48 @@ use dioxus_icons::lucide::X;
 /// Fab container vertical alignment
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum FabVertical {
+    /// Pin to the top of the container.
     #[default]
     Top,
+    /// Center vertically.
     Center,
+    /// Pin to the bottom - the usual placement for a primary action.
     Bottom,
 }
 
 /// Fab container horizontal alignment
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum FabHorizontal {
+    /// Pin to the leading edge.
     #[default]
     Start,
+    /// Center horizontally.
     Center,
+    /// Pin to the trailing edge - the usual placement for a primary action.
     End,
 }
 
 /// FabList side relative to the main FabButton
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum FabListSide {
+    /// Expand upward from the button.
     #[default]
     Top,
+    /// Expand downward from the button.
     Bottom,
+    /// Expand toward the leading edge.
     Start,
+    /// Expand toward the trailing edge.
     End,
 }
 
 /// Fab button size
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum FabSize {
+    /// Full-size action button.
     #[default]
     Normal,
+    /// Reduced size, for the secondary buttons revealed by a `FabList`.
     Small,
 }
 
@@ -79,7 +91,7 @@ pub fn Fab(
 
     let final_attributes: Vec<Attribute> = attributes
         .into_iter()
-        .filter(|attr| attr.name.as_ref() as &str != "onclick")
+        .filter(|attr| attr.name as &str != "onclick")
         .collect();
 
     rsx! {
@@ -128,7 +140,7 @@ pub fn FabButton(
 
     let final_attributes: Vec<Attribute> = attributes
         .into_iter()
-        .filter(|attr| attr.name.as_ref() as &str != "onclick")
+        .filter(|attr| attr.name as &str != "onclick")
         .collect();
 
     if let Some(ref href) = href {

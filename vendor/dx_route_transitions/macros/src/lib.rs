@@ -1,3 +1,8 @@
+//! Proc-macro support for [`dx-route-transitions`](https://docs.rs/dx-route-transitions).
+//!
+//! This crate is an implementation detail; use `dx_route_transitions::route_transitions`
+//! rather than depending on it directly.
+#![warn(missing_docs)]
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};

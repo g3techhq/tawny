@@ -38,9 +38,7 @@ pub fn AppWrapper(
     // style) - `[data-g3-mode]` sets its own default color vars, and those
     // beat an *inherited* value on any element that carries the attribute,
     // which every AppWrapper does.
-    let effective_theme = theme
-        .or_else(|| try_use_context::<Theme>())
-        .unwrap_or_default();
+    let effective_theme = theme.or_else(try_use_context::<Theme>).unwrap_or_default();
     let theme_style = effective_theme.to_style_attr();
     provide_context(G3Mode { mode });
     provide_context(effective_theme);

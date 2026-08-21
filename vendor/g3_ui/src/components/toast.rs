@@ -7,10 +7,14 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::X;
 use std::time::Duration;
 
+/// Where a toast appears on screen.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToastPosition {
+    /// Below the header, for confirmations tied to the top of the screen.
     Top,
+    /// Centered, for messages that should interrupt.
     Middle,
+    /// Above the tab bar. The default, and the least obstructive.
     #[default]
     Bottom,
 }

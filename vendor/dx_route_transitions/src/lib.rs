@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Generic View Transition helpers for Dioxus route navigation.
 //!
 //! This crate is intentionally independent of any app component library. It provides:
@@ -74,10 +75,21 @@ use manganis::{Asset, asset};
 
 pub use dx_route_transitions_macros::route_transitions;
 
+/// The stylesheet backing every transition. Link it once via
+/// [`RouteTransitionProvider`], or attach it yourself if the app manages its
+/// own `document::Link` tags.
 pub static ROUTE_TRANSITIONS_CSS: Asset = asset!("/assets/route_transitions.css");
 
+/// Marks the element that holds ordinary page content. Applied by
+/// [`RouteTransitionRoot`]; the runtime gives it a view-transition name for
+/// push/fade animations.
 pub const ROUTE_TRANSITION_BASE_CLASS: &str = "route-transition-base";
+/// Marks the element that rides above the base layer during a cover/uncover
+/// (modal) transition. Named only while such a transition is running, so
+/// normal rendering does not pay for an extra snapshot.
 pub const ROUTE_TRANSITION_COVER_CLASS: &str = "route-transition-cover";
+/// Marks a sub-region that should animate independently of the page around
+/// it - a tab body swapping under a fixed header, for instance.
 pub const ROUTE_TRANSITION_SEGMENT_CLASS: &str = "route-transition-segment";
 
 fn merge_transition_class(base: &'static str, extra: Option<&str>) -> String {
@@ -122,12 +134,23 @@ pub fn RouteTransitionSegment(children: Element, class: Option<String>) -> Eleme
 /// push on `ios` and a Material shared-axis slide on `md`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NavigationAnimation {
+    /// No animation: navigate immediately, skipping the view transition
+    /// entirely.
     None,
+    /// A plain cross-dissolve. The default, and the safe choice when no
+    /// spatial relationship between the two routes is implied.
     #[default]
     Fade,
+    /// Forward motion deeper into a hierarchy - the new route enters from the
+    /// trailing edge.
     PushLeft,
+    /// Backward motion out of a hierarchy - the reverse of
+    /// [`NavigationAnimation::PushLeft`].
     PushRight,
+    /// A modal rising over the current route, which stays in place beneath it.
     CoverUp,
+    /// A modal dropping away to reveal the route beneath, the reverse of
+    /// [`NavigationAnimation::CoverUp`].
     UncoverDown,
     /// A card-like element growing into its own full-screen detail route
     /// (Material "container transform"; approximated on iOS as a soft
@@ -139,6 +162,7 @@ pub enum NavigationAnimation {
 }
 
 impl NavigationAnimation {
+    /// The `data-route-transition` attribute value the stylesheet keys on.
     pub fn data_value(self) -> &'static str {
         match self {
             NavigationAnimation::None => "none",
@@ -168,6 +192,7 @@ pub enum Platform {
 }
 
 impl Platform {
+    /// The `data-route-platform` attribute value the stylesheet keys on.
     pub fn data_value(self) -> &'static str {
         match self {
             Platform::Ios => "ios",
@@ -248,17 +273,26 @@ pub fn init_auto_platform() {
     set_platform(detect_platform());
 }
 
+/// Which stacking layer a route occupies during a transition. The runtime
+/// uses this to decide which element gets a view-transition name, so a modal
+/// can animate over a page that is itself not moving.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RouteTransitionLayer {
+    /// Ordinary page content, animating in the base layer.
     #[default]
     Base,
+    /// A modal or sheet riding above the base layer.
     Cover,
     /// A card-like element that morphs into (and back out of) its own
     /// full-screen route, distinct from a modal `Cover` layer.
     Morph,
 }
 
+/// Implemented by a `Route` enum to declare how it animates toward each of
+/// its peers. The `#[route_transitions]` macro generates this, but it can be
+/// written by hand when the choice depends on route data.
 pub trait RouteTransitions: PartialEq {
+    /// The animation to play when navigating from `self` to `next`.
     fn transition_to(&self, next: &Self) -> NavigationAnimation;
 }
 
@@ -411,6 +445,10 @@ async fn run_animated_navigation(animation: NavigationAnimation, mut navigate: i
     }
 }
 
+/// Navigate to `route`, playing the animation `route.transition_to` selects.
+/// Falls back to an immediate push when the pair resolves to
+/// [`NavigationAnimation::None`] or the platform has no View Transition
+/// support.
 pub async fn animated_navigate<Route>(route: Route)
 where
     Route: Clone + ToString + RouteTransitions + Routable + 'static,

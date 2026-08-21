@@ -123,7 +123,7 @@ private final class AppleSignInCoordinator: NSObject, ASAuthorizationControllerD
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         NSLog("[AuthPlugin.Coordinator] ========== didCompleteWithAuthorization called ==========")
-
+        
         guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
             NSLog("[AuthPlugin.Coordinator] ERROR: authorization.credential is not ASAuthorizationAppleIDCredential")
             NSLog("[AuthPlugin.Coordinator] credential type: \(type(of: authorization.credential))")

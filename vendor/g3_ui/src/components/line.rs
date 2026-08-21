@@ -7,8 +7,10 @@ use dioxus::prelude::*;
 /// Orientation of the line separator.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum LineOrientation {
+    /// A rule running left to right, separating stacked content.
     #[default]
     Horizontal,
+    /// A rule running top to bottom, separating side-by-side content.
     Vertical,
 }
 

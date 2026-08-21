@@ -1,8 +1,11 @@
+#![warn(missing_docs)]
 //! g3_ui - reusable UI component library.
 
 use manganis::Asset;
 use manganis::asset;
 
+/// The component stylesheet. `G3AppWrapper` links this for you; attach it
+/// yourself only if the app manages its own `document::Link` tags.
 pub static UI_CSS: Asset = asset!("/assets/g3_ui.css");
 
 mod components;
@@ -909,7 +912,7 @@ mod tests {
     fn app_wrapper_falls_back_to_an_ambient_theme_for_nested_wrappers() {
         let source = include_str!("components/app_wrapper.rs");
 
-        assert!(source.contains("try_use_context::<Theme>()"));
+        assert!(source.contains("try_use_context::<Theme>"));
         assert!(source.contains("layout: Option<bool>"));
     }
     #[test]

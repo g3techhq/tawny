@@ -7,11 +7,16 @@ use dioxus::prelude::*;
 /// Shared semantic color for status-oriented primitives.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum StatusColor {
+    /// Default, unemphasized. A plain surface tone.
     #[default]
     Neutral,
+    /// The theme accent - draws the eye without implying good or bad.
     Accent,
+    /// A positive or completed state.
     Success,
+    /// A state needing attention but not an error.
     Warning,
+    /// An error or destructive state.
     Danger,
 }
 
@@ -30,9 +35,12 @@ impl StatusColor {
 /// Avatar size token.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum AvatarSize {
+    /// Compact, for dense rows and inline mentions.
     Sm,
+    /// Standard size.
     #[default]
     Md,
+    /// Prominent, for profile headers.
     Lg,
 }
 
@@ -49,10 +57,15 @@ impl AvatarSize {
 /// Skeleton placeholder shape.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum SkeletonShape {
+    /// A single line of text, sized to the surrounding line height.
     #[default]
     Text,
+    /// A rectangular block standing in for an image or card.
     Block,
+    /// A circle standing in for an avatar.
     Avatar,
+    /// An avatar with two text lines beside it - the shape of a loading
+    /// list row.
     Row,
 }
 
