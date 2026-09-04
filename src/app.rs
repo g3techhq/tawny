@@ -13,7 +13,14 @@ use dx_route_transitions::{
 };
 use g3_ui::{AppWrapper, Theme};
 
-const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
+// Statically headed so web builds block first paint on it, the same as
+// g3_ui.css - linking it only at runtime left the app rendering unstyled while
+// the WASM booted. Desktop and mobile bundles do not collect statically-headed
+// assets, so the runtime link below is what reaches those builds.
+const TAILWIND_CSS: Asset = asset!(
+    "/assets/tailwind.css",
+    AssetOptions::css().with_static_head(true)
+);
 const SHAKA_PLAYER_JS: Asset = asset!("/node_modules/shaka-player/dist/shaka-player.compiled.js");
 const TAWNY_TRANSPORT_JS: Asset = asset!("/assets/tawny_transport.js");
 const TAWNY_PLAYER_CONTROLS_JS: Asset = asset!("/assets/tawny_player_controls.js");
@@ -136,7 +143,6 @@ fn ThemedApp() -> Element {
 
     rsx! {
         AppWrapper {
-            key: "{appearance:?}",
             theme: tawny_theme(appearance),
             disable_text_selection: true,
             // Provider only, never RouteTransitionRoot: AppWrapper already

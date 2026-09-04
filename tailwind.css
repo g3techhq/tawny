@@ -1816,7 +1816,10 @@ textarea {
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 1020px) {
+/* Follow the responsive g3_ui shell rather than the browser viewport. This
+   keeps the content layout in sync with the rail/bottom-nav switch when the
+   app runs in a narrow desktop window or an embedded shell. */
+@container g3-app-shell (width <= 1020px) {
   .video-grid,
   .playlist-grid,
   .data-grid {
@@ -1828,7 +1831,7 @@ textarea {
   }
 }
 
-@media (max-width: 680px) {
+@container g3-app-shell (width <= 680px) {
   .page {
     padding: 1rem;
   }
@@ -1932,7 +1935,7 @@ textarea {
   }
 }
 
-@media (max-width: 390px) {
+@container g3-app-shell (width <= 390px) {
   .channel-grid {
     grid-template-columns: 1fr;
   }
@@ -2592,7 +2595,7 @@ textarea {
   object-fit: cover;
 }
 
-@media (max-width: 600px) {
+@container g3-app-shell (width <= 600px) {
   .player-controls-center {
     gap: 0.8rem;
   }
@@ -3319,13 +3322,13 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
   padding-left: max(0.7rem, env(safe-area-inset-left));
 }
 
-@media (max-width: 1020px) {
+@container g3-app-shell (width <= 1020px) {
   .video-grid-shorts {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 680px) {
+@container g3-app-shell (width <= 680px) {
   .page {
     padding: 0.85rem;
   }
