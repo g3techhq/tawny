@@ -31,7 +31,7 @@ pub fn AppOverlays() -> Element {
         target_os = "ios",
         target_os = "macos"
     ))]
-    let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
+    let mut plugins = use_context::<g3_native_plugins::NativePlugins>();
     let (message, color) = app_state.toast();
     let target = app_state.playlist_picker_video();
     let action_target = (app_state.video_actions_video)();

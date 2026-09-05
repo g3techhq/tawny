@@ -1,7 +1,7 @@
 use crate::{app::Route, models::Video, state::AppState};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, Trash2, User};
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Badge, Button, ButtonStyle, StatusColor, SwipeAction, SwipeBehavior, SwipeItem, SwipeSide,
     SwipeState,

@@ -5,12 +5,12 @@ development intentionally patches these crates from sibling repositories in
 `.cargo/config.toml`. The Dockerfile replaces that configuration with
 `.cargo/config.docker.toml` and builds against the committed snapshots here.
 
-Refresh the matching snapshot whenever Tawny adopts a new change from `g3_ui`,
-`dx_route_transitions`, or `dx_native_plugins`, and include that refresh in the
+Refresh the matching snapshot whenever Tawny adopts a new change from `g3-ui`,
+`g3-route-transitions`, or `g3-native-plugins`, and include that refresh in the
 same Tawny commit.
 
 Current source revisions:
 
-- `g3_ui`: `5c29f3605d3ee41ac8a73019e4e2d112824dc7ab`
-- `dx_route_transitions`: `60d4d8f4efdce16292f3cffac0af3bb570742691`
-- `dx_native_plugins`: `4cb16d6ea5a0c3b155b276b6c54dfb941bfa41e3`
+- `g3-ui`: `d5a250ce991f0595f490cb17574fd77f9319f8fe`
+- `g3-route-transitions`: `d79cf692f4d587e5af55d3af46e8558647127cf6`
+- `g3-native-plugins`: `8b74fc6fcd28c778633752bf2bfc15b1f32231b8`

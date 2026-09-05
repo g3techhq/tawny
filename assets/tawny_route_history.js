@@ -8,17 +8,49 @@
 (() => {
   "use strict";
 
-  const isSheet = (route) => {
+  const routePath = (route) => {
     try {
-      return new URL(route, window.location.href).pathname.startsWith("/watch/");
+      return new URL(route, window.location.href).pathname;
     } catch (_) {
-      return String(route).startsWith("/watch/");
+      return String(route).split(/[?#]/, 1)[0];
     }
   };
 
-  // Mirrors Tawny's explicit set_platform(Platform::Ios): peer routes use a
-  // plain cross-dissolve instead of Material's sequential fade-through.
-  const PLATFORM = "ios";
+  const routeLayer = (route) => {
+    const rawPath = routePath(route);
+    const path = rawPath.replace(/\/+$/, "") || "/";
+    if (path.startsWith("/watch/")) return "cover";
+    if (
+      path === "/queue" ||
+      path === "/history" ||
+      path === "/settings" ||
+      path.startsWith("/channel/") ||
+      (path.startsWith("/playlists/") && path !== "/playlists/")
+    ) {
+      return "pushed";
+    }
+    if (
+      path === "/" ||
+      path === "/subscriptions" ||
+      path === "/playlists" ||
+      path === "/explore"
+    ) {
+      return "root";
+    }
+    return "base";
+  };
+
+  const transitionPlatform = () => {
+    const mode = document.querySelector?.("[data-g3-mode]")?.dataset?.g3Mode;
+    if (mode === "ios" || mode === "md") return mode;
+
+    const userAgent = window.navigator?.userAgent?.toLowerCase?.() || "";
+    const platform = window.navigator?.platform?.toLowerCase?.() || "";
+    const maxTouchPoints = window.navigator?.maxTouchPoints || 0;
+    const ipad = userAgent.includes("ipad") ||
+      (platform.includes("mac") && maxTouchPoints > 1 && userAgent.includes("safari"));
+    return userAgent.includes("iphone") || userAgent.includes("ipod") || ipad ? "ios" : "md";
+  };
 
   const routeKey = (value) => {
     try {
@@ -29,11 +61,20 @@
     }
   };
 
-  const animationFor = (from, to) => {
-    const leaving = isSheet(from);
-    const entering = isSheet(to);
-    if (!leaving && entering) return "cover-up";
-    if (leaving && !entering) return "uncover-down";
+  const animationFor = (from, to, isBack) => {
+    const leaving = routeLayer(from);
+    const entering = routeLayer(to);
+
+    // Mirrors RouteTransitions::transition_back: the page being dismissed
+    // owns reverse motion even when its deep-link fallback is not the actual
+    // history destination.
+    if (isBack && leaving === "cover") return "uncover-down";
+    if (isBack && leaving === "pushed") return "push-right";
+
+    if (leaving !== "cover" && entering === "cover") return "cover-up";
+    if (leaving === "cover" && entering !== "cover") return "uncover-down";
+    if (leaving === "root" && entering === "pushed") return "push-left";
+    if (leaving === "pushed" && entering === "root") return "push-right";
     return "fade";
   };
 
@@ -75,11 +116,11 @@
     !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches &&
     !document.documentElement.dataset.routeTransition;
 
-  const startTraversalTransition = (from, to) => {
+  const startTraversalTransition = (from, to, isBack = false) => {
     if (from === to || !canAnimate()) return null;
     const root = document.documentElement;
-    root.dataset.routeTransition = animationFor(from, to);
-    root.dataset.routeTransitionPlatform = PLATFORM;
+    root.dataset.routeTransition = animationFor(from, to, isBack);
+    root.dataset.routeTransitionPlatform = transitionPlatform();
     // The class granting the outgoing snapshot its view-transition-name must
     // be computed before the old state is captured.
     void root.offsetHeight;
@@ -105,7 +146,12 @@
       const to = routeKey(event.destination?.url ?? window.location.href);
       const from = lastRoute;
       lastRoute = to;
-      const transition = startTraversalTransition(from, to);
+      const currentIndex = navigationApi.currentEntry?.index;
+      const destinationIndex = event.destination?.index;
+      const isBack = Number.isInteger(currentIndex) &&
+        Number.isInteger(destinationIndex) &&
+        destinationIndex < currentIndex;
+      const transition = startTraversalTransition(from, to, isBack);
       if (!transition) return;
 
       // `intercept` commits the history traversal normally (and therefore lets

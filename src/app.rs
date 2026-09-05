@@ -7,14 +7,12 @@ use crate::{
     state::{AppState, AppStateProvider},
 };
 use dioxus::prelude::*;
-use dx_native_plugins::NativePluginsProvider;
-use dx_route_transitions::{
-    Platform, ROUTE_TRANSITIONS_CSS, RouteTransitionProvider, route_transitions, set_platform,
-};
+use g3_native_plugins::NativePluginsProvider;
+use g3_route_transitions::{ROUTE_TRANSITIONS_CSS, RouteTransitionProvider, route_transitions};
 use g3_ui::{AppWrapper, Theme};
 
 // Statically headed so web builds block first paint on it, the same as
-// g3_ui.css - linking it only at runtime left the app rendering unstyled while
+// g3-ui.css - linking it only at runtime left the app rendering unstyled while
 // the WASM booted. Desktop and mobile bundles do not collect statically-headed
 // assets, so the runtime link below is what reaches those builds.
 const TAILWIND_CSS: Asset = asset!(
@@ -26,43 +24,41 @@ const TAWNY_TRANSPORT_JS: Asset = asset!("/assets/tawny_transport.js");
 const TAWNY_PLAYER_CONTROLS_JS: Asset = asset!("/assets/tawny_player_controls.js");
 const TAWNY_ROUTE_HISTORY_JS: Asset = asset!("/assets/tawny_route_history.js");
 
-/// Every route is a `base` peer that cross-fades, except the watch page: it is
-/// the one true sheet, covering the shell on the way in and uncovering it on
-/// the way out. Playlists, channels and settings keep the nav in place, so
-/// sliding a sheet over it would only misrepresent where the user is.
+/// Primary destinations are stable roots, pages with a back affordance are
+/// pushed above them, and the watch page remains the one true sheet.
 #[route_transitions]
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 pub enum Route {
     #[layout(AppShell)]
-        #[transition(base)]
+        #[transition(root)]
         #[route("/")]
         Feed {},
-        #[transition(base)]
+        #[transition(root)]
         #[route("/subscriptions")]
         Subscriptions {},
-        #[transition(base)]
+        #[transition(root)]
         #[route("/playlists")]
         Playlists {},
-        #[transition(base)]
+        #[transition(root)]
         #[route("/explore")]
         Explore {},
-        #[transition(base)]
+        #[transition(pushed)]
         #[route("/queue")]
         QueuePage {},
-        #[transition(base)]
+        #[transition(pushed)]
         #[route("/history")]
         HistoryPage {},
         #[transition(cover)]
         #[route("/watch/:id")]
         VideoDetail { id: String },
-        #[transition(base)]
+        #[transition(pushed)]
         #[route("/playlists/:id")]
         PlaylistDetail { id: String },
-        #[transition(base)]
+        #[transition(pushed)]
         #[route("/settings")]
         SettingsPage {},
-        #[transition(base)]
+        #[transition(pushed)]
         #[route("/channel/:id")]
         ChannelDetail { id: String },
 }
@@ -117,12 +113,6 @@ fn ThemedApp() -> Element {
     let app_state = use_context::<AppState>();
     let appearance = app_state.settings().appearance;
 
-    // Material's Fade is a "fade through": the old page shrinks away, then the
-    // new one grows in — the zoom-out/zoom-in that made tab switches feel
-    // wrong. iOS Fade is a plain cross-dissolve, which is what a tab change
-    // should look like.
-    use_hook(|| set_platform(Platform::Ios));
-
     // View-transition snapshots are painted on the document element, outside
     // the wrapper that carries the theme variables, so the stylesheet's
     // `--color-bg` lookup missed and fell back to near-white. Mirroring the
@@ -145,14 +135,46 @@ fn ThemedApp() -> Element {
         AppWrapper {
             theme: tawny_theme(appearance),
             disable_text_selection: true,
-            // Provider only, never RouteTransitionRoot: AppWrapper already
-            // carries the cover marker, and two elements claiming
-            // `view-transition-name: cover` make the browser skip the
-            // transition outright — it ran for one frame, then snapped.
+            // The player owns the cover marker; the provider supplies the
+            // shared stylesheet while the library auto-detects iOS vs MD.
             RouteTransitionProvider {
                 Router::<Route> {}
             }
             AppOverlays {}
         }
+    }
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+    use g3_route_transitions::{NavigationAnimation, RouteTransitions};
+
+    #[test]
+    fn primary_destinations_cross_fade() {
+        assert_eq!(
+            Route::Feed {}.transition_to(&Route::Subscriptions {}),
+            NavigationAnimation::Fade
+        );
+    }
+
+    #[test]
+    fn detail_pages_push_and_pop() {
+        let root = Route::Playlists {};
+        let detail = Route::PlaylistDetail {
+            id: "playlist:test".into(),
+        };
+
+        assert_eq!(root.transition_to(&detail), NavigationAnimation::PushLeft);
+        assert_eq!(detail.transition_back(), NavigationAnimation::PushRight);
+    }
+
+    #[test]
+    fn player_covers_and_uncovers_the_current_page() {
+        let root = Route::Feed {};
+        let player = Route::VideoDetail { id: "video".into() };
+
+        assert_eq!(root.transition_to(&player), NavigationAnimation::CoverUp);
+        assert_eq!(player.transition_back(), NavigationAnimation::UncoverDown);
     }
 }

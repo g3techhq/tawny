@@ -1,4 +1,4 @@
 [patch.crates-io]
-g3-ui = { path = "vendor/g3_ui" }
-dx-route-transitions = { path = "vendor/dx_route_transitions" }
-dx-native-plugins = { path = "vendor/dx_native_plugins" }
+g3-ui = { path = "vendor/g3-ui" }
+g3-route-transitions = { path = "vendor/g3-route-transitions" }
+g3-native-plugins = { path = "vendor/g3-native-plugins" }

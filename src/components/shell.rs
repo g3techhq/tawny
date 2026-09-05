@@ -4,8 +4,11 @@ use dioxus_icons::lucide::{
     ChevronLeft, History, House, List as ListIcon, ListVideo, Play, Search, Settings, Users,
 };
 #[cfg(target_os = "android")]
-use dx_native_plugins::NativePlugins;
-use dx_route_transitions::{animated_go_back, animated_navigate};
+use g3_native_plugins::NativePlugins;
+use g3_route_transitions::{
+    RouteTransitionPage, animated_go_back, animated_navigate,
+    use_native_back_navigation_with_interception,
+};
 use g3_ui::{
     Body, Button, ButtonStyle, Header, Navbar, NavbarTab, NavbarTabBar, SegmentButton, SegmentGroup,
 };
@@ -39,11 +42,7 @@ fn detail_title(route: &Route, app_state: AppState) -> Option<String> {
     }
 }
 
-/// The nav destination a cover route sits on top of.
-///
-/// Going back to it by navigating — rather than popping history — is what lets
-/// the sheet animate down, because the transition is chosen from the route pair
-/// and a raw `go_back` gives the library nothing to compare.
+/// The parent route used when a deep-linked page has no history to pop.
 fn back_destination(route: &Route) -> Route {
     match route {
         Route::PlaylistDetail { .. } => Route::Playlists {},
@@ -108,7 +107,7 @@ async fn restore_section_scroll(section: &str) {
     let _ = restore.recv::<bool>().await;
 }
 
-/// Bottom tabs are independent scroll surfaces even though g3_ui deliberately
+/// Bottom tabs are independent scroll surfaces even though g3-ui deliberately
 /// reuses one body scroller. Remember the surface we are leaving and restore
 /// the destination after its route transition has installed the new content.
 fn navigate_with_scroll(from: &'static str, route: Route, remember_return: bool) {
@@ -149,101 +148,100 @@ fn navigate_back_from_auxiliary(from: &'static str, fallback: Route) {
     });
 }
 
-/// Connect Android's Activity-level Back callback to the Dioxus router. The
-/// native plugin deliberately starts disabled so Back can still leave the app
-/// on the root feed.
-#[cfg(target_os = "android")]
+/// Installs the shared native-Back/router integration. Tawny keeps only its
+/// app-specific overlay priority and scroll restoration on the standard DOM
+/// events; the library owns the actual Dioxus pop and transition handshake.
 #[component]
-fn NativeBackCoordinator(route: Route) -> Element {
+fn NativeBackCoordinator() -> Element {
     let app_state = use_context::<AppState>();
-    let mut plugins = use_context::<NativePlugins>();
-    // This setter is idempotent. Updating it while rendering keeps the native
-    // callback in lockstep with the visible route; a post-render effect leaves
-    // a short window where Android still sees the previous page's Back state.
-    let intercepting = !matches!(route, Route::Feed {})
-        || (app_state.playlist_picker_open)()
+    let overlay_open = (app_state.playlist_picker_open)()
         || (app_state.video_actions_open)()
         || (app_state.share_open)()
         || (app_state.chapters_sheet_open)();
-    {
-        let mut back_button = plugins.back_button.write();
-        let _ = back_button.prepare();
-        let _ = back_button.set_intercepting(intercepting);
-    }
+    use_native_back_navigation_with_interception::<Route>(overlay_open);
 
-    use_future(move || {
-        async move {
-            let mut eval = document::eval(
-                r#"
-                const tawnyNativeBackEvent = 'dxnativeback';
-                window.addEventListener(tawnyNativeBackEvent, async () => {
-                    if (document.fullscreenElement || document.webkitFullscreenElement) {
-                        if (window.__tawnyFullscreenBackPending) return;
-                        window.__tawnyFullscreenBackPending = true;
-                        document.querySelector('[data-player-native-orientation-unlock]')?.click();
-                        const exit = document.exitFullscreen || document.webkitExitFullscreen;
-                        if (exit) {
-                            try { await exit.call(document); } catch (_) {}
-                        }
-                        await new Promise((resolve) => requestAnimationFrame(resolve));
-                        document.querySelector('[data-player-minimize]')?.click();
-                        setTimeout(() => { window.__tawnyFullscreenBackPending = false; }, 350);
-                        return;
+    #[cfg(target_os = "android")]
+    let _native_back_behavior = use_hook(|| {
+        document::eval(
+            r#"
+            const stateKey = Symbol.for('tawny.native-back-ui');
+            window[stateKey]?.dispose?.();
+
+            const onNativeBack = async (event) => {
+                if (document.fullscreenElement || document.webkitFullscreenElement) {
+                    event.preventDefault();
+                    if (window.__tawnyFullscreenBackPending) return;
+                    window.__tawnyFullscreenBackPending = true;
+                    document.querySelector('[data-player-native-orientation-unlock]')?.click();
+                    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+                    if (exit) {
+                        try { await exit.call(document); } catch (_) {}
                     }
-                    const options = document.querySelector('[data-player-options-menu]:not([hidden])');
-                    if (options) {
-                        document.querySelector('[data-player-action="settings"]')?.click();
-                        return;
-                    }
-                    const sheet = document.querySelector('.g3-sheet-backdrop-open');
-                    if (sheet) {
-                        sheet.click();
-                        return;
-                    }
-                    const modal = document.querySelector('.g3-modal-overlay[data-state="open"]');
-                    if (modal) {
-                        modal.click();
-                        return;
-                    }
-                    const auxiliary = document.querySelector('.tawny-shell-auxiliary');
-                    if (auxiliary) {
-                        const title = (document.querySelector('.g3-header-title-text')?.textContent || '')
-                            .trim()
-                            .toLowerCase();
-                        const section = ['settings', 'queue', 'history'].includes(title) ? title : 'feed';
-                        const scroller = document.querySelector('.g3-body-content');
-                        window.__tawnySectionScrollPositions ||= {};
-                        if (scroller) window.__tawnySectionScrollPositions[section] = scroller.scrollTop;
-                        const returns = window.__tawnyAuxiliaryReturnSections || [];
-                        window.__tawnyPendingNativeBackScrollSection = returns.pop() || 'feed';
-                    }
-                    dioxus.send(true);
-                });
-                "#,
-            );
-            while eval.recv::<bool>().await.is_ok() {
-                // All non-player routes are base peers, so Feed selects the
-                // same fade for their history pop. The player is a cover and
-                // therefore selects its reverse uncover animation.
-                animated_go_back(Route::Feed {}).await;
-                let mut restore = document::eval(
-                    r#"
-                    const section = window.__tawnyPendingNativeBackScrollSection;
-                    delete window.__tawnyPendingNativeBackScrollSection;
-                    if (section) {
-                        const scroller = document.querySelector('.g3-body-content');
-                        const top = window.__tawnySectionScrollPositions?.[section] ?? 0;
-                        requestAnimationFrame(() => requestAnimationFrame(() => {
-                            scroller?.scrollTo({ top, left: 0, behavior: 'instant' });
-                        }));
-                    }
-                    dioxus.send(true);
-                    "#,
-                );
-                let _ = restore.recv::<bool>().await;
-            }
-        }
+                    await new Promise((resolve) => requestAnimationFrame(resolve));
+                    document.querySelector('[data-player-minimize]')?.click();
+                    setTimeout(() => { window.__tawnyFullscreenBackPending = false; }, 350);
+                    return;
+                }
+
+                const options = document.querySelector('[data-player-options-menu]:not([hidden])');
+                if (options) {
+                    event.preventDefault();
+                    document.querySelector('[data-player-action="settings"]')?.click();
+                    return;
+                }
+
+                const sheet = document.querySelector('.g3-sheet-backdrop-open');
+                if (sheet) {
+                    event.preventDefault();
+                    sheet.click();
+                    return;
+                }
+
+                const modal = document.querySelector('.g3-modal-overlay[data-state="open"]');
+                if (modal) {
+                    event.preventDefault();
+                    modal.click();
+                    return;
+                }
+
+                const auxiliary = document.querySelector('.tawny-shell-auxiliary');
+                if (auxiliary) {
+                    const title = (document.querySelector('.g3-header-title-text')?.textContent || '')
+                        .trim()
+                        .toLowerCase();
+                    const section = ['settings', 'queue', 'history'].includes(title) ? title : 'feed';
+                    const scroller = document.querySelector('.g3-body-content');
+                    window.__tawnySectionScrollPositions ||= {};
+                    if (scroller) window.__tawnySectionScrollPositions[section] = scroller.scrollTop;
+                    const returns = window.__tawnyAuxiliaryReturnSections || [];
+                    window.__tawnyPendingNativeBackScrollSection = returns.pop() || 'feed';
+                }
+            };
+
+            const onTransitionEnd = () => {
+                const section = window.__tawnyPendingNativeBackScrollSection;
+                delete window.__tawnyPendingNativeBackScrollSection;
+                if (!section) return;
+
+                const scroller = document.querySelector('.g3-body-content');
+                const top = window.__tawnySectionScrollPositions?.[section] ?? 0;
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    scroller?.scrollTo({ top, left: 0, behavior: 'instant' });
+                }));
+            };
+
+            window.addEventListener('g3nativeback', onNativeBack);
+            window.addEventListener('g3routebacktransitionend', onTransitionEnd);
+            window[stateKey] = {
+                dispose() {
+                    window.removeEventListener('g3nativeback', onNativeBack);
+                    window.removeEventListener('g3routebacktransitionend', onTransitionEnd);
+                },
+            };
+            "#,
+        )
     });
+
     rsx! {}
 }
 
@@ -263,13 +261,6 @@ fn NativeMediaCoordinator() -> Element {
     rsx! {}
 }
 
-#[cfg(not(target_os = "android"))]
-#[component]
-fn NativeBackCoordinator(route: Route) -> Element {
-    let _ = route;
-    rsx! {}
-}
-
 #[component]
 pub fn AppShell() -> Element {
     let route: Route = use_route();
@@ -285,9 +276,8 @@ pub fn AppShell() -> Element {
     let is_detail = detail.is_some();
     let title = detail.unwrap_or_default();
     // The watch page is the only sheet, so it is the only route that gives up
-    // the tab bar — and only on compact layouts, where the bar is the bottom
-    // strip the sheet slides over. Playlists, channels and settings are peers
-    // that keep the nav exactly where it is.
+    // the compact bottom bar. Detail and auxiliary pages keep the shell but
+    // use pushed-page motion when opened or dismissed.
     let is_cover = player_expanded;
     let back_route = route.clone();
     let current_scroll_section = scroll_section(&route);
@@ -371,57 +361,58 @@ pub fn AppShell() -> Element {
         // sit on an ancestor of this: a named descendant is lifted out of its
         // ancestor's snapshot, so an outer cover would capture everything
         // except the content — an empty background sliding around.
-        NativeBackCoordinator { route: route.clone() }
-        Navbar { class: shell_class,
-            // No top bar on the player: minimize, back, and swipe-down all
-            // leave the screen, so a bar would only steal height from the video.
-            if !player_expanded {
-                Header {
-                    title,
-                    class: "tawny-header",
-                    start_button,
-                    end_button: rsx! {
-                        div { class: "header-actions",
-                            if !matches!(route, Route::QueuePage {}) {
-                                Button {
-                                    style: ButtonStyle::Clear,
-                                    aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
-                                    class: "icon-button",
-                                    onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::QueuePage {}),
-                                    ListVideo { size: 19 }
+        NativeBackCoordinator {}
+        RouteTransitionPage {
+            Navbar { class: shell_class,
+                // No top bar on the player: minimize, back, and swipe-down all
+                // leave the screen, so a bar would only steal height from the video.
+                if !player_expanded {
+                    Header {
+                        title,
+                        class: "tawny-header",
+                        start_button,
+                        end_button: rsx! {
+                            div { class: "header-actions",
+                                if !matches!(route, Route::QueuePage {}) {
+                                    Button {
+                                        style: ButtonStyle::Clear,
+                                        aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
+                                        class: "icon-button",
+                                        onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::QueuePage {}),
+                                        ListVideo { size: 19 }
+                                    }
+                                }
+                                if !matches!(route, Route::HistoryPage {}) {
+                                    Button {
+                                        style: ButtonStyle::Clear,
+                                        aria_label: "History".to_string(),
+                                        class: "icon-button header-history-button",
+                                        onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::HistoryPage {}),
+                                        History { size: 19 }
+                                    }
+                                }
+                                if !matches!(route, Route::SettingsPage {}) {
+                                    Button {
+                                        style: ButtonStyle::Clear,
+                                        aria_label: "Settings".to_string(),
+                                        class: "icon-button",
+                                        onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::SettingsPage {}),
+                                        Settings { size: 20 }
+                                    }
                                 }
                             }
-                            if !matches!(route, Route::HistoryPage {}) {
-                                Button {
-                                    style: ButtonStyle::Clear,
-                                    aria_label: "History".to_string(),
-                                    class: "icon-button header-history-button",
-                                    onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::HistoryPage {}),
-                                    History { size: 19 }
-                                }
-                            }
-                            if !matches!(route, Route::SettingsPage {}) {
-                                Button {
-                                    style: ButtonStyle::Clear,
-                                    aria_label: "Settings".to_string(),
-                                    class: "icon-button",
-                                    onclick: move |_| navigate_to_auxiliary(current_scroll_section, Route::SettingsPage {}),
-                                    Settings { size: 20 }
-                                }
-                            }
-                        }
-                    },
-                    toolbar,
+                        },
+                        toolbar,
+                    }
                 }
-            }
-            Body { padding: false,
-                PersistentPlayer { expanded: player_expanded }
-                Outlet::<Route> {}
-            }
-            // Always rendered: the desktop rail is permanent chrome, and only
-            // the compact bottom bar gets out of a sheet's way. Hiding it in
-            // CSS keeps that a layout decision rather than a routing one.
-            NavbarTabBar { aria_label: "Primary navigation".to_string(),
+                Body { padding: false,
+                    PersistentPlayer { expanded: player_expanded }
+                    Outlet::<Route> {}
+                }
+                // Always rendered: the desktop rail is permanent chrome, and only
+                // the compact bottom bar gets out of a sheet's way. Hiding it in
+                // CSS keeps that a layout decision rather than a routing one.
+                NavbarTabBar { aria_label: "Primary navigation".to_string(),
                     NavbarTab {
                         label: "Feed".to_string(),
                         selected: matches!(route, Route::Feed {}),
@@ -446,6 +437,7 @@ pub fn AppShell() -> Element {
                         icon: rsx! { Users { size: 20 } },
                         onclick: move |_| navigate_to_section(current_scroll_section, Route::Subscriptions {}),
                     }
+                }
             }
         }
     }

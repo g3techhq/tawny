@@ -6,7 +6,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{History, ListVideo, Play, Trash2, User};
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::{Button, ButtonSize, ButtonStyle, Refresher, Sheet, StatusColor};
 
 use super::VideoGrid;

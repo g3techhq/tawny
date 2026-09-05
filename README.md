@@ -1,6 +1,6 @@
 # Tawny
 
-Tawny is a calm, local-first YouTube client built with Dioxus and `g3_ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
+Tawny is a calm, local-first YouTube client built with Dioxus and `g3-ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
 
 Tawny is designed as a self-hosted replacement for a LibreTube plus Piped deployment. The Dioxus backend performs search, feeds, channels, video details, comments, captions, and stream orchestration directly against YouTube; its deployment-local yt-dlp and PO-token sidecars are included in this repository, and no public Piped instance is contacted.
 
@@ -19,7 +19,7 @@ This repository currently contains a working local-first vertical slice:
 - direct YouTube video details, comments, captions, chapters, recommendations, and expiring playback sources;
 - cached descriptions, chapter jumps, captions, comments, and related videos;
 - same-origin ranged media/caption proxying, HLS/DASH manifest rewriting, adaptive quality, buffered seeking, and session retry;
-- responsive mobile, web, and desktop navigation using `g3_ui`;
+- responsive mobile, web, and desktop navigation using `g3-ui`;
 - server-side playback resolution for SABR, HLS, DASH, progressive streams, and per-video PO tokens.
 
 The seeded library is intentional: it keeps the first launch useful while the real library hydrates. Library actions update the device cache immediately and then write the newer revision to SurrealDB; if another client already has a newer revision, its server snapshot wins.

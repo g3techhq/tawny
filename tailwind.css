@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @source "./src/**/*.{rs,html,css}";
-@source "../g3_ui/src/**/*.{rs,html,css}";
+@source "../g3-ui/src/**/*.{rs,html,css}";
 
 :root {
   --tawny-amber: #f5a524;

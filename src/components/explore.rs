@@ -6,7 +6,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Search, User};
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::Field;
 use g3_ui::{Button, StatusColor};
 use std::collections::{HashMap, HashSet};

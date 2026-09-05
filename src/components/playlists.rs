@@ -1,7 +1,7 @@
 use crate::{app::Route, models::Playlist, state::AppState};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{CheckCheck, ListPlus, Plus, Trash2};
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::{Button, ButtonStyle, Card, Field, Modal, RightSlot, StatusColor};
 
 use super::VideoGrid;

@@ -2448,41 +2448,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
-name = "dx-native-plugins"
-version = "0.1.0"
-dependencies = [
- "cfg-if",
- "dioxus",
- "dioxus-signals",
- "jni 0.21.1",
- "js-sys",
- "manganis",
- "ndk-context",
- "serde_json",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "dx-route-transitions"
-version = "0.1.0"
-dependencies = [
- "dioxus",
- "dx-route-transitions-macros",
- "manganis",
- "web-sys",
-]
-
-[[package]]
-name = "dx-route-transitions-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "earcutr"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2992,6 +2957,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 dependencies = [
  "byteorder",
+]
+
+[[package]]
+name = "g3-native-plugins"
+version = "0.1.0"
+dependencies = [
+ "cfg-if",
+ "dioxus",
+ "dioxus-signals",
+ "jni 0.21.1",
+ "js-sys",
+ "manganis",
+ "ndk-context",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "g3-route-transitions"
+version = "0.1.0"
+dependencies = [
+ "dioxus",
+ "g3-native-plugins",
+ "g3-route-transitions-macros",
+ "manganis",
+ "web-sys",
+]
+
+[[package]]
+name = "g3-route-transitions-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -8126,9 +8127,9 @@ dependencies = [
  "dioxus",
  "dioxus-fullstack",
  "dioxus-icons",
- "dx-native-plugins",
- "dx-route-transitions",
  "futures-util",
+ "g3-native-plugins",
+ "g3-route-transitions",
  "g3-ui",
  "getrandom 0.2.17",
  "getrandom 0.3.4",

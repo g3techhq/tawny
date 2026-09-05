@@ -10,8 +10,8 @@ description = "A local-first, cross-platform YouTube client built with Dioxus."
 dioxus = { version = "=0.7.9", features = ["router", "fullstack"] }
 dioxus-fullstack = "=0.7.9"
 dioxus-icons = "0.1.0"
-dx-route-transitions = "0.1.0"
-dx-native-plugins = { version = "0.1.0", features = ["back-button", "clipboard", "media"] }
+g3-route-transitions = { version = "0.1.0", features = ["native-back"] }
+g3-native-plugins = { version = "0.1.0", features = ["back-button", "clipboard", "media"] }
 g3-ui = { version = "0.1.0" }
 manganis = "=0.7.9"
 serde = { version = "1.0.217", features = ["derive"] }

@@ -13,7 +13,7 @@ use dioxus_icons::lucide::{
     Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp,
     User, Volume2, VolumeX, X,
 };
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::{Badge, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
 
 use super::VideoGrid;
@@ -97,7 +97,7 @@ fn sync_player_metadata(
 #[cfg(target_os = "android")]
 #[component]
 fn NativePlayerBridges(title: String) -> Element {
-    let mut plugins = use_context::<dx_native_plugins::NativePlugins>();
+    let mut plugins = use_context::<g3_native_plugins::NativePlugins>();
     rsx! {
         button {
             r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",

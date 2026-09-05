@@ -1,7 +1,7 @@
 use crate::{app::Route, models::Channel, state::AppState};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, Layers, Plus, Search, Trash2, User};
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::{Button, ButtonSize, ButtonStyle, Card, Field, Modal, Sheet, StatusColor};
 
 /// One channel tile, used by both the subscribed grid and the suggestions row.
