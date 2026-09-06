@@ -51,7 +51,8 @@ test-rust:
 
 test: test-node test-rust
 
-test-local: test-node
+test-local:
+    npm run test:unit:js
     cargo nextest run
 
 test-ui:
