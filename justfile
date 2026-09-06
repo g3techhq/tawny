@@ -33,6 +33,10 @@ lint:
     cargo clippy --all-targets --no-default-features --features server --no-deps
     npm run lint:web
 
+lint-local:
+    cargo clippy --all-targets --no-deps
+    npm run lint:web
+
 lint-strict:
     cargo clippy --all-targets --no-deps -- -D warnings
     cargo clippy --all-targets --no-default-features --features server --no-deps -- -D warnings
@@ -47,6 +51,9 @@ test-rust:
 
 test: test-node test-rust
 
+test-local: test-node
+    cargo nextest run
+
 test-ui:
     npm run test:ui
 
@@ -56,8 +63,8 @@ spell:
 security:
     cargo deny check
 
-pre-push: format-check check lint test spell
+pre-push: format-check check-web lint-local test-local spell
 
-quality: pre-push
+quality: format-check check lint test spell
 
 ci: quality security
