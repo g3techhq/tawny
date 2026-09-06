@@ -29,12 +29,7 @@
     ) {
       return "pushed";
     }
-    if (
-      path === "/" ||
-      path === "/subscriptions" ||
-      path === "/playlists" ||
-      path === "/explore"
-    ) {
+    if (path === "/" || path === "/subscriptions" || path === "/playlists" || path === "/explore") {
       return "root";
     }
     return "base";
@@ -47,7 +42,8 @@
     const userAgent = window.navigator?.userAgent?.toLowerCase?.() || "";
     const platform = window.navigator?.platform?.toLowerCase?.() || "";
     const maxTouchPoints = window.navigator?.maxTouchPoints || 0;
-    const ipad = userAgent.includes("ipad") ||
+    const ipad =
+      userAgent.includes("ipad") ||
       (platform.includes("mac") && maxTouchPoints > 1 && userAgent.includes("safari"));
     return userAgent.includes("iphone") || userAgent.includes("ipod") || ipad ? "ios" : "md";
   };
@@ -88,9 +84,8 @@
         observer?.disconnect?.();
         resolve();
       };
-      const observer = typeof MutationObserver === "undefined"
-        ? null
-        : new MutationObserver(finish);
+      const observer =
+        typeof MutationObserver === "undefined" ? null : new MutationObserver(finish);
       observer?.observe?.(document.body ?? document.documentElement, {
         childList: true,
         subtree: true,
@@ -148,7 +143,8 @@
       lastRoute = to;
       const currentIndex = navigationApi.currentEntry?.index;
       const destinationIndex = event.destination?.index;
-      const isBack = Number.isInteger(currentIndex) &&
+      const isBack =
+        Number.isInteger(currentIndex) &&
         Number.isInteger(destinationIndex) &&
         destinationIndex < currentIndex;
       const transition = startTraversalTransition(from, to, isBack);

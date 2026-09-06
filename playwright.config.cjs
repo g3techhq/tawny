@@ -13,10 +13,7 @@ module.exports = defineConfig({
   preserveOutput: "failures-only",
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  reporter: [
-    ["list"],
-    ["html", { outputFolder: "playwright-report", open: "never" }],
-  ],
+  reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
   use: {
     baseURL,
     actionTimeout: 10_000,

@@ -104,10 +104,7 @@ async function inspect() {
         });
       }
     }
-    if (
-      message.method === "Network.responseReceived" &&
-      message.params.response.status >= 400
-    ) {
+    if (message.method === "Network.responseReceived" && message.params.response.status >= 400) {
       consoleMessages.push(
         `http ${message.params.response.status}: ${message.params.response.url}`,
       );
@@ -173,9 +170,9 @@ async function inspect() {
         transportDebug: state.transportDebug,
         rewind: Boolean(
           previous &&
-          previous.readyState >= 2 &&
-          state.readyState >= 2 &&
-          state.currentTime + 2 < previous.currentTime
+            previous.readyState >= 2 &&
+            state.readyState >= 2 &&
+            state.currentTime + 2 < previous.currentTime,
         ),
       });
     }

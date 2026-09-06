@@ -12,7 +12,9 @@
     const minutes = Math.floor(value / 60) % 60;
     const hours = Math.floor(value / 3600);
     const tail = `${minutes}:${String(seconds).padStart(2, "0")}`;
-    return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : tail;
+    return hours > 0
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      : tail;
   }
 
   function fullscreenElement() {
@@ -23,7 +25,9 @@
     if (fullscreenElement()) {
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       if (screen.orientation && typeof screen.orientation.unlock === "function") {
-        try { screen.orientation.unlock(); } catch (_) {}
+        try {
+          screen.orientation.unlock();
+        } catch (_) {}
       }
       root.querySelector("[data-player-native-orientation-unlock]")?.click();
       return exit ? exit.call(document) : undefined;
@@ -43,12 +47,11 @@
     const horizontal = media && media.videoWidth > media.videoHeight;
     const autoLandscape = root.dataset.autoLandscape !== "false";
     const request =
-      root.requestFullscreen ||
-      root.webkitRequestFullscreen ||
-      root.webkitRequestFullScreen;
+      root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
     const started = request
       ? Promise.resolve(request.call(root, { navigationUI: "hide" })).catch(() =>
-          Promise.resolve(request.call(root)).catch(() => Promise.reject()))
+          Promise.resolve(request.call(root)).catch(() => Promise.reject()),
+        )
       : Promise.reject();
     return started
       .then(() => {
@@ -62,7 +65,9 @@
       })
       .catch(() => {
         if (media && typeof media.webkitEnterFullscreen === "function") {
-          try { media.webkitEnterFullscreen(); } catch (_) {}
+          try {
+            media.webkitEnterFullscreen();
+          } catch (_) {}
         }
       });
   }
@@ -240,19 +245,20 @@
       captionsButton?.classList.toggle("selected", selected >= 0);
       captionsButton?.toggleAttribute("disabled", tracks.length === 0);
       if (captionsButton) {
-        captionsButton.title = selected >= 0 ? `Captions: ${tracks[selected].label || "On"}` : "Captions off";
+        captionsButton.title =
+          selected >= 0 ? `Captions: ${tracks[selected].label || "On"}` : "Captions off";
       }
     }
 
     function applyCaptionState() {
       const tracks = Array.from(video.textTracks || []);
-      const validSelection = Number.isInteger(selectedCaption)
-        && selectedCaption >= 0
-        && selectedCaption < tracks.length;
+      const validSelection =
+        Number.isInteger(selectedCaption) &&
+        selectedCaption >= 0 &&
+        selectedCaption < tracks.length;
       tracks.forEach((track, index) => {
-        track.mode = captionsEnabled && validSelection && index === selectedCaption
-          ? "showing"
-          : "disabled";
+        track.mode =
+          captionsEnabled && validSelection && index === selectedCaption ? "showing" : "disabled";
       });
       updateCaptions();
     }
@@ -399,8 +405,9 @@
       if (!state) return;
       chosenHeight = state.auto ? null : state.selectedHeight;
       qualityOptions.replaceChildren();
-      const choices = [{ value: null, label: state.activeHeight ? `Auto · ${state.activeHeight}p` : "Auto" }]
-        .concat(state.heights.map((height) => ({ value: height, label: `${height}p` })));
+      const choices = [
+        { value: null, label: state.activeHeight ? `Auto · ${state.activeHeight}p` : "Auto" },
+      ].concat(state.heights.map((height) => ({ value: height, label: `${height}p` })));
       for (const choice of choices) {
         const button = document.createElement("button");
         button.type = "button";
@@ -459,7 +466,7 @@
         case "settings":
           toggleOptions();
           break;
-        case "pip":
+        case "pip": {
           let pipChanged = false;
           try {
             if (document.pictureInPictureElement) {
@@ -483,6 +490,7 @@
             root.querySelector(selector)?.click();
           }
           break;
+        }
         case "fullscreen":
           await Promise.resolve(toggleFullscreen(root)).catch(() => {});
           break;
@@ -550,7 +558,9 @@
 
       listen(progress, "pointerdown", (event) => {
         beginScrub();
-        try { progress.setPointerCapture(event.pointerId); } catch (_) {}
+        try {
+          progress.setPointerCapture(event.pointerId);
+        } catch (_) {}
         positionScrubAt(event.clientX);
       });
       listen(progress, "pointermove", (event) => {
@@ -626,7 +636,9 @@
 
     listen(root, "pointerdown", (event) => {
       swallowNextClick = false;
-      if (event.target.closest("[data-player-action], [data-player-progress], .player-options-menu")) {
+      if (
+        event.target.closest("[data-player-action], [data-player-progress], .player-options-menu")
+      ) {
         gestureStart = null;
         return;
       }
@@ -775,7 +787,10 @@
       if (!fullscreen) root.querySelector("[data-player-native-orientation-unlock]")?.click();
       root.classList.toggle("is-fullscreen", fullscreen);
       controls.classList.toggle("is-fullscreen", fullscreen);
-      fullscreenButton?.setAttribute("aria-label", fullscreen ? "Exit fullscreen" : "Enter fullscreen");
+      fullscreenButton?.setAttribute(
+        "aria-label",
+        fullscreen ? "Exit fullscreen" : "Enter fullscreen",
+      );
       fullscreenButton?.setAttribute("title", fullscreen ? "Exit fullscreen" : "Fullscreen");
       showControls(false);
     };

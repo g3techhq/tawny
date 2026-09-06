@@ -56,10 +56,14 @@ async function expectResponsiveNavigation(page, labels) {
 
   if (viewport.width >= 768) {
     expect(tablistBox.width).toBeLessThan(100);
-    expect(Math.max(...boxes.map((box) => box.x)) - Math.min(...boxes.map((box) => box.x))).toBeLessThan(8);
+    expect(
+      Math.max(...boxes.map((box) => box.x)) - Math.min(...boxes.map((box) => box.x)),
+    ).toBeLessThan(8);
   } else {
     expect(tablistBox.width).toBeGreaterThan(viewport.width * 0.8);
-    expect(Math.max(...boxes.map((box) => box.y)) - Math.min(...boxes.map((box) => box.y))).toBeLessThan(8);
+    expect(
+      Math.max(...boxes.map((box) => box.y)) - Math.min(...boxes.map((box) => box.y)),
+    ).toBeLessThan(8);
   }
 }
 

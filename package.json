@@ -16,12 +16,16 @@
     "test:ui:mobile": "playwright test --project mobile-chromium",
     "test:ui:desktop": "playwright test --project desktop-chromium",
     "test:ui:headed": "playwright test --headed",
-    "test:ui:report": "playwright show-report"
+    "test:ui:report": "playwright show-report",
+    "format:web": "biome format --write .",
+    "format:web:check": "biome format .",
+    "lint:web": "biome lint ."
   },
   "dependencies": {
     "shaka-player": "4.16.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.12",
     "@playwright/test": "^1.56.1",
     "ws": "8.21.0"
   }

@@ -5,6 +5,8 @@ authors = ["Matthew Weisfeld <matthewedwardweisfeld@gmail.com>"]
 edition = "2024"
 rust-version = "1.89.0"
 description = "A local-first, cross-platform YouTube client built with Dioxus."
+publish = false
+repository = "https://github.com/g3techhq/tawny"
 
 [dependencies]
 dioxus = { version = "=0.7.9", features = ["router", "fullstack"] }

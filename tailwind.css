@@ -27,7 +27,8 @@ body {
 }
 
 body {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 button,
@@ -228,7 +229,10 @@ textarea {
   font: inherit;
   font-size: 0.76rem;
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
 }
 
 .group-filter.active {
@@ -428,7 +432,9 @@ textarea {
   color: #fff;
   opacity: 0;
   transform: translateY(-50%);
-  transition: opacity 140ms ease, background 140ms ease;
+  transition:
+    opacity 140ms ease,
+    background 140ms ease;
   cursor: pointer;
 }
 
@@ -460,7 +466,10 @@ textarea {
   box-shadow: 0 8px 28px transparent;
   cursor: pointer;
   outline: none;
-  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .video-card:hover,
@@ -669,7 +678,9 @@ textarea {
   background: var(--color-card);
   text-align: center;
   cursor: pointer;
-  transition: transform 180ms ease, border-color 180ms ease;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease;
 }
 
 .channel-card:hover,
@@ -1813,7 +1824,9 @@ textarea {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Follow the responsive g3_ui shell rather than the browser viewport. This
@@ -2025,7 +2038,13 @@ textarea {
   z-index: -1;
   inset: 0;
   background:
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent 28%, transparent 55%, rgba(0, 0, 0, 0.8)),
+    linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.7),
+      transparent 28%,
+      transparent 55%,
+      rgba(0, 0, 0, 0.8)
+    ),
     radial-gradient(circle at center, rgba(0, 0, 0, 0.34), transparent 48%);
 }
 
@@ -2084,7 +2103,10 @@ textarea {
   font: inherit;
   cursor: pointer;
   pointer-events: auto;
-  transition: background 120ms ease, transform 120ms ease, opacity 120ms ease;
+  transition:
+    background 120ms ease,
+    transform 120ms ease,
+    opacity 120ms ease;
 }
 
 .player-control-button:hover,
@@ -2249,8 +2271,6 @@ textarea {
      buttons below it off the video. */
   white-space: nowrap;
   text-overflow: ellipsis;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .player-chapter-label::before {
@@ -2523,7 +2543,9 @@ textarea {
 }
 
 @keyframes player-buffering-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .player-seek-feedback {
@@ -2542,17 +2564,30 @@ textarea {
   transform: translateY(-50%) scale(0.86);
 }
 
-.player-seek-feedback-left { left: 15%; }
-.player-seek-feedback-right { right: 15%; }
+.player-seek-feedback-left {
+  left: 15%;
+}
+.player-seek-feedback-right {
+  right: 15%;
+}
 
 .player-seek-feedback.show-feedback {
   animation: player-seek-pop 620ms ease;
 }
 
 @keyframes player-seek-pop {
-  0% { opacity: 0; transform: translateY(-50%) scale(0.7); }
-  25% { opacity: 1; transform: translateY(-50%) scale(1); }
-  100% { opacity: 0; transform: translateY(-50%) scale(1.06); }
+  0% {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.7);
+  }
+  25% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-50%) scale(1.06);
+  }
 }
 
 #tawny-player:fullscreen,
@@ -2845,12 +2880,16 @@ html[data-route-transition="uncover-down"]::view-transition-new(player) {
   opacity: 0;
 }
 
-html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-new(player) {
+html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-new(
+  player
+) {
   animation: route-transition-ios-slide-up-cover var(--route-transition-cover-duration)
     var(--route-transition-ios-ease) both;
 }
 
-html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-old(player) {
+html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-old(
+  player
+) {
   animation: route-transition-ios-slide-down-cover var(--route-transition-cover-duration)
     var(--route-transition-ios-ease) both;
 }
@@ -3098,7 +3137,13 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
 }
 
 .group-filter-row {
-  mask-image: linear-gradient(to right, transparent 0, #000 0.35rem, #000 calc(100% - 1.5rem), transparent 100%);
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 0.35rem,
+    #000 calc(100% - 1.5rem),
+    transparent 100%
+  );
   padding-inline: 0.35rem 1.5rem;
   margin-inline: -0.35rem;
 }
