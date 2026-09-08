@@ -4,6 +4,7 @@
 /.tawny-cache
 /.tawny-data
 /.codex
+/.cargo/config.toml
 .env
 /rustypipe_reports
 /playwright-report
