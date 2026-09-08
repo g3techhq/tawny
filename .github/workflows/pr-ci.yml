@@ -60,7 +60,7 @@ jobs:
   rust:
     name: Rust (${{ matrix.profile }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout-minutes }}
 
     strategy:
       fail-fast: false
@@ -69,15 +69,19 @@ jobs:
           - profile: default
             cargo-args: ""
             lint-and-test: true
+            timeout-minutes: 15
           - profile: server
             cargo-args: --no-default-features --features server
             lint-and-test: true
+            timeout-minutes: 90
           - profile: mobile
             cargo-args: --no-default-features --features mobile
             lint-and-test: false
+            timeout-minutes: 15
           - profile: desktop
             cargo-args: --no-default-features --features desktop
             lint-and-test: false
+            timeout-minutes: 15
 
     steps:
       - name: Check out repository
