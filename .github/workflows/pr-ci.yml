@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   quality:
-    name: Format, lint, check, and test
+    name: Formatting and web quality
     runs-on: ubuntu-latest
 
     steps:
@@ -26,7 +26,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -36,19 +36,6 @@ jobs:
 
       - name: Install Node.js dependencies
         run: npm ci
-
-      - name: Install Dioxus Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Show toolchain
         run: |
@@ -62,24 +49,69 @@ jobs:
           cargo fmt --all -- --check
           npm run format:web:check
 
-      - name: Check builds
-        run: |
-          cargo check
-          cargo check --no-default-features --features server
-          cargo check --no-default-features --features mobile
-          cargo check --no-default-features --features desktop
-
-      - name: Run linters
-        run: |
-          cargo clippy --all-targets --no-deps
-          cargo clippy --all-targets --no-default-features --features server --no-deps
-          npm run lint:web
-
-      - name: Run unit tests
+      - name: Run web checks
         run: |
           npm run test:unit
-          cargo test
-          cargo test --no-default-features --features server
+          npm run lint:web
 
       - name: Check whitespace
         run: git diff --check
+
+  rust:
+    name: Rust (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: default
+            cargo-args: ""
+            lint-and-test: true
+          - profile: server
+            cargo-args: --no-default-features --features server
+            lint-and-test: true
+          - profile: mobile
+            cargo-args: --no-default-features --features mobile
+            lint-and-test: false
+          - profile: desktop
+            cargo-args: --no-default-features --features desktop
+            lint-and-test: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          components: clippy
+
+      - name: Install Dioxus Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ${{ matrix.profile }}
+
+      - name: Check build
+        run: cargo check ${{ matrix.cargo-args }}
+
+      - name: Run Clippy
+        if: matrix.lint-and-test
+        run: cargo clippy --all-targets --no-deps ${{ matrix.cargo-args }}
+
+      - name: Run Rust tests
+        if: matrix.lint-and-test
+        run: cargo test ${{ matrix.cargo-args }}
