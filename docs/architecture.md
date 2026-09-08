@@ -35,7 +35,7 @@ Local storage is appropriate for the initial bounded feed. Before offline downlo
 
 ## Server and SurrealDB
 
-Compose points the server at a dedicated SurrealDB container backed by a named RocksDB volume. Outside Compose, an absent `SURREALDB_HOST` still opens embedded RocksDB beneath the platform data directory (overridable with `TAWNY_DATA_DIR`), and `mem://` remains available explicitly for tests or disposable sessions. The schema models:
+Compose points the server at a dedicated SurrealDB container backed by a named RocksDB volume. Tawny itself uses the configured `SURREALDB_HOST` endpoint rather than embedding a storage engine; server tests use `mem://`. The schema models:
 
 - channels and videos;
 - users and subscription relations;

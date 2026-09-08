@@ -73,7 +73,7 @@ jobs:
           - profile: server
             cargo-args: --no-default-features --features server
             lint-and-test: true
-            timeout-minutes: 90
+            timeout-minutes: 30
           - profile: mobile
             cargo-args: --no-default-features --features mobile
             lint-and-test: false

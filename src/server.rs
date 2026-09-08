@@ -525,19 +525,13 @@ impl AppServerState {
     pub async fn initialize() -> Result<Self> {
         let data_dir = default_data_dir();
         std::fs::create_dir_all(&data_dir).context("create Tawny data directory")?;
-        let endpoint = std::env::var("SURREALDB_HOST").unwrap_or_else(|_| {
-            if cfg!(test) {
-                "mem://".into()
-            } else {
-                format!(
-                    "rocksdb://{}",
-                    data_dir
-                        .join("surrealdb")
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                )
-            }
-        });
+        let endpoint = if cfg!(test) {
+            "mem://".into()
+        } else {
+            std::env::var("SURREALDB_HOST").context(
+                "SURREALDB_HOST is required; start the Compose dependencies or provide a SurrealDB endpoint",
+            )?
+        };
         let db = connect(endpoint.clone())
             .await
             .context("connect to SurrealDB")?;

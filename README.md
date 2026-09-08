@@ -50,7 +50,7 @@ That command builds and runs Tawny plus the same three dependencies. The product
 
 The pinned Shaka Player package supplies the cross-platform DASH/HLS Media Source transport. Dioxus packages its compiled browser runtime as a local app asset; playback never depends on a third-party CDN.
 
-Tawny defaults to an embedded, persistent SurrealDB RocksDB database in the platform data directory. Set `TAWNY_DATA_DIR` to override that location, `SURREALDB_HOST=mem://` for disposable development data, or the `SURREALDB_*` variables for a separate database deployment.
+Tawny's server connects to the SurrealDB endpoint in `SURREALDB_HOST`. The checked-in Compose stack supplies a persistent SurrealDB container for development and production, while server tests use an in-memory database. `TAWNY_DATA_DIR` controls Tawny's extractor cache and other app-owned server data.
 
 No Piped instance — public or self-hosted — is required or contacted. Tawny extracts public YouTube search results, channel tabs, RSS feeds, video metadata, comments, captions, and player data directly. Search coalesces concurrent requests and caches identical query/filter pairs for five minutes. Results are normalized and deduplicated in SurrealDB. Video details use a two-hour server cache with stale fallback; ephemeral stream URLs and PO tokens are never persisted.
 
