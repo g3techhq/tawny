@@ -4,8 +4,9 @@ use crate::{
     cache::use_persistent_signal,
     models::{
         AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, HistoryEntry,
-        LibrarySnapshot, LibraryUserState, Playlist, SearchResults, SubscriptionContent,
-        SubscriptionGroup, Video, VideoChapter, VideoDetails, VideoPreviewFrames,
+        LibrarySnapshot, LibraryUserState, Playlist, SearchResults, SponsorSegment,
+        SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
+        VideoPreviewFrames,
     },
     session::use_session_provider,
 };
@@ -35,6 +36,9 @@ pub struct AppState {
     pub selected_caption: Signal<Option<usize>>,
     pub captions_enabled: Signal<bool>,
     pub active_chapters: Signal<Vec<VideoChapter>>,
+    /// Fetched separately from the rest of the metadata: which categories to ask
+    /// for depends on viewer settings, so it cannot ride along with the details.
+    pub active_sponsor_segments: Signal<Vec<SponsorSegment>>,
     /// Audio languages the transport can switch between, and which one is live.
     /// Empty for the ordinary single-language upload, which is why the chip that
     /// reads these only appears when there is a choice to make.
@@ -101,6 +105,7 @@ impl AppState {
             self.selected_caption.set(None);
             self.captions_enabled.set(false);
             self.active_chapters.set(Vec::new());
+            self.active_sponsor_segments.set(Vec::new());
             self.active_preview_frames.set(None);
             self.active_audio_tracks.set(Vec::new());
             self.selected_audio_track.set(None);
@@ -129,6 +134,7 @@ impl AppState {
         self.selected_caption.set(None);
         self.captions_enabled.set(false);
         self.active_chapters.set(Vec::new());
+        self.active_sponsor_segments.set(Vec::new());
         self.active_preview_frames.set(None);
         self.active_audio_tracks.set(Vec::new());
         self.selected_audio_track.set(None);
@@ -903,6 +909,7 @@ pub fn AppStateProvider(children: Element) -> Element {
         selected_caption: Signal::new(None),
         captions_enabled: Signal::new(false),
         active_chapters: Signal::new(Vec::new()),
+        active_sponsor_segments: Signal::new(Vec::new()),
         active_audio_tracks: Signal::new(Vec::new()),
         selected_audio_track: Signal::new(None),
         active_preview_frames: Signal::new(None),

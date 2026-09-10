@@ -1,9 +1,10 @@
 use crate::{
-    api::{get_comments_page, get_video_details, resolve_playback},
+    api::{get_comments_page, get_sponsor_segments, get_video_details, resolve_playback},
     app::Route,
     models::{
-        AudioTrackOption, CaptionTrack, PlaybackProtocol, PlaybackSession, PlaybackSource, Video,
-        VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames,
+        AudioTrackOption, CaptionTrack, PlaybackProtocol, PlaybackSession, PlaybackSource,
+        SponsorAction, SponsorBlockSettings, SponsorSegment, Video, VideoChapter, VideoComment,
+        VideoDetails, VideoPreviewFrames,
     },
     state::AppState,
 };
@@ -37,6 +38,8 @@ fn sync_player_metadata(
     captions_enabled: bool,
     chapters: Vec<VideoChapter>,
     preview_frames: Option<VideoPreviewFrames>,
+    sponsor_segments: Vec<SponsorTimelineSegment>,
+    sponsor_notify: bool,
 ) {
     let Ok(tracks) = serde_json::to_string(&tracks) else {
         return;
@@ -45,6 +48,9 @@ fn sync_player_metadata(
         return;
     };
     let Ok(preview_frames) = serde_json::to_string(&preview_frames) else {
+        return;
+    };
+    let Ok(sponsor_segments) = serde_json::to_string(&sponsor_segments) else {
         return;
     };
     let Ok(server_url) = serde_json::to_string(playback_server_url()) else {
@@ -59,6 +65,8 @@ fn sync_player_metadata(
             const rawTracks = {tracks};
             const chapters = {chapters};
             const previewFrames = {preview_frames};
+            const sponsorSegments = {sponsor_segments};
+            const sponsorNotify = {sponsor_notify};
             const serverUrl = {server_url};
             let media = document.getElementById('tawny-player-media');
             for (let attempt = 0; attempt < 800 && (!media || !window.TawnyPlayerControls || !window.TawnyTransport); attempt++) {{
@@ -84,6 +92,8 @@ fn sync_player_metadata(
                     captionsEnabled: {captions_enabled},
                     chapters,
                     previewFrames,
+                    sponsorSegments,
+                    sponsorNotify,
                 }});
             }}
             dioxus.send(true);
@@ -595,16 +605,21 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let chapters_to_sync = app_state.active_chapters;
     let preview_frames_to_sync = app_state.active_preview_frames;
     let playback_attempt_to_sync = playback_attempt;
+    let sponsor_segments_to_sync = app_state.active_sponsor_segments;
+    let sponsor_settings_state = app_state;
     use_effect(move || {
         // Re-send metadata when a failed stream creates a replacement video
         // element. The chapter/controller state is attached per element.
         let _ = playback_attempt_to_sync();
+        let sponsor_settings = sponsor_settings_state.settings().sponsor_block;
         sync_player_metadata(
             captions_to_sync(),
             selected_caption_to_sync(),
             captions_enabled_to_sync(),
             chapters_to_sync(),
             preview_frames_to_sync(),
+            timeline_segments(&sponsor_segments_to_sync(), &sponsor_settings),
+            sponsor_settings.notify_on_skip,
         )
     });
     let mut captions_enabled = app_state.captions_enabled;
@@ -785,6 +800,14 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 }
                             }
                         }
+                        // Announces an automatic skip. Without it a video that
+                        // jumps forward on its own reads as a fault.
+                        div {
+                            class: "player-sponsor-notice",
+                            "data-player-sponsor-notice": "",
+                            role: "status",
+                            aria_live: "polite",
+                        }
                         div { class: "player-controls-bottom",
                             div { class: "player-control-row",
                                 span { class: "player-time",
@@ -883,11 +906,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                         strong { "data-player-preview-chapter": "" }
                                         span { "data-player-preview-time": "", "0:00" }
                                     }
-                                }
-                                div {
-                                    class: "player-chapter-markers",
-                                    "data-player-chapter-markers": "",
-                                    aria_hidden: "true",
                                 }
                                 input {
                                     r#type: "range",
@@ -1144,6 +1162,37 @@ fn VideoDetailInner(id: String) -> Element {
             if eval.recv::<bool>().await.is_ok() {
                 transition_settled.set(true);
             }
+        });
+    });
+    // SponsorBlock, fetched per video and per category set. Held behind the
+    // same gate as everything else here: segments are not needed in the first
+    // frame, and the request landing mid-morph is what starves it.
+    let mut sponsor_segments = app_state.active_sponsor_segments;
+    let sponsor_video_id = id.clone();
+    use_effect(move || {
+        if !transition_settled() {
+            return;
+        }
+        let video_id = sponsor_video_id.clone();
+        let categories = app_state
+            .settings()
+            .sponsor_block
+            .requested_categories()
+            .iter()
+            .map(|category| category.api_name())
+            .collect::<Vec<_>>()
+            .join(",");
+        spawn(async move {
+            if categories.is_empty() {
+                sponsor_segments.set(Vec::new());
+                return;
+            }
+            // A failure here is not worth a toast: SponsorBlock being
+            // unreachable means the video plays exactly as it would have.
+            let fetched = get_sponsor_segments(video_id, categories)
+                .await
+                .unwrap_or_default();
+            sponsor_segments.set(fetched);
         });
     });
     let mut comments = use_signal(Vec::<VideoComment>::new);
@@ -1673,5 +1722,102 @@ fn CommentCard(comment: VideoComment) -> Element {
                 }
             }
         }
+    }
+}
+
+/// A segment in the shape the player JS wants.
+///
+/// Deliberately not `SponsorSegment` itself: the JS needs the resolved colour,
+/// the resolved action and the message to show, none of which are properties of
+/// the segment - they come from the viewer's settings. Resolving them here
+/// keeps that decision in Rust, where the settings live, instead of shipping
+/// the settings to JS and duplicating the logic.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct SponsorTimelineSegment {
+    uuid: String,
+    start_seconds: f64,
+    end_seconds: f64,
+    color: &'static str,
+    /// `"skip"` or `"show"`. Ignored categories never reach here.
+    action: &'static str,
+    message: &'static str,
+    label: &'static str,
+}
+
+/// Resolve segments against the viewer's settings, dropping the ignored ones.
+fn timeline_segments(
+    segments: &[SponsorSegment],
+    settings: &SponsorBlockSettings,
+) -> Vec<SponsorTimelineSegment> {
+    segments
+        .iter()
+        .filter_map(|segment| {
+            let action = match settings.action_for(segment.category) {
+                SponsorAction::Off => return None,
+                SponsorAction::Skip => "skip",
+                SponsorAction::Show => "show",
+            };
+            Some(SponsorTimelineSegment {
+                uuid: segment.uuid.clone(),
+                start_seconds: segment.start_seconds,
+                end_seconds: segment.end_seconds,
+                color: segment.category.color(),
+                action,
+                message: segment.category.skip_message(),
+                label: segment.category.label(),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod timeline_tests {
+    use super::*;
+
+    fn segment(category: SponsorCategory, start: f64, end: f64) -> SponsorSegment {
+        SponsorSegment {
+            uuid: format!("{category:?}"),
+            category,
+            start_seconds: start,
+            end_seconds: end,
+            locked: false,
+            votes: 0,
+        }
+    }
+
+    #[test]
+    fn an_ignored_category_never_reaches_the_player() {
+        let mut settings = SponsorBlockSettings::default();
+        settings.set_action(SponsorCategory::Sponsor, SponsorAction::Off);
+        let resolved = timeline_segments(
+            &[
+                segment(SponsorCategory::Sponsor, 0.0, 10.0),
+                segment(SponsorCategory::Intro, 10.0, 20.0),
+            ],
+            &settings,
+        );
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].action, "show");
+    }
+
+    #[test]
+    fn the_action_the_player_gets_is_the_viewers_choice() {
+        let mut settings = SponsorBlockSettings::default();
+        settings.set_action(SponsorCategory::Intro, SponsorAction::Skip);
+        let resolved = timeline_segments(&[segment(SponsorCategory::Intro, 0.0, 5.0)], &settings);
+        assert_eq!(resolved[0].action, "skip");
+        assert_eq!(resolved[0].color, SponsorCategory::Intro.color());
+    }
+
+    #[test]
+    fn turning_sponsorblock_off_empties_the_timeline() {
+        let settings = SponsorBlockSettings {
+            enabled: false,
+            ..SponsorBlockSettings::default()
+        };
+        assert!(
+            timeline_segments(&[segment(SponsorCategory::Sponsor, 0.0, 10.0)], &settings)
+                .is_empty()
+        );
     }
 }

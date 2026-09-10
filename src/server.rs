@@ -2,8 +2,8 @@ use crate::models::{
     CaptionTrack, Channel, ChannelDetails, ChannelMediaPage, ChannelMediaTab, CommentsPage,
     FeedRefreshResult, HistoryEntry, LibrarySnapshot, LibraryUserState, PlaybackByteRange,
     PlaybackProtocol, PlaybackSession, PlaybackSource, PlaybackTrack, PlaybackTrackKind, Playlist,
-    SearchResults, SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoComment,
-    VideoDetails, VideoPreviewFrames, VideoProgress,
+    SearchResults, SponsorCategory, SponsorSegment, SubscriptionContent, SubscriptionGroup, Video,
+    VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames, VideoProgress,
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -30,6 +30,7 @@ use rustypipe::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
@@ -69,6 +70,13 @@ pub struct AppServerState {
     sync_lock: Arc<tokio::sync::Mutex<()>>,
     search_lock: Arc<tokio::sync::Mutex<()>>,
     search_cache: Arc<tokio::sync::RwLock<HashMap<(String, String), CachedSearch>>>,
+    /// Keyed by video id and the category set asked for, because those are
+    /// different answers for the same video.
+    sponsor_cache: Arc<
+        tokio::sync::RwLock<HashMap<(String, String), (std::time::Instant, Vec<SponsorSegment>)>>,
+    >,
+    /// A self-hosted SponsorBlock mirror, when one is configured.
+    sponsor_api_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -680,6 +688,11 @@ impl AppServerState {
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             search_lock: Arc::new(tokio::sync::Mutex::new(())),
             search_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            sponsor_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            sponsor_api_url: std::env::var("TAWNY_SPONSORBLOCK_URL")
+                .ok()
+                .map(|url| url.trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty()),
         };
         state.seed_demo_if_empty().await?;
         Ok(state)
@@ -5239,5 +5252,309 @@ mod bearer_tests {
         assert_eq!(bearer_token(&headers("abc123")), "");
         assert_eq!(bearer_token(&headers("Basic abc123")), "");
         assert_eq!(bearer_token(&headers("Bearer")), "");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SponsorBlock
+// ---------------------------------------------------------------------------
+
+/// How long a fetched segment list is trusted.
+///
+/// Segments change when someone submits or votes, which is slow enough that an
+/// hour is generous and short enough that a correction lands the same evening.
+const SPONSOR_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+
+/// The public instance. Self-hosters who run their own can point at it.
+const SPONSOR_API_DEFAULT: &str = "https://sponsor.ajay.app";
+
+#[derive(Debug, Deserialize)]
+struct SponsorApiVideo {
+    #[serde(rename = "videoID")]
+    video_id: String,
+    segments: Vec<SponsorApiSegment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SponsorApiSegment {
+    #[serde(rename = "UUID")]
+    uuid: String,
+    category: String,
+    /// `[start, end]` in seconds. A point segment has both the same.
+    segment: Vec<f64>,
+    #[serde(rename = "actionType", default)]
+    action_type: String,
+    #[serde(default)]
+    locked: i64,
+    #[serde(default)]
+    votes: i64,
+}
+
+impl AppServerState {
+    /// Segments for one video, from SponsorBlock.
+    ///
+    /// Fetched by the server rather than the client on purpose. The client would
+    /// otherwise talk to sponsor.ajay.app directly from every viewer's address,
+    /// which is exactly the correlation a self-hosted instance exists to avoid -
+    /// and it lets one fetch serve every account here.
+    ///
+    /// The lookup is by hash prefix, which is SponsorBlock's own privacy
+    /// mechanism: the first four hex characters of the video id's SHA-256 go in
+    /// the path, the API answers with every video sharing that prefix, and the
+    /// caller picks its own out. The server therefore never tells SponsorBlock
+    /// which video was actually watched.
+    pub async fn sponsor_segments(
+        &self,
+        video_id: &str,
+        categories: &[SponsorCategory],
+    ) -> Result<Vec<SponsorSegment>> {
+        if categories.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cache_key = (
+            video_id.to_string(),
+            sponsor_cache_discriminator(categories),
+        );
+        if let Some(cached) = self.sponsor_cache.read().await.get(&cache_key)
+            && cached.0.elapsed() < SPONSOR_CACHE_TTL
+        {
+            return Ok(cached.1.clone());
+        }
+
+        let digest = hex::encode(Sha256::digest(video_id.as_bytes()));
+        let prefix = &digest[..4];
+        let wanted = categories
+            .iter()
+            .map(|category| format!("\"{}\"", category.api_name()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let url = format!(
+            "{}/api/skipSegments/{prefix}?categories=[{wanted}]&actionTypes=[\"skip\",\"poi\"]",
+            self.sponsor_api_url()
+        );
+
+        let response = self.http.get(&url).send().await?;
+        // 404 is the ordinary answer for "nobody has submitted anything with
+        // this prefix", not a failure worth surfacing.
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            self.remember_sponsor_segments(cache_key, Vec::new()).await;
+            return Ok(Vec::new());
+        }
+        let response = response.error_for_status()?;
+        let videos: Vec<SponsorApiVideo> = response.json().await?;
+
+        let segments = videos
+            .into_iter()
+            .find(|video| video.video_id == video_id)
+            .map(|video| convert_sponsor_segments(video.segments))
+            .unwrap_or_default();
+        self.remember_sponsor_segments(cache_key, segments.clone())
+            .await;
+        Ok(segments)
+    }
+
+    fn sponsor_api_url(&self) -> &str {
+        self.sponsor_api_url
+            .as_deref()
+            .unwrap_or(SPONSOR_API_DEFAULT)
+    }
+
+    async fn remember_sponsor_segments(
+        &self,
+        key: (String, String),
+        segments: Vec<SponsorSegment>,
+    ) {
+        self.sponsor_cache
+            .write()
+            .await
+            .insert(key, (std::time::Instant::now(), segments));
+    }
+}
+
+/// Two requests for the same video with different categories are different
+/// answers, so the cache has to tell them apart.
+fn sponsor_cache_discriminator(categories: &[SponsorCategory]) -> String {
+    let mut names = categories
+        .iter()
+        .map(|category| category.api_name())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.join(",")
+}
+
+/// Turn the API's shape into Tawny's, dropping what cannot be used.
+///
+/// Overlaps are real: several people submit the same sponsor with slightly
+/// different bounds. Keeping all of them would draw a muddle on the timeline
+/// and skip the same break twice, so within a category the best-supported
+/// submission wins any overlap - locked first, then votes, which is the order
+/// SponsorBlock itself trusts them in.
+fn convert_sponsor_segments(raw: Vec<SponsorApiSegment>) -> Vec<SponsorSegment> {
+    let mut segments = raw
+        .into_iter()
+        .filter_map(|item| {
+            let category = SponsorCategory::from_api_name(&item.category)?;
+            let start = *item.segment.first()?;
+            let end = *item.segment.get(1)?;
+            if !start.is_finite() || !end.is_finite() || end < start {
+                return None;
+            }
+            // A poi is a point; anything else with no length would be an
+            // invisible segment that still triggers a skip.
+            let is_point = item.action_type == "poi" || category.is_point();
+            if !is_point && end <= start {
+                return None;
+            }
+            Some(SponsorSegment {
+                uuid: item.uuid,
+                category,
+                start_seconds: start.max(0.0),
+                end_seconds: end.max(0.0),
+                locked: item.locked > 0,
+                votes: item.votes,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Best first, so the retain below keeps the winner of each overlap.
+    segments.sort_by(|a, b| {
+        b.locked
+            .cmp(&a.locked)
+            .then(b.votes.cmp(&a.votes))
+            .then(a.start_seconds.total_cmp(&b.start_seconds))
+    });
+
+    let mut kept: Vec<SponsorSegment> = Vec::new();
+    for segment in segments {
+        let overlaps = kept.iter().any(|existing| {
+            existing.category == segment.category
+                && segment.start_seconds < existing.end_seconds
+                && existing.start_seconds < segment.end_seconds
+        });
+        if !overlaps {
+            kept.push(segment);
+        }
+    }
+
+    kept.sort_by(|a, b| a.start_seconds.total_cmp(&b.start_seconds));
+    kept
+}
+
+#[cfg(test)]
+mod sponsor_server_tests {
+    use super::{SponsorApiSegment, convert_sponsor_segments, sponsor_cache_discriminator};
+    use crate::models::SponsorCategory;
+
+    fn raw(category: &str, start: f64, end: f64, locked: i64, votes: i64) -> SponsorApiSegment {
+        SponsorApiSegment {
+            uuid: format!("{category}-{start}-{end}"),
+            category: category.into(),
+            segment: vec![start, end],
+            action_type: "skip".into(),
+            locked,
+            votes,
+        }
+    }
+
+    /// The exact shape sponsor.ajay.app returns, checked against a live
+    /// response: `locked` and `votes` are integers, not booleans.
+    #[test]
+    fn the_api_payload_deserializes() {
+        let payload = r#"{
+            "category": "intro",
+            "actionType": "skip",
+            "segment": [0, 14.827],
+            "UUID": "5d683910",
+            "videoDuration": 3238.835,
+            "locked": 0,
+            "votes": 3,
+            "description": ""
+        }"#;
+        let parsed: SponsorApiSegment = serde_json::from_str(payload).expect("parse");
+        assert_eq!(parsed.uuid, "5d683910");
+        assert_eq!(parsed.segment, vec![0.0, 14.827]);
+        assert_eq!(parsed.votes, 3);
+    }
+
+    #[test]
+    fn segments_come_back_in_playback_order() {
+        let converted = convert_sponsor_segments(vec![
+            raw("outro", 500.0, 540.0, 0, 0),
+            raw("sponsor", 30.0, 60.0, 0, 0),
+            raw("intro", 0.0, 10.0, 0, 0),
+        ]);
+        let starts = converted
+            .iter()
+            .map(|segment| segment.start_seconds)
+            .collect::<Vec<_>>();
+        assert_eq!(starts, vec![0.0, 30.0, 500.0]);
+    }
+
+    #[test]
+    fn a_locked_submission_wins_an_overlap() {
+        // Two people submitted the same sponsor break. Drawing both would
+        // muddle the timeline and skip it twice.
+        let converted = convert_sponsor_segments(vec![
+            raw("sponsor", 30.0, 60.0, 0, 40),
+            raw("sponsor", 28.0, 62.0, 1, 2),
+        ]);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].start_seconds, 28.0);
+        assert!(converted[0].locked);
+    }
+
+    #[test]
+    fn votes_break_a_tie_when_neither_is_locked() {
+        let converted = convert_sponsor_segments(vec![
+            raw("sponsor", 30.0, 60.0, 0, 2),
+            raw("sponsor", 31.0, 59.0, 0, 99),
+        ]);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].start_seconds, 31.0);
+    }
+
+    #[test]
+    fn overlapping_segments_of_different_categories_both_survive() {
+        // An intro that overlaps a sponsor is two separate things to show.
+        let converted = convert_sponsor_segments(vec![
+            raw("sponsor", 0.0, 30.0, 0, 0),
+            raw("intro", 0.0, 10.0, 0, 0),
+        ]);
+        assert_eq!(converted.len(), 2);
+    }
+
+    #[test]
+    fn unusable_segments_are_dropped_rather_than_skipped_over() {
+        let converted = convert_sponsor_segments(vec![
+            // Unknown category from a newer API.
+            raw("chapter", 0.0, 10.0, 0, 0),
+            // Backwards.
+            raw("sponsor", 60.0, 30.0, 0, 0),
+            // Zero length, which would be an invisible segment that still fires.
+            raw("outro", 45.0, 45.0, 0, 0),
+        ]);
+        assert!(converted.is_empty());
+    }
+
+    #[test]
+    fn a_point_segment_survives_having_no_length() {
+        let mut point = raw("poi_highlight", 90.0, 90.0, 0, 0);
+        point.action_type = "poi".into();
+        let converted = convert_sponsor_segments(vec![point]);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].category, SponsorCategory::Highlight);
+    }
+
+    #[test]
+    fn the_cache_key_ignores_the_order_categories_were_asked_in() {
+        let one = sponsor_cache_discriminator(&[SponsorCategory::Sponsor, SponsorCategory::Intro]);
+        let other =
+            sponsor_cache_discriminator(&[SponsorCategory::Intro, SponsorCategory::Sponsor]);
+        assert_eq!(one, other);
+        // ...but not which categories they were.
+        assert_ne!(
+            one,
+            sponsor_cache_discriminator(&[SponsorCategory::Sponsor])
+        );
     }
 }

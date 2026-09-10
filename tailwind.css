@@ -1367,6 +1367,16 @@ textarea {
   line-height: 1.45;
 }
 
+/* The same colour the segment gets on the timeline, so the settings list and
+   the bar can be read against each other. */
+.sponsor-category-swatch {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 0.25rem;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
 .feed-filter-note {
   margin: 0 0 0.75rem;
   padding: 0 0.15rem;
@@ -2481,6 +2491,12 @@ textarea {
 .player-progress {
   --player-progress: 0%;
   --player-buffered: 0%;
+  --player-track-fallback: linear-gradient(
+    to right,
+    var(--color-focused) 0 var(--player-progress),
+    rgba(255, 255, 255, 0.5) var(--player-progress) var(--player-buffered),
+    rgba(255, 255, 255, 0.25) var(--player-buffered) 100%
+  );
   width: 100%;
   height: 1.35rem;
   margin: -0.1rem 0 0;
@@ -2497,25 +2513,27 @@ textarea {
   inset: 0;
 }
 
-.player-chapter-markers {
+/* Says what just got skipped. Sits above the control row rather than over the
+   picture, so it never lands on a face. */
+.player-sponsor-notice {
+  /* Positioned against the full-bleed controls layer, so this is measured from
+     the bottom of the video and has to clear the control row rather than sit
+     above the notice element itself. */
   position: absolute;
-  z-index: 3;
-  top: calc(50% - 1.5px);
-  right: 0;
-  left: 0;
-  height: 3px;
+  bottom: 4.6rem;
+  left: 0.9rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  opacity: 0;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 0.74rem;
   pointer-events: none;
+  transition: opacity 180ms ease;
 }
 
-/* A gap punched through the bar, not a tick drawn on top of it. It is opaque
-   and wider than the old notch so the timeline reads as one segment per
-   chapter, and it clears the fill as well as the track. */
-.player-chapter-marker {
-  position: absolute;
-  width: 4px;
-  height: 100%;
-  background: #05080c;
-  transform: translateX(-2px);
+.player-sponsor-notice.is-visible {
+  opacity: 1;
 }
 
 .player-chapter-label {
@@ -2676,12 +2694,13 @@ textarea {
 .player-progress::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 4px;
-  background: linear-gradient(
-    to right,
-    var(--color-focused) 0 var(--player-progress),
-    rgba(255, 255, 255, 0.5) var(--player-progress) var(--player-buffered),
-    rgba(255, 255, 255, 0.25) var(--player-buffered) 100%
-  );
+  background: var(--player-track-image, var(--player-track-fallback));
+}
+
+.player-progress::-moz-range-track {
+  height: 3px;
+  border-radius: 4px;
+  background: var(--player-track-image, var(--player-track-fallback));
 }
 
 .player-progress::-webkit-slider-thumb {
@@ -2695,16 +2714,8 @@ textarea {
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.6);
 }
 
-.player-progress::-moz-range-track {
-  height: 3px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.25);
-}
-
 .player-progress::-moz-range-progress {
-  height: 3px;
-  border-radius: 4px;
-  background: var(--color-focused);
+  background: transparent;
 }
 
 .player-progress::-moz-range-thumb {

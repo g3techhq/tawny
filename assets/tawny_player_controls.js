@@ -84,7 +84,8 @@
     const abort = new AbortController();
     const signal = abort.signal;
     const progress = controls.querySelector("[data-player-progress]");
-    const chapterMarkers = controls.querySelector("[data-player-chapter-markers]");
+    const sponsorNotice = controls.querySelector("[data-player-sponsor-notice]");
+    let sponsorNoticeTimer = null;
     const chapterLabel = controls.querySelector("[data-player-chapter-label]");
     const seekPreview = controls.querySelector("[data-player-seek-preview]");
     const previewImage = controls.querySelector("[data-player-preview-image]");
@@ -112,6 +113,12 @@
     let selectedCaption = null;
     let captionsEnabled = false;
     let chapters = [];
+    let sponsorSegments = [];
+    let sponsorNotify = true;
+    // Segments already acted on, by UUID. Without this, seeking back into a
+    // skipped sponsor would bounce the playhead straight out again and there
+    // would be no way to watch one deliberately.
+    const sponsorHandled = new Set();
     let previewFrames = null;
     let playbackIntent = !video.paused && !video.ended;
     let playbackRecoveryTimer = null;
@@ -210,9 +217,7 @@
       // The markers are appended imperatively into an element the framework
       // owns, so any re-render of that subtree silently drops them. Rebuilding
       // when they have gone missing is what keeps them on screen.
-      if (chapterMarkers && chapters.length > 1 && length > 0 && !chapterMarkers.firstChild) {
-        renderChapters();
-      }
+      applySponsorSegments();
       if (duration) duration.textContent = formatTime(length);
       if (!progress || scrubbing) return;
       const played = length > 0 ? Math.min(100, (position / length) * 100) : 0;
@@ -221,6 +226,7 @@
       progress.style.setProperty("--player-progress", `${played}%`);
       progress.style.setProperty("--player-buffered", `${Math.max(played, buffered)}%`);
       progress.setAttribute("aria-valuetext", `${formatTime(position)} of ${formatTime(length)}`);
+      renderTimeline();
     }
 
     function effectivePlaybackRate() {
@@ -281,18 +287,141 @@
       return active;
     }
 
-    function renderChapters() {
-      if (!chapterMarkers) return;
-      chapterMarkers.replaceChildren();
+    /// Width of the gaps punched through the bar, in pixels.
+    const TIMELINE_GAP_PX = 3;
+
+    /**
+     * Paint the whole timeline as one gradient on the range track.
+     *
+     * Everything - played, buffered, sponsor colours, and the gaps at chapter
+     * and segment boundaries - is a single `linear-gradient`, rather than
+     * elements layered over the input. Layering was the obvious approach and it
+     * cannot work: the range thumb lives inside the input, so any overlay drawn
+     * above the track to colour a segment also covers the thumb.
+     *
+     * The gaps are `transparent`, not a background-coloured tick, so what shows
+     * through is genuinely whatever is behind the bar.
+     */
+    function renderTimeline() {
+      if (!progress) return;
       const length = Number.isFinite(video.duration) ? video.duration : 0;
-      if (length <= 0 || chapters.length < 2) return;
-      for (const chapter of chapters.slice(1)) {
-        const marker = document.createElement("span");
-        marker.className = "player-chapter-marker";
-        marker.style.left = `${Math.min(100, (Number(chapter.start_seconds) / length) * 100)}%`;
-        marker.title = chapter.title || formatTime(Number(chapter.start_seconds));
-        chapterMarkers.appendChild(marker);
+      if (length <= 0) {
+        progress.style.removeProperty("--player-track-image");
+        return;
       }
+
+      const width = progress.getBoundingClientRect().width || 0;
+      // Below a pixel or two the gaps would be wider than the segments between
+      // them, which reads as a dashed line rather than a divided one.
+      const gap = width > 0 ? Math.min(1.5, (TIMELINE_GAP_PX / width) * 100) : 0;
+      const played = clampPercent((currentPosition() / length) * 100);
+      const buffered = Math.max(played, clampPercent((bufferedEnd() / length) * 100));
+
+      // Spans are applied in order, each overriding what came before, so the
+      // list reads as layers: base, buffered, played, segment colours, gaps.
+      const spans = [
+        [0, 100, "rgba(255, 255, 255, 0.25)"],
+        [0, buffered, "rgba(255, 255, 255, 0.5)"],
+        [0, played, "var(--color-focused)"],
+      ];
+
+      for (const segment of sponsorSegments) {
+        const start = clampPercent((Number(segment.start_seconds) / length) * 100);
+        const end = clampPercent((Number(segment.end_seconds) / length) * 100);
+        const color = segment.color || "#00d400";
+        // A point segment has no width of its own; give it one so it is
+        // visible at all.
+        const width_ = Math.max(end - start, gap * 2);
+        spans.push([start, Math.min(100, start + width_), color]);
+      }
+
+      // Gaps last: they cut through the colours above, including a segment's.
+      if (gap > 0) {
+        for (const chapter of chapters.slice(1)) {
+          const at = clampPercent((Number(chapter.start_seconds) / length) * 100);
+          spans.push([at - gap / 2, at + gap / 2, "transparent"]);
+        }
+        for (const segment of sponsorSegments) {
+          const start = clampPercent((Number(segment.start_seconds) / length) * 100);
+          const end = clampPercent((Number(segment.end_seconds) / length) * 100);
+          spans.push([start - gap / 2, start + gap / 2, "transparent"]);
+          spans.push([end - gap / 2, end + gap / 2, "transparent"]);
+        }
+      }
+
+      progress.style.setProperty("--player-track-image", gradientFrom(spans));
+    }
+
+    function clampPercent(value) {
+      if (!Number.isFinite(value)) return 0;
+      return Math.min(100, Math.max(0, value));
+    }
+
+    function currentPosition() {
+      return Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    }
+
+    /**
+     * Flatten overlapping spans into a hard-stop gradient.
+     *
+     * Every span boundary becomes a breakpoint; each resulting slice takes the
+     * colour of the last span covering it. Emitting the spans directly would
+     * not work - a gradient has no notion of one stop painting over another.
+     */
+    function gradientFrom(spans) {
+      const edges = new Set([0, 100]);
+      for (const [start, end] of spans) {
+        edges.add(clampPercent(start));
+        edges.add(clampPercent(end));
+      }
+      const points = [...edges].sort((a, b) => a - b);
+
+      const stops = [];
+      for (let index = 0; index < points.length - 1; index++) {
+        const from = points[index];
+        const to = points[index + 1];
+        if (to - from <= 0) continue;
+        const middle = (from + to) / 2;
+        let color = "transparent";
+        for (const [start, end, value] of spans) {
+          if (middle >= start && middle < end) color = value;
+        }
+        stops.push(`${color} ${from.toFixed(3)}% ${to.toFixed(3)}%`);
+      }
+      return `linear-gradient(to right, ${stops.join(", ")})`;
+    }
+
+    /**
+     * Act on any segment the playhead has entered.
+     *
+     * Only `skip` segments move the playhead, and only once each: a viewer who
+     * seeks back into one is doing it on purpose.
+     */
+    function applySponsorSegments() {
+      if (!sponsorSegments.length || scrubbing) return;
+      const position = currentPosition();
+      for (const segment of sponsorSegments) {
+        if (segment.action !== "skip" || sponsorHandled.has(segment.uuid)) continue;
+        const start = Number(segment.start_seconds);
+        const end = Number(segment.end_seconds);
+        if (!(position >= start && position < end)) continue;
+        sponsorHandled.add(segment.uuid);
+        // Never past the end: a segment that runs to the last frame would
+        // otherwise end the video rather than skip within it.
+        const target = Math.min(end, (video.duration || end) - 0.05);
+        if (target > position) video.currentTime = target;
+        if (sponsorNotify && segment.message) announce(segment.message);
+        break;
+      }
+    }
+
+    /** A brief line under the controls, so a jump does not look like a fault. */
+    function announce(message) {
+      if (!sponsorNotice) return;
+      sponsorNotice.textContent = message;
+      sponsorNotice.classList.add("is-visible");
+      if (sponsorNoticeTimer) clearTimeout(sponsorNoticeTimer);
+      sponsorNoticeTimer = setTimeout(() => sponsorNotice.classList.remove("is-visible"), 2600);
     }
 
     function previewFrame(position) {
@@ -356,10 +485,21 @@
         .slice()
         .sort((left, right) => Number(left.start_seconds) - Number(right.start_seconds));
       previewFrames = next.previewFrames || null;
+      const nextSegments = (next.sponsorSegments || [])
+        .slice()
+        .sort((left, right) => Number(left.start_seconds) - Number(right.start_seconds));
+      // A different set of segments is a different video, or the viewer changing
+      // what they want skipped; either way the "already skipped" memory is stale.
+      const changed =
+        nextSegments.length !== sponsorSegments.length ||
+        nextSegments.some((segment, index) => segment.uuid !== sponsorSegments[index]?.uuid);
+      if (changed) sponsorHandled.clear();
+      sponsorSegments = nextSegments;
+      sponsorNotify = next.sponsorNotify !== false;
       applyCaptionState();
       requestAnimationFrame(applyCaptionState);
       setTimeout(applyCaptionState, 100);
-      renderChapters();
+      renderTimeline();
     }
 
     function showSeekFeedback(direction) {
@@ -807,7 +947,8 @@
       recoverIntendedPlayback(0);
     });
     listen(video, "durationchange", updateTimeline);
-    listen(video, "durationchange", renderChapters);
+    listen(video, "durationchange", renderTimeline);
+    listen(window, "resize", renderTimeline);
     listen(video, "progress", updateTimeline);
     listen(video, "ratechange", updateSpeed);
     listen(video, "volumechange", updateMuted);

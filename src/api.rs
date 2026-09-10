@@ -1,7 +1,7 @@
 use crate::models::{
     Account, AuthSession, ChannelDetails, ChannelMediaPage, CommentsPage, Credentials,
     FeedRefreshResult, LibrarySnapshot, LibraryUserState, PlaybackSession, SearchResults,
-    VideoDetails,
+    SponsorSegment, VideoDetails,
 };
 use dioxus::prelude::*;
 
@@ -266,6 +266,33 @@ pub async fn current_account() -> Result<Account> {
     Ok(state
         .accounts()
         .authenticate(&token)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?)
+}
+
+/// SponsorBlock segments for one video.
+///
+/// The categories come from the client because they are the viewer's settings,
+/// and asking for the ones they ignore would fetch data only to discard it.
+/// Authenticated like the rest of the library surface: this instance is not an
+/// open SponsorBlock proxy.
+#[get(
+    "/api/v1/videos/{video_id}/sponsor?categories",
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    headers: dioxus::fullstack::HeaderMap
+)]
+pub async fn get_sponsor_segments(
+    video_id: String,
+    categories: String,
+) -> Result<Vec<SponsorSegment>> {
+    owner_of(&state, &headers).await?;
+    let categories = categories
+        .split(',')
+        .filter(|name| !name.is_empty())
+        .filter_map(crate::models::SponsorCategory::from_api_name)
+        .collect::<Vec<_>>();
+    Ok(state
+        .sponsor_segments(&video_id, &categories)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }

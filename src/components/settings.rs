@@ -1,6 +1,6 @@
 use crate::{
     app::Route,
-    models::{Appearance, PlatformStyle, SwipeActionKind},
+    models::{Appearance, PlatformStyle, SponsorAction, SponsorCategory, SwipeActionKind},
     state::AppState,
     subscriptions_io::{SubscriptionFormat, export_subscriptions, parse_subscription_export},
 };
@@ -139,6 +139,10 @@ pub fn SettingsPage() -> Element {
                             section { class: "settings-section",
                                 span { class: "section-kicker", "SERVER" }
                                 BackendSettings {}
+                            }
+                            section { class: "settings-section",
+                                span { class: "section-kicker", "SPONSORBLOCK" }
+                                SponsorBlockSettingsCard {}
                             }
                             section { class: "settings-section",
                                 span { class: "section-kicker", "GESTURES" }
@@ -475,6 +479,95 @@ pub fn SettingsPage() -> Element {
                                 }
                             }
                         }
+                }
+            }
+        }
+    }
+}
+
+/// Per-category SponsorBlock behaviour.
+///
+/// One row per category rather than a single on/off, because the categories are
+/// not equivalent: a sponsor read is never wanted, while an intro often is the
+/// video. The defaults mirror the browser extension, so someone who already
+/// uses it finds Tawny behaving the way they expect.
+#[component]
+fn SponsorBlockSettingsCard() -> Element {
+    let mut app_state = use_context::<AppState>();
+    let settings = app_state.settings();
+    let sponsor = settings.sponsor_block.clone();
+    let enabled_value = sponsor.enabled;
+    let enabled = use_signal(|| enabled_value);
+    let notify = use_signal(|| sponsor.notify_on_skip);
+
+    let action_options = SponsorAction::ALL
+        .iter()
+        .map(|action| SelectOption::from(action.label().to_string()))
+        .collect::<Vec<_>>();
+
+    rsx! {
+        Card { title: "SponsorBlock".to_string(),
+            List { inset: true,
+                Item {
+                    start: rsx! { ShieldCheck { size: 19 } },
+                    label: "Use SponsorBlock".to_string(),
+                    description: "Community-marked segments, fetched by your server".to_string(),
+                    end: rsx! {
+                        Toggle {
+                            checked: enabled,
+                            onchange: move |value| app_state.settings.write().sponsor_block.enabled = value,
+                        }
+                    },
+                }
+                if enabled_value {
+                    Item {
+                        label: "Announce skips".to_string(),
+                        description: "A video that jumps on its own otherwise looks broken".to_string(),
+                        end: rsx! {
+                            Toggle {
+                                checked: notify,
+                                onchange: move |value| {
+                                    app_state.settings.write().sponsor_block.notify_on_skip = value
+                                },
+                            }
+                        },
+                    }
+                    for category in SponsorCategory::ALL {
+                        {
+                            let options = action_options.clone();
+                            let value = use_signal(|| sponsor.action_for(category).label().to_string());
+                            rsx! {
+                                Item {
+                                    key: "{category.api_name()}",
+                                    // The swatch is the same colour the segment
+                                    // gets on the timeline, so the settings and
+                                    // the bar can be read against each other.
+                                    start: rsx! {
+                                        span {
+                                            class: "sponsor-category-swatch",
+                                            style: "background: {category.color()};",
+                                            aria_hidden: "true",
+                                        }
+                                    },
+                                    label: category.label().to_string(),
+                                    end: rsx! {
+                                        Select {
+                                            value,
+                                            options,
+                                            onchange: move |label: String| {
+                                                let action = SponsorAction::from_label(&label);
+                                                app_state
+                                                    .settings
+                                                    .write()
+                                                    .sponsor_block
+                                                    .set_action(category, action);
+                                            },
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
