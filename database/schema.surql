@@ -81,3 +81,96 @@ DEFINE FIELD IF NOT EXISTS updated_at ON library_state TYPE datetime DEFAULT tim
 -- a value this matches nothing.
 UPDATE channel SET subscription_content = "all" WHERE subscription_content = NONE;
 UPDATE video SET audio_only = false WHERE audio_only = NONE;
+
+-- --------------------------------------------------------------------------
+-- Accounts
+--
+-- A viewer is always signed in as *someone*: first launch mints a guest, and
+-- signing up promotes that same record in place so nothing has to be migrated
+-- between rows. `email` and `password_hash` stay NONE until then, which is what
+-- distinguishes a guest - `is_guest` is the readable form of the same fact.
+--
+-- Signing in to a *different* account abandons the guest row rather than
+-- merging it. Merging two libraries has no correct answer, and offering it
+-- would mean asking the viewer to resolve conflicts on their first screen.
+-- --------------------------------------------------------------------------
+DEFINE FIELD IF NOT EXISTS email ON app_user TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS password_hash ON app_user TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS is_guest ON app_user TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS updated_at ON app_user TYPE datetime DEFAULT time::now();
+-- Guests all carry a NONE email and must not collide over it. Verified against
+-- the engine rather than assumed: SurrealDB does not index a NONE, so a plain
+-- UNIQUE admits any number of guests and still rejects a duplicate address.
+-- (It has no filtered indexes at all - `UNIQUE WHERE` is a parse error.)
+DEFINE INDEX IF NOT EXISTS app_user_email_idx ON app_user FIELDS email UNIQUE;
+
+-- Only the hash is stored. A stolen database then yields no usable bearer
+-- token, the same reason the password beside it is hashed.
+DEFINE TABLE IF NOT EXISTS user_session TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD IF NOT EXISTS token_hash ON user_session TYPE string;
+DEFINE FIELD IF NOT EXISTS user ON user_session TYPE record<app_user>;
+DEFINE FIELD IF NOT EXISTS created_at ON user_session TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS last_seen_at ON user_session TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS expires_at ON user_session TYPE datetime;
+DEFINE INDEX IF NOT EXISTS user_session_token_idx ON user_session FIELDS token_hash UNIQUE;
+DEFINE INDEX IF NOT EXISTS user_session_user_idx ON user_session FIELDS user;
+
+-- --------------------------------------------------------------------------
+-- Per-user library state
+--
+-- `channel` and `video` stay shared. They are YouTube's facts, not the
+-- viewer's: two accounts on one server should not fetch and store the same
+-- upload twice. Everything that is genuinely a *choice* - what you follow, what
+-- you saved, where you stopped watching - hangs off the account instead.
+-- --------------------------------------------------------------------------
+-- Who follows what. Presence of a row is not enough on its own: an explicit
+-- `subscribed` flag lets an unsubscribe be recorded and synced rather than
+-- inferred from a missing row, which is what the client already sends.
+--
+-- `channel.subscribed` survives beside this as a derived flag meaning "someone
+-- on this instance follows it". That is precisely the question the poller and
+-- the WebSub renewals ask, so they keep working untouched - and it must be
+-- recomputed from this table whenever a subscription changes, never written
+-- directly. See `refresh_channel_interest`.
+DEFINE TABLE IF NOT EXISTS user_subscription TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD IF NOT EXISTS owner ON user_subscription TYPE record<app_user>;
+DEFINE FIELD IF NOT EXISTS channel_id ON user_subscription TYPE string;
+DEFINE FIELD IF NOT EXISTS subscribed ON user_subscription TYPE bool DEFAULT true;
+DEFINE FIELD IF NOT EXISTS content ON user_subscription TYPE string DEFAULT "all";
+DEFINE FIELD IF NOT EXISTS updated_at ON user_subscription TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS user_subscription_owner_channel_idx ON user_subscription
+  FIELDS owner, channel_id UNIQUE;
+DEFINE INDEX IF NOT EXISTS user_subscription_channel_idx ON user_subscription FIELDS channel_id;
+
+DEFINE FIELD IF NOT EXISTS owner ON subscription_group TYPE option<record<app_user>>;
+
+-- Playlist and group ids are chosen by the client and some are fixed - every
+-- library starts with a "watch-later". Two accounts must be able to hold the
+-- same id, so uniqueness is per owner, not global. REMOVE first because
+-- DEFINE INDEX IF NOT EXISTS will not narrow an index that already exists.
+REMOVE INDEX IF EXISTS playlist_external_id_idx ON playlist;
+DEFINE INDEX IF NOT EXISTS playlist_owner_external_id_idx ON playlist
+  FIELDS owner, playlist_id UNIQUE;
+REMOVE INDEX IF EXISTS subscription_group_external_id_idx ON subscription_group;
+DEFINE INDEX IF NOT EXISTS subscription_group_owner_external_id_idx ON subscription_group
+  FIELDS owner, group_id UNIQUE;
+
+DEFINE TABLE IF NOT EXISTS video_progress TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD IF NOT EXISTS owner ON video_progress TYPE record<app_user>;
+DEFINE FIELD IF NOT EXISTS video_id ON video_progress TYPE string;
+DEFINE FIELD IF NOT EXISTS watched ON video_progress TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS progress_seconds ON video_progress TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS audio_only ON video_progress TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS updated_at ON video_progress TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS video_progress_owner_video_idx ON video_progress
+  FIELDS owner, video_id UNIQUE;
+
+DEFINE FIELD IF NOT EXISTS owner ON library_state TYPE option<record<app_user>>;
+-- Same NONE handling as the email index above: the pre-accounts singleton row
+-- carries no owner and does not collide with the per-user rows beside it.
+DEFINE INDEX IF NOT EXISTS library_state_owner_idx ON library_state FIELDS owner UNIQUE;
+
+-- Backfill for accounts stored before the columns above existed, matching the
+-- channel/video backfills near the top. A row that predates accounts was never
+-- registered, so it is a guest by definition.
+UPDATE app_user SET is_guest = (email = NONE) WHERE is_guest = NONE;

@@ -36,14 +36,25 @@ hex = { version = "0.4.3", optional = true }
 base64 = { version = "0.22.1", optional = true }
 futures-util = { version = "0.3.31", optional = true }
 rand = { version = "0.9.2", optional = true }
+# Passwords are hashed with Argon2id. Session tokens are 256 bits straight
+# from `rand` and only need a fast digest at rest, which is what sha2 is for.
+argon2 = { version = "0.5", optional = true }
+sha2 = { version = "0.10", optional = true }
 time = { version = "0.3.55", features = ["parsing"] }
 web-time = "1.1.0"
 
+# The backend URL has to be known before `dioxus::launch`, because
+# `set_server_url` writes a `OnceLock` and a second call is silently ignored.
+# That rules out the localStorage helper in `cache`, which needs a running app
+# to eval, so each client platform reads its own store directly instead.
+web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
+dirs = { version = "6", optional = true }
+
 [features]
 default = ["web"]
-web = ["dioxus/web"]
-desktop = ["dioxus/desktop"]
-mobile = ["dioxus/mobile", "tokio"]
+web = ["dioxus/web", "dep:web-sys"]
+desktop = ["dioxus/desktop", "dep:dirs"]
+mobile = ["dioxus/mobile", "tokio", "dep:dirs"]
 server = [
     "dioxus/server",
     "tokio",
@@ -60,6 +71,8 @@ server = [
     "base64",
     "futures-util",
     "rand",
+    "argon2",
+    "sha2",
 ]
 
 [profile.wasm-dev]

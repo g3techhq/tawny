@@ -74,8 +74,22 @@ pub fn Feed() -> Element {
         FeedFilter::Shorts => videos.retain(|video| video.is_short && !video.is_live),
         FeedFilter::Live => videos.retain(|video| video.is_live),
     }
+    // A duration chip can only speak for videos whose length is known, and the
+    // subscription feed is built from YouTube's RSS, which does not carry one -
+    // `feed_entry_video` stores 0 because there is nothing to store. Measured
+    // here: 57 of 11,762 rows had a duration, so a chip silently discarded 99.5%
+    // of the library and left too little behind to page, which is why the Load
+    // more button looked broken rather than the filter.
+    //
+    // The filter itself is right to exclude them - an unknown length is not
+    // long. What was missing is saying so.
+    let mut without_duration = 0usize;
     if let Some(duration) = selected_duration() {
         let settings = app_state.settings();
+        without_duration = videos
+            .iter()
+            .filter(|video| !video.is_live && video.duration_seconds == 0)
+            .count();
         videos.retain(|video| duration.matches(video, &settings));
     }
     if app_state.settings().hide_watched {
@@ -178,6 +192,14 @@ pub fn Feed() -> Element {
                     "Ungrouped"
                 }
             }
+
+                if without_duration > 0 {
+                    p { class: "feed-filter-note",
+                        "{without_duration} more "
+                        if without_duration == 1 { "video has" } else { "videos have" }
+                        " no length yet, so they cannot be sorted by duration. Opening one records it."
+                    }
+                }
 
                 VideoGrid {
                     videos,

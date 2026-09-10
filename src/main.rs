@@ -1,23 +1,18 @@
 mod api;
 mod app;
+#[cfg(feature = "server")]
+mod auth;
 mod cache;
 mod components;
+mod config;
 mod models;
 #[cfg(feature = "server")]
 mod server;
+mod session;
 mod state;
 mod subscriptions_io;
 
 use app::App;
-
-#[cfg(not(feature = "server"))]
-const SERVER_URL: Option<&str> = option_env!("SERVER_URL");
-
-#[cfg(all(not(feature = "server"), target_os = "android"))]
-const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:8080";
-
-#[cfg(all(not(feature = "server"), not(target_os = "android")))]
-const DEFAULT_SERVER_URL: &str = "http://localhost:8080";
 
 #[cfg(feature = "server")]
 fn main() {
@@ -60,6 +55,10 @@ fn main() {
 #[cfg(not(feature = "server"))]
 fn main() {
     g3_ui::init_auto_mode();
-    dioxus::fullstack::set_server_url(SERVER_URL.unwrap_or(DEFAULT_SERVER_URL));
+    // Before `launch`, not after: `set_server_url` keeps only its first value,
+    // and the stored session token has to be on the very first request the app
+    // makes. See `config` for why neither can come from the usual persistence
+    // helper.
+    config::install();
     dioxus::launch(App);
 }

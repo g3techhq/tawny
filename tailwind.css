@@ -1323,6 +1323,58 @@ textarea {
   white-space: nowrap;
 }
 
+/* Sits between the chip row and the grid, and only while a duration chip is
+   active. Without it a chip that legitimately matches 20 of 11,762 videos reads
+   as a broken filter with a missing Load more button. */
+.account-setup {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.account-setup h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.account-setup-lead,
+.account-setup-note {
+  margin: 0 0 1rem;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.account-setup-note {
+  margin: 0.85rem 0 0;
+  font-size: 0.74rem;
+}
+
+/* A guest has no way back into this library, and a sign-in abandons it. Both
+   are worth saying in a colour that is not the body text. */
+.account-warning {
+  margin: 0.6rem 0;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.account-error {
+  margin: 0.5rem 0;
+  color: var(--color-danger, #f87171);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.feed-filter-note {
+  margin: 0 0 0.75rem;
+  padding: 0 0.15rem;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .persistent-player {
   background: #000;
   color: #fff;

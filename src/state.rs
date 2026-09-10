@@ -7,6 +7,7 @@ use crate::{
         LibrarySnapshot, LibraryUserState, Playlist, SearchResults, SubscriptionContent,
         SubscriptionGroup, Video, VideoChapter, VideoDetails, VideoPreviewFrames,
     },
+    session::use_session_provider,
 };
 use dioxus::prelude::*;
 use g3_ui::StatusColor;
@@ -853,13 +854,18 @@ fn keep_referenced_videos(
 
 #[component]
 pub fn AppStateProvider(children: Element) -> Element {
+    // Before the library, deliberately. Every library endpoint is scoped to an
+    // account now and refuses an unauthenticated caller, so a sync that starts
+    // first gets a 500 and the app silently keeps its cached copy.
+    let session = use_session_provider();
     let mut library = use_persistent_signal("tawny-library-v1", LibrarySnapshot::demo);
     let settings = use_persistent_signal("tawny-settings-v1", AppSettings::default);
     let mut initial_sync_started = use_signal(|| false);
     let mut initial_syncing = use_signal(|| false);
 
     use_effect(move || {
-        if initial_sync_started() {
+        // Re-runs when the bootstrap lands, which is what actually starts this.
+        if !session.is_ready() || initial_sync_started() {
             return;
         }
         initial_sync_started.set(true);

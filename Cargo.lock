@@ -8051,12 +8051,14 @@ name = "tawny"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "axum",
  "base64",
  "cfg-if",
  "dioxus",
  "dioxus-fullstack",
  "dioxus-icons",
+ "dirs",
  "dotenvy",
  "futures-util",
  "g3-native-plugins",
@@ -8074,10 +8076,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "surrealdb",
  "surrealdb-types",
  "time",
  "tokio",
+ "web-sys",
  "web-time",
 ]
 

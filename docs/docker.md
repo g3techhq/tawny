@@ -62,8 +62,10 @@ docker compose --profile production ps
 The Tawny image is multi-stage: Node installs the pinned browser transport,
 Rust/Dioxus builds the full-stack web release, and only the release output and
 runtime libraries enter the final image. The source tree's sibling development
-crate patches are replaced by the committed snapshots under `vendor/`, so a
-standalone clone can build without repositories elsewhere on the machine.
+crate patches live in `.cargo/config.toml`, which `.dockerignore` keeps out of
+the image, so `g3-ui`, `g3-route-transitions` and `g3-native-plugins` resolve
+from crates.io there and a standalone clone builds without repositories
+elsewhere on the machine.
 
 Place a TLS reverse proxy in front of port 8080. `TAWNY_PUBLIC_URL` must be the
 public HTTPS origin for proxy URLs and WebSub lease callbacks. If the explicit

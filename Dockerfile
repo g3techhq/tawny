@@ -22,9 +22,9 @@ RUN rustup target add wasm32-unknown-unknown \
 WORKDIR /app
 COPY . .
 COPY --from=web-dependencies /app/node_modules /app/node_modules
-# Local development patches the three shared crates from sibling repositories.
-# The image uses their committed snapshots so a deployment clone is complete.
-COPY .cargo/config.docker.toml .cargo/config.toml
+# Local development patches the three shared crates from sibling repositories
+# through .cargo/config.toml, which .dockerignore keeps out of the image. With
+# no patch here, they resolve from crates.io like any other dependency.
 
 RUN dx build --web --fullstack --release
 

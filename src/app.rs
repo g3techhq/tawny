@@ -1,7 +1,7 @@
 use crate::{
     components::{
-        AppOverlays, AppShell, ChannelDetail, Explore, Feed, HistoryPage, PlaylistDetail,
-        Playlists, QueuePage, SettingsPage, Subscriptions, VideoDetail,
+        AccountGate, AppOverlays, AppShell, ChannelDetail, Explore, Feed, HistoryPage,
+        PlaylistDetail, Playlists, QueuePage, SettingsPage, Subscriptions, VideoDetail,
     },
     models::{Appearance, PlatformStyle},
     state::{AppState, AppStateProvider},
@@ -174,7 +174,14 @@ fn ThemedApp() -> Element {
             // The provider supplies the shared stylesheet; the platform above
             // decides whether it renders the iOS or the Material motion.
             RouteTransitionProvider {
-                Router::<Route> {}
+                // Inside the wrapper so the setup screen is themed, and inside
+                // the transition provider so it does not sit between the
+                // navbar's base marker and the sheet that covers it. A
+                // component adds no DOM node of its own, so passing children
+                // through leaves the snapshot structure untouched.
+                AccountGate {
+                    Router::<Route> {}
+                }
             }
             AppOverlays {}
         }

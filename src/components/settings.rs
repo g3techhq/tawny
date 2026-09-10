@@ -7,7 +7,7 @@ use crate::{
 use dioxus::prelude::*;
 use g3_route_transitions::ROUTE_TRANSITION_COVER_CLASS;
 
-use super::PageHeader;
+use super::{AccountSettings, BackendSettings, PageHeader};
 use dioxus_icons::lucide::{
     Database, Download, Gauge, HardDrive, ListPlus, RotateCw, Server, ShieldCheck, Upload,
 };
@@ -129,6 +129,17 @@ pub fn SettingsPage() -> Element {
             Body { padding: false,
                 div { class: "page settings-page",
                         main { class: "settings-content",
+                            // First, deliberately. Which server you talk to and
+                            // who you are on it decide what every other setting
+                            // below is even describing.
+                            section { class: "settings-section",
+                                span { class: "section-kicker", "ACCOUNT" }
+                                AccountSettings {}
+                            }
+                            section { class: "settings-section",
+                                span { class: "section-kicker", "SERVER" }
+                                BackendSettings {}
+                            }
                             section { class: "settings-section",
                                 span { class: "section-kicker", "GESTURES" }
                                 Card { title: "Swipe actions".to_string(),
