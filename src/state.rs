@@ -762,6 +762,25 @@ impl AppState {
         }
     }
 
+    /// Take the next queued video, skipping the one that just finished.
+    ///
+    /// Removing it as it is handed over is what stops autoplay looping: a video
+    /// that stays queued would be chosen again the moment it ends.
+    pub fn take_next_queued(mut self, finished_video_id: &str) -> Option<String> {
+        let mut library = self.library.write();
+        let position = library
+            .queue
+            .iter()
+            .position(|id| id != finished_video_id)?;
+        let next = library.queue.remove(position);
+        // The finished video is done either way, whether or not it was queued.
+        library.queue.retain(|id| id != finished_video_id);
+        library.cache_revision += 1;
+        drop(library);
+        self.sync_in_background();
+        Some(next)
+    }
+
     pub fn add_to_queue(mut self, video_id: &str, play_next: bool) -> String {
         let mut library = self.library.write();
         library.queue.retain(|id| id != video_id);

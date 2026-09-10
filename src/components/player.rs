@@ -40,6 +40,7 @@ fn sync_player_metadata(
     preview_frames: Option<VideoPreviewFrames>,
     sponsor_segments: Vec<SponsorTimelineSegment>,
     sponsor_notify: bool,
+    autoplay: bool,
 ) {
     let Ok(tracks) = serde_json::to_string(&tracks) else {
         return;
@@ -67,6 +68,7 @@ fn sync_player_metadata(
             const previewFrames = {preview_frames};
             const sponsorSegments = {sponsor_segments};
             const sponsorNotify = {sponsor_notify};
+            const autoplay = {autoplay};
             const serverUrl = {server_url};
             let media = document.getElementById('tawny-player-media');
             for (let attempt = 0; attempt < 800 && (!media || !window.TawnyPlayerControls || !window.TawnyTransport); attempt++) {{
@@ -94,6 +96,7 @@ fn sync_player_metadata(
                     previewFrames,
                     sponsorSegments,
                     sponsorNotify,
+                    autoplay,
                 }});
             }}
             dioxus.send(true);
@@ -607,6 +610,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let playback_attempt_to_sync = playback_attempt;
     let sponsor_segments_to_sync = app_state.active_sponsor_segments;
     let sponsor_settings_state = app_state;
+    let autoplay_to_sync = app_state.settings().autoplay_for(is_short);
     use_effect(move || {
         // Re-send metadata when a failed stream creates a replacement video
         // element. The chapter/controller state is attached per element.
@@ -620,6 +624,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             preview_frames_to_sync(),
             timeline_segments(&sponsor_segments_to_sync(), &sponsor_settings),
             sponsor_settings.notify_on_skip,
+            autoplay_to_sync,
         )
     });
     let mut captions_enabled = app_state.captions_enabled;
@@ -638,6 +643,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         if video.audio_only { "audio" } else { "av" }
     );
     let auto_landscape = app_state.settings().auto_landscape_fullscreen;
+    let autoplay_enabled = app_state.settings().autoplay_for(is_short);
+    let autoplay_video_id = video.id.clone();
+    let mut autoplay_settings = app_state.settings;
     let playback_title = video.title.clone();
 
     rsx! {
@@ -732,6 +740,52 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             }
                             strong { class: "player-overlay-title", "{video.title}" }
                             div { class: "player-controls-top-actions",
+                                // Autoplay is a per-sitting decision as often
+                                // as a preference, so it is reachable without
+                                // leaving the video. It writes the same setting
+                                // the settings page does, split by kind: a run
+                                // of Shorts and a long video are not the same
+                                // choice.
+                                button {
+                                    r#type: "button",
+                                    class: if autoplay_enabled {
+                                        "player-control-button player-autoplay-button is-on"
+                                    } else {
+                                        "player-control-button player-autoplay-button"
+                                    },
+                                    aria_label: if is_short { "Autoplay Shorts" } else { "Autoplay videos" },
+                                    title: if autoplay_enabled { "Autoplay is on" } else { "Autoplay is off" },
+                                    aria_pressed: autoplay_enabled.to_string(),
+                                    onclick: move |_| {
+                                        autoplay_settings
+                                            .write()
+                                            .set_autoplay_for(is_short, !autoplay_enabled);
+                                    },
+                                    if autoplay_enabled {
+                                        ListVideo { size: 21 }
+                                    } else {
+                                        ListVideo { size: 21 }
+                                    }
+                                }
+                                // Clicked by the player JS when a video ends.
+                                // Advancing is decided here because the queue
+                                // and the setting both live in Rust.
+                                button {
+                                    r#type: "button",
+                                    class: "player-caption-state-bridge",
+                                    tabindex: "-1",
+                                    aria_hidden: "true",
+                                    "data-player-autoplay-next": "",
+                                    onclick: move |_| {
+                                        let finished = autoplay_video_id.clone();
+                                        spawn(async move {
+                                            let Some(next) = app_state.take_next_queued(&finished) else {
+                                                return;
+                                            };
+                                            animated_navigate(Route::VideoDetail { id: next }).await;
+                                        });
+                                    },
+                                }
                                 button {
                                     r#type: "button",
                                     class: "player-control-button",

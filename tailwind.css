@@ -1326,6 +1326,37 @@ textarea {
 /* Sits between the chip row and the grid, and only while a duration chip is
    active. Without it a chip that legitimately matches 20 of 11,762 videos reads
    as a broken filter with a missing Load more button. */
+/* g3-ui ships no spacing scale and gives .g3-field-wrapper no margin, so a
+   stacked Field, error line and Button sit flush against each other. Every form
+   in this file shares one container rather than each control carrying its own
+   margin, which is what keeps the rhythm even when a row is conditional. */
+/* Off is the resting look; on is stated rather than merely un-dimmed, because
+   the two states differ only in whether the next video starts by itself. */
+.player-autoplay-button {
+  opacity: 0.55;
+}
+
+.player-autoplay-button.is-on {
+  opacity: 1;
+  color: var(--color-focused);
+}
+
+.account-form {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.25rem;
+}
+
+/* Two buttons in a row read as one control group, not as a stack. */
+.account-form .g3-btn + .g3-btn {
+  margin-top: -0.1rem;
+}
+
+.account-form .account-error,
+.account-form .account-warning {
+  margin: 0;
+}
+
 .account-setup {
   display: grid;
   min-height: 100dvh;
@@ -1369,6 +1400,51 @@ textarea {
 
 /* The same colour the segment gets on the timeline, so the settings list and
    the bar can be read against each other. */
+/* g3-ui gives a nested card a contrasting surface - see its .g3-card .g3-card
+   rule - but an inset List is not a card, so a `List { inset: true }` inside a
+   Card gets the elevation shadow and none of the tint, and reads as one flat
+   surface. Same treatment, same tokens; this belongs upstream in g3-ui beside
+   the rule it mirrors. */
+.g3-card .g3-list-inset {
+  background: color-mix(in srgb, var(--color-text) 7%, var(--color-card));
+}
+
+/* Laid out as blocks rather than list rows: the explanation has to wrap, and
+   a g3-ui Item clips both its label and its description to one line. */
+.sponsor-categories {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.sponsor-category {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: var(--tawny-radius, 0.6rem);
+  background: color-mix(in srgb, var(--color-text) 7%, var(--color-card));
+}
+
+.sponsor-category-heading {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.sponsor-category-heading strong {
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+.sponsor-category-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  /* The point of the redesign: this wraps instead of ellipsising. */
+  white-space: normal;
+}
+
 .sponsor-category-swatch {
   display: inline-block;
   width: 0.85rem;

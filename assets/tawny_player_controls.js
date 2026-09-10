@@ -115,6 +115,7 @@
     let chapters = [];
     let sponsorSegments = [];
     let sponsorNotify = true;
+    let autoplayEnabled = false;
     // Segments already acted on, by UUID. Without this, seeking back into a
     // skipped sponsor would bounce the playhead straight out again and there
     // would be no way to watch one deliberately.
@@ -496,6 +497,7 @@
       if (changed) sponsorHandled.clear();
       sponsorSegments = nextSegments;
       sponsorNotify = next.sponsorNotify !== false;
+      autoplayEnabled = Boolean(next.autoplay);
       applyCaptionState();
       requestAnimationFrame(applyCaptionState);
       setTimeout(applyCaptionState, 100);
@@ -929,6 +931,11 @@
       setPlaybackIntent(false);
       updatePlaybackState();
       root.querySelector("[data-player-native-playback-stop]")?.click();
+      // Advancing is Rust's decision: it owns the queue and the setting. This
+      // only reports that the video finished.
+      if (autoplayEnabled) {
+        controls.querySelector("[data-player-autoplay-next]")?.click();
+      }
     });
     listen(window, "tawnynativepiprequest", beginPipTransition);
     listen(window, "tawnynativepictureinpicturechange", () => {

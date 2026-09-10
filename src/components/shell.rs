@@ -205,8 +205,11 @@ pub fn AppShell() -> Element {
     let app_state = use_context::<AppState>();
 
     let player_expanded = matches!(route, Route::VideoDetail { .. });
-    let has_mini_player = app_state.active_video().is_some() && !player_expanded;
     let is_auxiliary = is_auxiliary_route(&route);
+    // Queue, History and Settings are sheets presented over whatever launched
+    // them, and the mini bar belongs to the page underneath. Leaving it on top
+    // covers the bottom of a sheet that is already scrolling under it.
+    let has_mini_player = app_state.active_video().is_some() && !player_expanded && !is_auxiliary;
     let mut shell_class = "tawny-shell".to_string();
     if player_expanded {
         shell_class.push_str(" tawny-shell-cover");

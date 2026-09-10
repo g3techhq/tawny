@@ -95,28 +95,30 @@ fn BackendSetupScreen(problem: Option<String>, on_saved: EventHandler<()>) -> El
                 p { class: "account-setup-lead",
                     "Tawny stores your subscriptions and history on a server you or someone you trust runs. Enter its address to begin."
                 }
-                Field {
-                    label: "Server address".to_string(),
-                    value: url,
-                    r#type: "url".to_string(),
-                    placeholder: "https://tawny.example".to_string(),
-                    oninput: move |_| error.set(String::new()),
-                }
-                if !error().is_empty() {
-                    p { class: "account-error", "{error}" }
-                }
-                Button {
-                    style: ButtonStyle::Solid,
-                    expand: true,
-                    onclick: move |_| {
-                        match config::set_backend_url(&url()) {
-                            Some(_) => on_saved.call(()),
-                            None => error.set(
-                                "Enter a full address, including http:// or https://.".into(),
-                            ),
-                        }
-                    },
-                    "Connect"
+                div { class: "account-form",
+                    Field {
+                        label: "Server address".to_string(),
+                        value: url,
+                        r#type: "url".to_string(),
+                        placeholder: "https://tawny.example".to_string(),
+                        oninput: move |_| error.set(String::new()),
+                    }
+                    if !error().is_empty() {
+                        p { class: "account-error", "{error}" }
+                    }
+                    Button {
+                        style: ButtonStyle::Solid,
+                        expand: true,
+                        onclick: move |_| {
+                            match config::set_backend_url(&url()) {
+                                Some(_) => on_saved.call(()),
+                                None => error.set(
+                                    "Enter a full address, including http:// or https://.".into(),
+                                ),
+                            }
+                        },
+                        "Connect"
+                    }
                 }
                 p { class: "account-setup-note",
                     "Changing this restarts the app. On a packaged build, close and reopen it."
@@ -162,6 +164,7 @@ pub fn AccountSettings() -> Element {
             }
 
             if is_guest || signing_in() {
+                div { class: "account-form",
                 Field {
                     label: "Email".to_string(),
                     value: email,
@@ -252,6 +255,7 @@ pub fn AccountSettings() -> Element {
                         }
                     }
                 }
+                }
             } else {
                 Button {
                     style: ButtonStyle::Neutral,
@@ -283,6 +287,7 @@ pub fn BackendSettings() -> Element {
     rsx! {
         Card {
             h2 { "Server" }
+            div { class: "account-form",
             Field {
                 label: "Server address".to_string(),
                 value: url,
@@ -320,6 +325,7 @@ pub fn BackendSettings() -> Element {
                     }
                 },
                 "Save and reconnect"
+            }
             }
         }
     }

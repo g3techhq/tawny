@@ -80,6 +80,7 @@ pub fn SettingsPage() -> Element {
     let options_for_end = options.clone();
     let cache_size = library.videos.len() + library.channels.len() + library.playlists.len();
     let autoplay = use_signal(|| settings.autoplay);
+    let shorts_autoplay = use_signal(|| settings.shorts_autoplay);
     let prefer_sabr = use_signal(|| settings.prefer_sabr);
     // Both segmented controls are index-driven, so the stored enum is mirrored
     // into a signal and written back when the index moves.
@@ -233,12 +234,24 @@ pub fn SettingsPage() -> Element {
                                         metadata: format!("{}×", settings.shorts_playback_speed),
                                     }
                                     Item {
-                                        label: "Autoplay".to_string(),
-                                        description: "Continue with the next video".to_string(),
+                                        label: "Autoplay videos".to_string(),
+                                        description: "Continue with the next queued video".to_string(),
                                         end: rsx! {
                                             Toggle {
                                                 checked: autoplay,
                                                 onchange: move |enabled| app_state.settings.write().autoplay = enabled,
+                                            }
+                                        },
+                                    }
+                                    Item {
+                                        label: "Autoplay Shorts".to_string(),
+                                        description: "Remembered separately from video".to_string(),
+                                        end: rsx! {
+                                            Toggle {
+                                                checked: shorts_autoplay,
+                                                onchange: move |enabled| {
+                                                    app_state.settings.write().shorts_autoplay = enabled
+                                                },
                                             }
                                         },
                                     }
@@ -489,8 +502,14 @@ pub fn SettingsPage() -> Element {
 ///
 /// One row per category rather than a single on/off, because the categories are
 /// not equivalent: a sponsor read is never wanted, while an intro often is the
-/// video. The defaults mirror the browser extension, so someone who already
-/// uses it finds Tawny behaving the way they expect.
+/// video. The defaults mirror the browser extension, so someone who already uses
+/// it finds Tawny behaving the way they expect.
+///
+/// The category rows are laid out here rather than with `Item`, which is built
+/// for a one-line summary: it sets `white-space: nowrap` and clips both its
+/// label and its description. That is right for "Autoplay - continue with the
+/// next video" and wrong for text a viewer has to read before choosing, because
+/// a truncated explanation cannot be recovered - there is nowhere to expand it.
 #[component]
 fn SponsorBlockSettingsCard() -> Element {
     let mut app_state = use_context::<AppState>();
@@ -511,7 +530,7 @@ fn SponsorBlockSettingsCard() -> Element {
                 Item {
                     start: rsx! { ShieldCheck { size: 19 } },
                     label: "Use SponsorBlock".to_string(),
-                    description: "Community-marked segments, fetched by your server".to_string(),
+                    description: "Segments marked by the community".to_string(),
                     end: rsx! {
                         Toggle {
                             checked: enabled,
@@ -522,7 +541,7 @@ fn SponsorBlockSettingsCard() -> Element {
                 if enabled_value {
                     Item {
                         label: "Announce skips".to_string(),
-                        description: "A video that jumps on its own otherwise looks broken".to_string(),
+                        description: "So a jump does not look like a fault".to_string(),
                         end: rsx! {
                             Toggle {
                                 checked: notify,
@@ -532,38 +551,41 @@ fn SponsorBlockSettingsCard() -> Element {
                             }
                         },
                     }
+                }
+            }
+
+            if enabled_value {
+                div { class: "sponsor-categories",
                     for category in SponsorCategory::ALL {
                         {
                             let options = action_options.clone();
                             let value = use_signal(|| sponsor.action_for(category).label().to_string());
                             rsx! {
-                                Item {
-                                    key: "{category.api_name()}",
-                                    // The swatch is the same colour the segment
-                                    // gets on the timeline, so the settings and
-                                    // the bar can be read against each other.
-                                    start: rsx! {
+                                div { class: "sponsor-category", key: "{category.api_name()}",
+                                    div { class: "sponsor-category-heading",
+                                        // The same colour this category gets on
+                                        // the timeline, so the two can be read
+                                        // against each other.
                                         span {
                                             class: "sponsor-category-swatch",
                                             style: "background: {category.color()};",
                                             aria_hidden: "true",
                                         }
-                                    },
-                                    label: category.label().to_string(),
-                                    end: rsx! {
-                                        Select {
-                                            value,
-                                            options,
-                                            onchange: move |label: String| {
-                                                let action = SponsorAction::from_label(&label);
-                                                app_state
-                                                    .settings
-                                                    .write()
-                                                    .sponsor_block
-                                                    .set_action(category, action);
-                                            },
-                                        }
-                                    },
+                                        strong { "{category.label()}" }
+                                    }
+                                    p { class: "sponsor-category-description", "{category.description()}" }
+                                    Select {
+                                        value,
+                                        options,
+                                        onchange: move |label: String| {
+                                            let action = SponsorAction::from_label(&label);
+                                            app_state
+                                                .settings
+                                                .write()
+                                                .sponsor_block
+                                                .set_action(category, action);
+                                        },
+                                    }
                                 }
                             }
                         }

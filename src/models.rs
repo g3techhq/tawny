@@ -607,7 +607,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub swipe_left_action: SwipeActionKind,
     pub hide_watched: bool,
+    /// Long-form autoplay. Shorts get their own below, for the same reason
+    /// speed does: a feed of ninety-second clips and a forty-minute video are
+    /// not the same decision.
     pub autoplay: bool,
+    #[serde(default = "default_true")]
+    pub shorts_autoplay: bool,
     #[serde(default = "default_true")]
     pub auto_landscape_fullscreen: bool,
     #[serde(default = "default_video_short_max_seconds")]
@@ -685,6 +690,22 @@ impl SwipeActionKind {
 
 impl AppSettings {
     /// The remembered speed for this kind of video.
+    pub fn autoplay_for(&self, is_short: bool) -> bool {
+        if is_short {
+            self.shorts_autoplay
+        } else {
+            self.autoplay
+        }
+    }
+
+    pub fn set_autoplay_for(&mut self, is_short: bool, autoplay: bool) {
+        if is_short {
+            self.shorts_autoplay = autoplay;
+        } else {
+            self.autoplay = autoplay;
+        }
+    }
+
     pub fn speed_for(&self, is_short: bool) -> f64 {
         if is_short {
             self.shorts_playback_speed
@@ -715,6 +736,7 @@ impl Default for AppSettings {
             swipe_left_playlist_id: "deep-dives".to_string(),
             hide_watched: false,
             autoplay: true,
+            shorts_autoplay: true,
             auto_landscape_fullscreen: true,
             video_short_max_seconds: default_video_short_max_seconds(),
             video_medium_max_seconds: default_video_medium_max_seconds(),
@@ -1363,6 +1385,29 @@ impl SponsorCategory {
             Self::MusicOfftopic => "Non-music section",
             Self::Filler => "Filler tangent",
             Self::Highlight => "Highlight",
+        }
+    }
+
+    /// What the category actually covers.
+    ///
+    /// The names alone do not settle it - "Preview" and "Filler" in particular
+    /// are guessable in several directions, and choosing an action for one you
+    /// have misread is how a viewer ends up skipping the video itself.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Sponsor => "Paid promotion, referral codes, and direct advertising.",
+            Self::SelfPromo => {
+                "Unpaid plugs for the creator's own merch, Patreon, or other channels."
+            }
+            Self::Interaction => "Brief reminders to like, subscribe, or comment.",
+            Self::Intro => "Title cards and animated openers with no content in them.",
+            Self::Outro => "Endcards and credits, where the video is effectively over.",
+            Self::Preview => {
+                "A recap of this video, or a run-through of what is coming later in it."
+            }
+            Self::MusicOfftopic => "The parts of a music video that are not the music.",
+            Self::Filler => "Tangents and jokes the creator added that are not the subject.",
+            Self::Highlight => "The moment the video is actually about. Jumped to, never over.",
         }
     }
 
