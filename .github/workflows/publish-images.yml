@@ -1,9 +1,9 @@
 name: Publish images
 
 # Follows the same shape as g3-ui's publish-playground-image.yml, with one
-# difference: Tawny needs two images, not one. compose builds the yt-dlp sidecar
-# from docker/yt-dlp-service, so publishing only the app would leave a pull-only
-# deployment unable to start.
+# difference: Tawny needs two images, not one. compose builds the extractor
+# sidecar from docker/extractor, so publishing only the app would leave a
+# pull-only deployment unable to start.
 on:
   push:
     branches:
@@ -67,10 +67,10 @@ jobs:
             image: ghcr.io/g3techhq/tawny
             context: .
             dockerfile: Dockerfile
-          - title: yt-dlp sidecar
-            image: ghcr.io/g3techhq/tawny-yt-dlp
-            context: ./docker/yt-dlp-service
-            dockerfile: ./docker/yt-dlp-service/Dockerfile
+          - title: Extractor sidecar
+            image: ghcr.io/g3techhq/tawny-extractor
+            context: ./docker/extractor
+            dockerfile: ./docker/extractor/Dockerfile
 
     steps:
       - name: Check out repository

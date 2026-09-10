@@ -99,7 +99,7 @@ Stream URLs come from the Compose-managed yt-dlp service and are matched to the 
 
 ### PO-token provider setup
 
-There is no separate host installation step. `docker compose up -d --build` starts the provider and yt-dlp service together, and the yt-dlp health check verifies both the installed plugin and the provider's `/ping` endpoint. Development Tawny uses `TAWNY_YTDLP_SERVICE_URL=http://127.0.0.1:8090`; production Compose replaces that with the internal `http://yt-dlp:8080` address. `TAWNY_YTDLP_BIN` and `TAWNY_PO_TOKEN_PROVIDER_URL` remain supported only as a legacy non-Compose fallback.
+There is no separate host installation step. `docker compose up -d --build` starts the provider and the extractor service together, and the extractor health check verifies both the installed plugin and the provider's `/ping` endpoint. Development Tawny uses `TAWNY_YTDLP_SERVICE_URL=http://127.0.0.1:8090`; production Compose replaces that with the internal `http://extractor:8080` address. `TAWNY_YTDLP_BIN` and `TAWNY_PO_TOKEN_PROVIDER_URL` remain supported only as a legacy non-Compose fallback.
 
 The privacy-enhanced YouTube embed is never substituted automatically. If every direct source fails, the player reports the transport's actual error and offers a retry; switching to the embed is an explicit user action.
 

@@ -19,7 +19,7 @@ for (const [command, prefix] of [...configured, ...platformCandidates]) {
 
   const result = spawnSync(
     command,
-    [...prefix, "-m", "unittest", "discover", "-s", "docker/yt-dlp-service", "-p", "test_*.py"],
+    [...prefix, "-m", "unittest", "discover", "-s", "docker/extractor", "-p", "test_*.py"],
     { stdio: "inherit" },
   );
   process.exit(result.status ?? 1);

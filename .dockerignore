@@ -13,4 +13,4 @@ node_modules
 rustypipe_cache.json
 rustypipe_reports
 target
-docker/yt-dlp-service/__pycache__
+docker/extractor/__pycache__

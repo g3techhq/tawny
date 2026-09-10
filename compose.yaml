@@ -53,9 +53,9 @@ services:
       retries: 6
     restart: unless-stopped
 
-  yt-dlp:
+  extractor:
     build:
-      context: ./docker/yt-dlp-service
+      context: ./docker/extractor
       args:
         YTDLP_VERSION: ${YTDLP_VERSION:-2026.8.19}
         POT_PROVIDER_VERSION: ${POT_PROVIDER_VERSION:-1.3.1}
@@ -93,7 +93,7 @@ services:
       SURREALDB_USER: ${SURREALDB_USER:-root}
       SURREALDB_PASSWORD: ${SURREALDB_PASSWORD:-root}
       TAWNY_DATA_DIR: /data
-      TAWNY_YTDLP_SERVICE_URL: http://yt-dlp:8080
+      TAWNY_YTDLP_SERVICE_URL: http://extractor:8080
       TAWNY_PUBLIC_URL: ${TAWNY_PUBLIC_URL:-http://localhost:8080}
       TAWNY_WEBSUB_CALLBACK_URL: ${TAWNY_WEBSUB_CALLBACK_URL:-}
       TAWNY_WEBSUB_SECRET: ${TAWNY_WEBSUB_SECRET:-}
@@ -104,7 +104,7 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
-      yt-dlp:
+      extractor:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/v1/health"]

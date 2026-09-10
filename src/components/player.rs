@@ -1773,6 +1773,9 @@ fn timeline_segments(
 #[cfg(test)]
 mod timeline_tests {
     use super::*;
+    // Imported here rather than at file scope: the non-test build resolves
+    // categories on the server side only, so a top-level import is dead there.
+    use crate::models::SponsorCategory;
 
     fn segment(category: SponsorCategory, start: f64, end: f64) -> SponsorSegment {
         SponsorSegment {

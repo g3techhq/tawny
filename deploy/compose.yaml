@@ -11,7 +11,7 @@ name: tawny
 # running this needs no Rust toolchain, no Node, and no copy of the source.
 #
 # Only Tawny itself publishes a port. SurrealDB, the PO-token provider and the
-# yt-dlp sidecar talk to it over the compose network and have no reason to be
+# extractor sidecar talk to it over the compose network and have no reason to be
 # reachable from outside it - the development compose file exposes them on
 # 127.0.0.1 so a host `dx serve` can reach them, which is not a deployment need.
 
@@ -68,9 +68,9 @@ services:
       retries: 6
     restart: unless-stopped
 
-  yt-dlp:
-    image: ghcr.io/g3techhq/tawny-yt-dlp:${TAWNY_IMAGE_TAG:-latest}
-    container_name: tawny-yt-dlp
+  extractor:
+    image: ghcr.io/g3techhq/tawny-extractor:${TAWNY_IMAGE_TAG:-latest}
+    container_name: tawny-extractor
     pull_policy: always
     environment:
       PO_TOKEN_PROVIDER_URL: http://pot-provider:4416
@@ -103,7 +103,7 @@ services:
       SURREALDB_USER: ${SURREALDB_USER:-root}
       SURREALDB_PASSWORD: ${SURREALDB_PASSWORD:?set SURREALDB_PASSWORD to something private}
       TAWNY_DATA_DIR: /data
-      TAWNY_YTDLP_SERVICE_URL: http://yt-dlp:8080
+      TAWNY_YTDLP_SERVICE_URL: http://extractor:8080
       # The origin browsers will actually reach this instance on. It is what
       # proxy URLs and WebSub lease callbacks are built from, so a wrong value
       # shows up as broken playback rather than as a configuration error.
@@ -119,7 +119,7 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
-      yt-dlp:
+      extractor:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/v1/health"]

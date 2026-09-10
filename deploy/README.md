@@ -5,11 +5,15 @@ Actions publishes two image tags each for the two images Tawny itself owns,
 after a successful build on `main`:
 
 - `ghcr.io/g3techhq/tawny:latest` and `:sha-<commit>`
-- `ghcr.io/g3techhq/tawny-yt-dlp:latest` and `:sha-<commit>`
+- `ghcr.io/g3techhq/tawny-extractor:latest` and `:sha-<commit>`
 
 The sidecar is published too, not just the app: `compose.yaml` at the repository
-root builds it from `docker/yt-dlp-service`, so a pull-only deployment with only
-the app image would have nothing to extract streams with.
+root builds it from `docker/extractor`, so a pull-only deployment with only the
+app image would have nothing to extract streams with.
+
+It is named for the job rather than for yt-dlp, which is one of several things
+inside it: yt-dlp itself, a Node runtime, the bgutil PO-token plugin, and a
+small HTTP adapter exposing the two operations Tawny needs.
 
 The other two services come from upstream images and need nothing published:
 SurrealDB, and the bgutil PO-token provider.
@@ -18,7 +22,7 @@ SurrealDB, and the bgutil PO-token provider.
 
 1. Merge the deployment workflow and let its first `main` run finish.
 2. In the GitHub organization, open **Packages**, then each of **tawny** and
-   **tawny-yt-dlp**.
+   **tawny-extractor**.
 3. Open **Package settings** and change the package visibility to **Public**.
 
 Public GHCR packages can be pulled without credentials. Package visibility is
@@ -57,7 +61,7 @@ Optional:
 | `YTDLP_CONCURRENCY` | `2` | Simultaneous extractions. |
 
 Unlike the development `compose.yaml`, only Tawny publishes a port. SurrealDB,
-the PO-token provider and the sidecar reach each other over the stack's network;
+the PO-token provider and the extractor reach each other over the stack's network;
 development binds them to `127.0.0.1` only so a host `dx serve` can reach them,
 which is not a deployment need.
 
