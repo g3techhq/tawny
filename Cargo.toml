@@ -12,18 +12,9 @@ repository = "https://github.com/g3techhq/tawny"
 dioxus = { version = "=0.7.9", features = ["router", "fullstack"] }
 dioxus-fullstack = "=0.7.9"
 dioxus-icons = "0.1.0"
-# Pulled straight from their repositories rather than crates.io, where none of
-# the three are published. They used to be declared as registry dependencies and
-# redirected by a [patch.crates-io] in .cargo/config.toml, which worked only
-# because every machine that built Tawny already had the sibling checkouts - a
-# clean clone, and the Docker build, had nothing to resolve.
-#
-# Pinned to a tag so a build is reproducible. Local development still overrides
-# these with the sibling checkouts; see .cargo/config.toml, whose patch keys are
-# the URLs below rather than "crates-io".
-g3-route-transitions = { git = "https://github.com/g3techhq/g3-route-transitions", tag = "v0.2.0", features = ["native-back"] }
-g3-native-plugins = { git = "https://github.com/g3techhq/g3-native-plugins", tag = "v0.2.0", features = ["back-button", "clipboard", "media"] }
-g3-ui = { git = "https://github.com/g3techhq/g3-ui", tag = "v0.2.0", features = ["transitions"] }
+g3-route-transitions = { version = "0.2.0", features = ["native-back"] }
+g3-native-plugins = { version = "0.2.0", features = ["back-button", "clipboard", "media"] }
+g3-ui = { version = "0.2.0", features = ["transitions"] }
 manganis = "=0.7.9"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.140"
@@ -105,18 +96,3 @@ features = ["wasm_js"]
 package = "getrandom"
 version = "0.2"
 features = ["js"]
-
-# g3-ui declares `g3-route-transitions` as a crates.io dependency (behind its
-# `transitions` feature, which Tawny enables), and g3-native-plugins does the
-# same. None of the three are published, so those transitive declarations
-# resolve to nothing on any machine without them already in its cargo cache -
-# which is every CI runner and every Docker build.
-#
-# A [patch] in the manifest, unlike one in .cargo/config.toml, is committed and
-# therefore applies everywhere. It redirects those transitive registry
-# references onto the same git tags the direct dependencies above use, so the
-# whole graph collapses onto one copy of each crate.
-[patch.crates-io]
-g3-route-transitions = { git = "https://github.com/g3techhq/g3-route-transitions", tag = "v0.2.0" }
-g3-native-plugins = { git = "https://github.com/g3techhq/g3-native-plugins", tag = "v0.2.0" }
-g3-ui = { git = "https://github.com/g3techhq/g3-ui", tag = "v0.2.0" }

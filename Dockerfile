@@ -23,10 +23,9 @@ WORKDIR /app
 COPY . .
 COPY --from=web-dependencies /app/node_modules /app/node_modules
 # Local development patches the three shared crates to sibling repositories
-# through .cargo/config.toml, which .dockerignore keeps out of the image. Here
-# they resolve as the git dependencies Cargo.toml declares - none of them is
-# published to crates.io, so this is the only thing that makes a clean clone
-# build.
+# through .cargo/config.toml, which .dockerignore keeps out of the image. With
+# no patch here they resolve from crates.io, where they are published, like any
+# other dependency.
 
 RUN dx build --web --fullstack --release
 

@@ -1,36 +1,61 @@
 name: Publish images
 
-# Builds the two images a deployment needs and pushes them to GHCR, so a home
-# lab can run Tawny with `docker compose pull && docker compose up -d` and never
-# needs a Rust toolchain or this repository.
-#
-# Both images, deliberately: compose builds the yt-dlp sidecar from
-# `docker/yt-dlp-service`, so publishing only the app would leave a pull-only
+# Follows the same shape as g3-ui's publish-playground-image.yml, with one
+# difference: Tawny needs two images, not one. compose builds the yt-dlp sidecar
+# from docker/yt-dlp-service, so publishing only the app would leave a pull-only
 # deployment unable to start.
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Extra tag to publish alongside `edge` and the commit SHA (e.g. v0.1.0)"
-        required: false
-        type: string
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-images.yml"
+      - ".dockerignore"
+      - "assets/**"
+      - "database/**"
+      - "deploy/**"
+      - "docker/**"
+      - "src/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dioxus.toml"
+      - "Dockerfile"
+      - "package-lock.json"
+      - "package.json"
+      - "rust-toolchain.toml"
+      - "tailwind.css"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-images.yml"
+      - ".dockerignore"
+      - "assets/**"
+      - "database/**"
+      - "deploy/**"
+      - "docker/**"
+      - "src/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "Dioxus.toml"
+      - "Dockerfile"
+      - "package-lock.json"
+      - "package.json"
+      - "rust-toolchain.toml"
+      - "tailwind.css"
+  workflow_dispatch:
 
 concurrency:
-  # Never two publishes racing for the same tag. Not cancel-in-progress: a
-  # half-pushed manifest is worse than a slow queue.
-  group: publish-images-${{ github.ref }}
-  cancel-in-progress: false
+  group: publish-images-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  publish:
-    name: ${{ matrix.name }}
+  image:
+    name: ${{ matrix.title }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -38,64 +63,49 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Tawny server
-            image: tawny
+          - title: Tawny server
+            image: ghcr.io/g3techhq/tawny
             context: .
             dockerfile: Dockerfile
-          - name: yt-dlp sidecar
-            image: tawny-yt-dlp
+          - title: yt-dlp sidecar
+            image: ghcr.io/g3techhq/tawny-yt-dlp
             context: ./docker/yt-dlp-service
             dockerfile: ./docker/yt-dlp-service/Dockerfile
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      - name: Log in to GHCR
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive tags and labels
+      - name: Generate image metadata
         id: meta
-        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          images: ${{ matrix.image }}
           tags: |
-            type=ref,event=tag
-            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
-            type=sha,format=long
-            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha
 
-      - name: Build and push
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+      - name: Build and publish image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # linux/amd64 only. The Tawny image compiles Rust and a WASM bundle;
-          # building it for arm64 under QEMU takes hours rather than minutes.
-          # Add linux/arm64 here if the lab ever needs it, and expect the wait.
-          platforms: linux/amd64
-          # The Rust build is the whole cost of this workflow, so its cache is
-          # what makes a re-run cheap. Scoped per image or the two would evict
-          # each other.
+          # Scoped per image, unlike g3-ui's single-image cache: without it the
+          # two builds share one cache key and evict each other every run.
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
-          provenance: false
-
-      - name: Report what was published
-        run: |
-          echo "### ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
