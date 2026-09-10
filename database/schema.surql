@@ -55,7 +55,6 @@ DEFINE FIELD IF NOT EXISTS description ON playlist TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS pinned ON playlist TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS video_ids ON playlist TYPE array<string> DEFAULT [];
 DEFINE FIELD IF NOT EXISTS updated_at ON playlist TYPE datetime DEFAULT time::now();
-DEFINE INDEX IF NOT EXISTS playlist_external_id_idx ON playlist FIELDS playlist_id UNIQUE;
 
 DEFINE TABLE IF NOT EXISTS playlist_item TYPE RELATION IN playlist OUT video SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD IF NOT EXISTS position ON playlist_item TYPE int;
@@ -67,7 +66,6 @@ DEFINE FIELD IF NOT EXISTS group_id ON subscription_group TYPE string;
 DEFINE FIELD IF NOT EXISTS name ON subscription_group TYPE string;
 DEFINE FIELD IF NOT EXISTS channel_ids ON subscription_group TYPE array<string> DEFAULT [];
 DEFINE FIELD IF NOT EXISTS updated_at ON subscription_group TYPE datetime DEFAULT time::now();
-DEFINE INDEX IF NOT EXISTS subscription_group_external_id_idx ON subscription_group FIELDS group_id UNIQUE;
 
 DEFINE TABLE IF NOT EXISTS library_state TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD IF NOT EXISTS cache_revision ON library_state TYPE int DEFAULT 0;
@@ -146,8 +144,12 @@ DEFINE FIELD IF NOT EXISTS owner ON subscription_group TYPE option<record<app_us
 
 -- Playlist and group ids are chosen by the client and some are fixed - every
 -- library starts with a "watch-later". Two accounts must be able to hold the
--- same id, so uniqueness is per owner, not global. REMOVE first because
--- DEFINE INDEX IF NOT EXISTS will not narrow an index that already exists.
+-- same id, so uniqueness is per owner, not global.
+--
+-- The REMOVE is for databases that predate this; the global definitions are
+-- gone from this file rather than merely dropped here, because an IF NOT EXISTS
+-- re-creates its index on every startup and the re-creation is what fails once
+-- two accounts legitimately share an id.
 REMOVE INDEX IF EXISTS playlist_external_id_idx ON playlist;
 DEFINE INDEX IF NOT EXISTS playlist_owner_external_id_idx ON playlist
   FIELDS owner, playlist_id UNIQUE;
