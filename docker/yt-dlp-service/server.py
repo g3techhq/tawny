@@ -45,8 +45,11 @@ def build_video_command(video_id: str) -> list[str]:
         "node",
         "--extractor-args",
         f"youtubepot-bgutilhttp:base_url={PO_TOKEN_PROVIDER_URL}",
-        "--extractor-args",
-        "youtube:player_client=mweb",
+        # The player client is deliberately not pinned. `mweb` worked when this
+        # service was written and now returns "Video unavailable", which left
+        # playback falling back to gated URLs that serve about a minute before
+        # returning 403. yt-dlp tracks which clients YouTube currently accepts;
+        # pinning one opts out of that and silently rots.
         f"https://www.youtube.com/watch?v={video_id}",
     ]
 

@@ -178,6 +178,17 @@ textarea {
   margin: 0.25rem 0 1.15rem;
   padding: 0.1rem 0 0.4rem;
   scrollbar-width: none;
+  /* The edge fade further down this file already signals the overflow; what was
+     missing was any way to act on it with a mouse, which
+     tawny_horizontal_scroll.js supplies. This keeps a horizontal overscroll from
+     chaining out to the page mid-strip. */
+  overscroll-behavior-x: contain;
+}
+
+/* A chip must never be squeezed to fit; overflowing is what makes the row
+   scrollable in the first place. */
+.group-filter-row > * {
+  flex: 0 0 auto;
 }
 
 /* Keeps the count anchored while the filters scroll past it. */
@@ -292,12 +303,28 @@ textarea {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: clamp(1rem, 2vw, 1.65rem);
-  align-items: start;
+  align-items: stretch;
 }
 
 .video-grid-cell {
   position: relative;
+  display: flex;
   min-width: 0;
+}
+
+/* Every card in a row matches the tallest one, so thumbnails line up and the
+   grid reads as even rows. The stretch has to be threaded through g3's swipe
+   wrapper, which sits between the cell and the card. */
+.video-grid-cell > .video-swipe-row {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+}
+
+.video-swipe-row > .g3-swipe-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
 }
 
 /* Overlays the thumbnail's top-right corner so a playlist grid does not gain a
@@ -416,39 +443,47 @@ textarea {
   border-radius: var(--tawny-radius);
 }
 
-/* Pointer alternative to the swipe gesture, revealed on hover/focus. */
+/* Pointer alternative to the swipe gesture, revealed on hover/focus. The hit
+   area is a full-height quarter of the thumbnail rather than a small circle, so
+   it is easy to hit with a mouse; the middle half stays free for click-to-play. */
 .card-quick-action {
   position: absolute;
-  top: 50%;
+  top: 0;
+  bottom: 0;
   z-index: 3;
   display: none;
-  width: 2rem;
-  height: 2rem;
+  width: 25%;
   align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(8, 12, 18, 0.72);
+  padding: 0 0.6rem;
+  border: 0;
   color: #fff;
   opacity: 0;
-  transform: translateY(-50%);
-  transition:
-    opacity 140ms ease,
-    background 140ms ease;
+  transition: opacity 140ms ease;
   cursor: pointer;
 }
 
 .card-quick-action-start {
-  left: 0.5rem;
+  left: 0;
+  justify-content: flex-start;
+  background: linear-gradient(to right, rgba(8, 12, 18, 0.78), transparent);
 }
 
 .card-quick-action-end {
-  right: 0.5rem;
+  right: 0;
+  justify-content: flex-end;
+  background: linear-gradient(to left, rgba(8, 12, 18, 0.78), transparent);
 }
 
 .card-quick-action:hover {
-  background: var(--color-focused);
-  color: #10161e;
+  color: var(--color-focused);
+}
+
+.card-quick-action-start:hover {
+  background: linear-gradient(to right, rgba(8, 12, 18, 0.92), transparent);
+}
+
+.card-quick-action-end:hover {
+  background: linear-gradient(to left, rgba(8, 12, 18, 0.92), transparent);
 }
 
 .video-card:hover .card-quick-action,
@@ -458,6 +493,9 @@ textarea {
 
 .video-card {
   position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--color-card-border);
@@ -527,20 +565,25 @@ textarea {
 
 /* Inset and rounded, over a visible track, so a partly filled bar reads as
    watch progress rather than a stray gold segment on the card's edge. */
+/* Sits on the very bottom edge of the thumbnail rather than floating inset
+   above it, which is where a reader expects to find how far through a video
+   they are. It reads as part of the image instead of a badge on top of it. */
 .watch-progress {
   position: absolute;
   z-index: 3;
-  right: 0.5rem;
-  bottom: 0.4rem;
-  left: 0.5rem;
-  height: 3px;
-  border-radius: 999px;
-  background: linear-gradient(
-    to right,
-    var(--color-focused) var(--progress),
-    rgba(255, 255, 255, 0.28) var(--progress)
-  );
-  box-shadow: 0 0 0 1px rgba(5, 8, 12, 0.45);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 4px;
+  background: rgba(5, 8, 12, 0.55);
+}
+
+.watch-progress::after {
+  content: "";
+  display: block;
+  width: var(--progress);
+  height: 100%;
+  background: var(--color-focused);
 }
 
 .watched-badge {
@@ -560,6 +603,7 @@ textarea {
 
 .video-meta-row {
   display: grid;
+  flex: 1;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 0.72rem;
   align-items: start;
@@ -600,10 +644,14 @@ textarea {
   min-width: 0;
 }
 
+/* A one-line title used to make its whole card shorter than its neighbours.
+   Reserving both lines keeps the grid even, and the clamp still ellipsizes a
+   title that would otherwise run to a third line. */
 .video-copy h2 {
   display: -webkit-box;
   overflow: hidden;
   margin: -0.1rem 0 0.28rem;
+  min-height: 2.6em;
   font-size: 0.96rem;
   font-weight: 690;
   line-height: 1.3;
@@ -1118,6 +1166,11 @@ textarea {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
+  /* Nothing over the video is prose. Without this, clicking the speed control
+     selects its label, and the desktop double-click-to-fullscreen gesture
+     selects whatever text sits under the pointer. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .player-stage iframe,
@@ -1715,11 +1768,29 @@ textarea {
   object-fit: cover;
 }
 
-/* Five actions plus a two-line title are slightly taller than g3_ui's generic
-   half-height sheet cap on phones. Give this sheet enough room to keep Share
-   above the system gesture area instead of clipping the final row. */
+/* A heading with a thumbnail and a two-line title, then six actions: taller
+   than g3_ui's generic half-height cap, and the earlier bump to 64dvh still cut
+   Share off the bottom. This sheet is a menu, so it should be as tall as it
+   needs to be - the cap is only there to keep the page it came from in view and
+   to leave the drag handle reachable. */
 .g3-sheet-bottom.video-actions-sheet .g3-sheet-content {
-  max-height: min(64dvh, 34rem);
+  max-height: min(86dvh, 46rem);
+}
+
+/* g3 paints the sheet panel and its list items with the same --color-card, so
+   an inset list dissolved into the sheet behind it. Recessing the panel leaves
+   the list reading as a card resting on the sheet. */
+.g3-sheet.g3-sheet-bottom {
+  background: var(--color-bg-secondary);
+}
+
+.g3-sheet.g3-sheet-bottom .g3-list-inset {
+  border: 1px solid var(--color-card-border);
+  border-radius: var(--tawny-radius);
+}
+
+.g3-sheet.g3-sheet-bottom .g3-list-inset .g3-item {
+  background: var(--color-card);
 }
 
 .playlist-picker-sheet,
@@ -1738,6 +1809,112 @@ textarea {
   border-radius: 13px;
   font-size: 0.9rem;
   font-weight: 760;
+}
+
+/* The real file input stays in the DOM so the styled row above can click it,
+   but never shows: `display: none` would stop that click reaching it in some
+   engines, so it is clipped instead. */
+.visually-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.section-note {
+  margin: 0 0 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.section-kicker-inline {
+  display: block;
+  margin: 1.1rem 0 0.6rem;
+}
+
+.export-format-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.export-format-row .g3-btn {
+  gap: 0.4rem;
+}
+
+/* Sits under the Subscribe button on the channel page. It filters the feed,
+   not this page, so it is deliberately quieter than the tab strip above it. */
+.subscription-content-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.subscription-content-label {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.subscription-content-segments {
+  flex: 1;
+  min-width: 13rem;
+  max-width: 22rem;
+}
+
+/* A labelled segmented control, used where a setting has three states and a
+   toggle would have to lie about one of them. */
+.setting-choice-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-card-border);
+  border-radius: var(--tawny-radius);
+  background: var(--color-card);
+}
+
+.setting-choice-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.setting-choice-copy strong {
+  font-size: 0.92rem;
+  font-weight: 660;
+}
+
+.setting-choice-copy span {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.setting-choice-segments {
+  flex: 0 1 auto;
+  min-width: 12rem;
+}
+
+@container g3-app-shell (width <= 680px) {
+  .setting-choice-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .setting-choice-segments {
+    min-width: 0;
+  }
 }
 
 .settings-content {
@@ -1978,11 +2155,17 @@ textarea {
 }
 
 @container g3-app-shell (width >= 48rem) {
+  /* Full-bleed is right on a phone, where the bar is the bottom edge of the
+     screen. On a wide layout it reads as system chrome and wastes the width, so
+     the player becomes a bounded card floating in the corner instead. */
   .persistent-player.mini {
-    right: 0;
-    bottom: 0;
-    left: 4rem;
-    width: auto;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    left: auto;
+    width: min(26rem, calc(100% - 6.5rem));
+    border: 1px solid var(--color-card-border);
+    border-radius: var(--tawny-radius);
+    box-shadow: 0 18px 44px var(--color-shadow);
   }
 
   /* Desktop drives the card with buttons rather than a swipe, so the gesture
@@ -2002,6 +2185,15 @@ textarea {
   outline-offset: -2px;
 }
 
+/* Both states, deliberately. The mini bar used to crop to `cover` while the
+   expanded stage letterboxed, and the cover transition morphs one into the
+   other - so the first frame of an opening morph already carried the
+   destination's framing, and the picture re-framed before it had moved at all:
+   full-bleed one frame, letterboxed the next, still inside the mini bar's box.
+   Minimizing hides the same cut at the far end, at thumbnail size, which is why
+   only opening looked wrong. The mini stage is 7.4rem x 4.15rem, so on an
+   ordinary 16:9 upload the two fits differ by less than a pixel; it was Shorts
+   that paid for the difference. */
 .persistent-player-stage video {
   object-fit: contain;
 }
@@ -2029,8 +2221,24 @@ textarea {
   transition: opacity 160ms ease;
 }
 
+/* Faded out is not enough on its own: every control opts back into pointer
+   events, so an invisible bar still swallowed taps meant for the video. This
+   outranks those opt-ins without needing `!important`.
+
+   Deliberately not `visibility: hidden`, which would also drop the controls out
+   of the tab order - and then a keyboard user could never reach them to make
+   the bar appear in the first place. */
+.tawny-player-controls:not(.controls-visible):not(:has(:focus-visible)) * {
+  pointer-events: none;
+}
+
+/* `:focus-visible`, not `:focus-within`. A button keeps DOM focus after being
+   clicked, so `:focus-within` pinned the whole bar open for as long as it did -
+   the dwell timer fired, the class came off, and nothing changed on screen until
+   the user clicked somewhere else and moved focus away. Keyboard users still get
+   the bar, because tabbing is what `:focus-visible` is for. */
 .tawny-player-controls.controls-visible,
-.tawny-player-controls:focus-within {
+.tawny-player-controls:has(:focus-visible) {
   opacity: 1;
 }
 
@@ -2626,10 +2834,6 @@ textarea {
   background: rgba(0, 0, 0, 0.08);
 }
 
-.persistent-player.mini .persistent-player-stage video {
-  object-fit: cover;
-}
-
 @container g3-app-shell (width <= 600px) {
   .player-controls-center {
     gap: 0.8rem;
@@ -2743,12 +2947,21 @@ textarea {
   overscroll-behavior: contain;
 }
 
-.g3-sheet-bottom.group-editor-sheet .g3-sheet-content {
-  min-height: 76dvh;
-  max-height: 84dvh;
+/* Wide enough for a channel name beside its avatar, and tall enough that the
+   list is worth scrolling - but bounded, so the modal stays a dialog rather than
+   growing into a full-screen page. */
+.group-editor-modal {
+  width: min(100%, 32rem);
 }
 
-.group-editor-search {
+.group-editor-modal .group-editor-list {
+  max-height: min(52dvh, 26rem);
+}
+
+/* The gap belongs on the field wrapper, not the input. A margin on the input
+   makes the field control box taller than the input inside it, and the trailing
+   slot centres on that control - which left the search icon sitting low. */
+.g3-field-wrapper:has(.group-editor-search) {
   margin-bottom: 0.8rem;
 }
 
@@ -2787,6 +3000,62 @@ textarea {
 .group-editor-row.included {
   border-color: color-mix(in srgb, var(--color-focused) 45%, transparent);
   color: var(--color-focused);
+}
+
+/* The sheet is the whole page - its own header included - so it stands in for
+   the shell column rather than sitting inside it as one more row. The cover
+   class brings a `min-height: 100dvh` meant for a standalone surface; inside
+   the shell that would push the tab bar off the bottom. */
+.auxiliary-cover.route-transition-cover {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+/* On the desktop rail layout the shell is a grid, and g3-ui places the header
+   in row 1 and the body in row 2. The sheet stands in for both, so it takes the
+   whole content column - otherwise the grid sizes it to its content and a short
+   page (an empty queue) leaves the shell showing underneath it. */
+@container g3-app-shell (min-width: 48rem) {
+  .g3-navbar > .auxiliary-cover {
+    width: auto;
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+}
+
+/* On the watch route the player scrolls away with the page instead of holding
+   the top of the screen. It lives in the shell so playback survives navigation,
+   which puts it *outside* `.g3-body-content` - the element that normally
+   scrolls - so it could never move. Rather than relocate it, the watch route
+   moves the scroll one level up onto the shell column, so the player and the
+   details below it scroll as one surface. Both axes have to be handed over
+   together: leaving `overflow-x: hidden` on the body would make its `visible`
+   y-axis compute to `auto` and it would go on scrolling by itself. */
+.g3-app-shell .g3-navbar.tawny-shell-cover {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.tawny-shell-cover > .g3-body,
+.tawny-shell-cover .g3-body-content {
+  overflow: visible;
+}
+
+@container g3-app-shell (min-width: 48rem) {
+  /* The rail is permanent chrome, so it stays put while the column beside it
+     scrolls - and must not be stretched to the height of a long page first.
+     Carries the shell class as well, to outrank g3-ui's own placement rule. */
+  .g3-app-shell .g3-navbar.tawny-shell-cover > .g3-navbar-tab-bar {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    align-self: start;
+  }
 }
 
 /* -- Sheet routes: compact chrome only -- */
@@ -2857,6 +3126,56 @@ textarea {
   color: #fff;
 }
 
+/* -- Audio-only playback -- */
+
+/* The adaptive path already drops the video AdaptationSets, so there is usually
+   nothing to draw; this covers the progressive and HLS sources too, where the
+   video track cannot be separated out. The element keeps playing - only its
+   picture is replaced - so the transport, controls, and position all behave
+   exactly as they do normally. */
+.persistent-player-stage.audio-only::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  background-color: #000;
+  background-image: var(--player-artwork);
+  background-position: center;
+  background-size: cover;
+  /* The artwork is a 16:9 thumbnail behind a blur, so it fills any shape the
+     stage takes without the letterboxing a contained image would leave. */
+  filter: blur(18px) brightness(0.55);
+  transform: scale(1.15);
+  pointer-events: none;
+}
+
+.persistent-player-stage.audio-only::before {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  width: min(46%, 13rem);
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  background-image: var(--player-artwork);
+  background-position: center;
+  background-size: cover;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* The mini bar is too small for the inset artwork to read as anything. */
+.persistent-player.mini .persistent-player-stage.audio-only::before {
+  display: none;
+}
+
+.persistent-player.mini .persistent-player-stage.audio-only::after {
+  filter: none;
+  transform: none;
+}
+
 /* -- The player rides with the sheet -- */
 
 /* The persistent player lives in the shell so it survives route changes, which
@@ -2874,24 +3193,80 @@ html[data-route-transition="uncover-down"]::view-transition-group(player) {
   z-index: 10000;
 }
 
+/* Without these the group morphs on the UA default (0.25s, ease) while the
+   sheet slides on the cover duration and curve. The video then arrives ahead of
+   the surface carrying it and drifts on a different arc, which reads as the
+   player lagging behind the sheet. Each pair mirrors the matching cover rule.
+
+   `!important` is load-bearing, not defensive. Chrome declares the timing of a
+   `::view-transition-group()` itself, and that declaration beats an ordinary
+   author one however specific the selector is - measured: the same selector
+   computes 0.25s plain and the full cover duration with `!important`. Without
+   it the player finished its morph while the sheet was still travelling, so it
+   was parked at full size before the page arrived and never looked like it
+   moved at all. The image pseudos below need it for the same reason: the UA
+   cross-fade otherwise survives `animation: none`. */
+html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-group(
+  player
+),
+html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-group(
+  player
+) {
+  animation-duration: var(--route-transition-cover-duration) !important;
+  animation-timing-function: var(--route-transition-ios-ease) !important;
+}
+
+html[data-route-transition-platform="md"][data-route-transition="cover-up"]::view-transition-group(
+  player
+) {
+  animation-duration: var(--route-transition-cover-duration) !important;
+  animation-timing-function: var(--route-transition-md-decelerate) !important;
+}
+
+html[data-route-transition-platform="md"][data-route-transition="uncover-down"]::view-transition-group(
+  player
+) {
+  animation-duration: var(--route-transition-md-sheet-dismiss-duration) !important;
+  animation-timing-function: var(--route-transition-md-accelerate) !important;
+}
+
+/* The stage's own child carries a 220ms transform transition for the swipe
+   gesture. During a route transition the stage is a captured snapshot, so that
+   transition is a second, shorter motion running underneath the morph - it
+   lands early and on a different curve. Nothing should animate inside a frame
+   that is itself being animated. */
+html[data-route-transition="cover-up"] .persistent-player-stage video,
+html[data-route-transition="uncover-down"] .persistent-player-stage video,
+html[data-route-transition="cover-up"] .persistent-player-stage iframe,
+html[data-route-transition="uncover-down"] .persistent-player-stage iframe {
+  transition: none !important;
+}
+
+/* The mini bar and the expanded stage are both 16:9, but not exactly so at every
+   breakpoint. `fill` is the pseudo-element default and would stretch the
+   difference across the whole morph; `cover` keeps the picture honest. */
+html[data-route-transition="cover-up"]::view-transition-new(player),
+html[data-route-transition="uncover-down"]::view-transition-old(player) {
+  object-fit: cover;
+  object-position: center;
+}
+
 html[data-route-transition="cover-up"]::view-transition-old(player),
 html[data-route-transition="uncover-down"]::view-transition-new(player) {
-  animation: none;
+  animation: none !important;
   opacity: 0;
 }
 
-html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-new(
-  player
-) {
-  animation: route-transition-ios-slide-up-cover var(--route-transition-cover-duration)
-    var(--route-transition-ios-ease) both;
-}
-
-html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-old(
-  player
-) {
-  animation: route-transition-ios-slide-down-cover var(--route-transition-cover-duration)
-    var(--route-transition-ios-ease) both;
+/* The group already carries the player from the mini bar to the full stage.
+   Sliding the image as well put a second, full-viewport translation inside a
+   box that was itself moving, so the video started a screen below where its
+   own frame was and chased it up - the jump when opening from the mini bar.
+   A morph wants the outgoing frame hidden and the incoming one simply present:
+   the picture is the same picture, only its box is changing. */
+html[data-route-transition="cover-up"]::view-transition-new(player),
+html[data-route-transition="uncover-down"]::view-transition-old(player) {
+  animation: none !important;
+  opacity: 1;
 }
 
 /* -- Chapter label and fullscreen state -- */
@@ -2932,6 +3307,63 @@ html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]
   color: var(--color-text-secondary);
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+/* The cover marker ships a full-height flex column, which is what the watch
+   page wants. On the sheet routes it lands on the shell's body region, which
+   already sizes itself, so only the snapshot name and the opaque backdrop are
+   wanted from it. */
+.g3-body.route-transition-cover {
+  min-height: 0;
+  height: 100%;
+}
+
+/* -- The page's own bar travels with it -- */
+
+/* Each page renders its own header, so on a push the outgoing and incoming
+   bars are different elements and can cross-slide exactly like the body does.
+   The library only names the body segment, which left the bar hanging still
+   while the content moved out from under it. The tab bar is deliberately left
+   unnamed: it is app chrome and belongs to no page, so it stays put. */
+html[data-route-transition="push-left"] .tawny-header,
+html[data-route-transition="push-right"] .tawny-header {
+  view-transition-name: page-header;
+  contain: layout paint;
+}
+
+html[data-route-transition="push-left"]::view-transition-old(page-header),
+html[data-route-transition="push-left"]::view-transition-new(page-header),
+html[data-route-transition="push-right"]::view-transition-old(page-header),
+html[data-route-transition="push-right"]::view-transition-new(page-header) {
+  animation-duration: var(--route-transition-segment-duration);
+  animation-timing-function: var(--route-transition-segment-ease);
+  animation-fill-mode: both;
+  mix-blend-mode: normal;
+}
+
+/* Same clip the segment needs: the pseudo tree paints above the page and is not
+   clipped by default, so a full-width slide would otherwise run across the rest
+   of the shell. */
+html[data-route-transition="push-left"]::view-transition-group(page-header),
+html[data-route-transition="push-right"]::view-transition-group(page-header),
+html[data-route-transition="push-left"]::view-transition-image-pair(page-header),
+html[data-route-transition="push-right"]::view-transition-image-pair(page-header) {
+  overflow: hidden;
+  clip-path: inset(0);
+  isolation: isolate;
+}
+
+html[data-route-transition="push-left"]::view-transition-old(page-header) {
+  animation-name: route-transition-segment-out-left;
+}
+html[data-route-transition="push-left"]::view-transition-new(page-header) {
+  animation-name: route-transition-segment-in-left;
+}
+html[data-route-transition="push-right"]::view-transition-old(page-header) {
+  animation-name: route-transition-segment-out-right;
+}
+html[data-route-transition="push-right"]::view-transition-new(page-header) {
+  animation-name: route-transition-segment-in-right;
 }
 
 /* -- Which regions take part in which transition -- */
@@ -3545,13 +3977,15 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
 }
 
 @container g3-app-shell (width < 48rem) {
-  .tawny-shell > .g3-header {
+  .tawny-shell > .g3-header,
+  .auxiliary-cover > .g3-header {
     position: relative;
     z-index: 70;
     flex: 0 0 auto;
   }
 
-  .tawny-shell > .g3-body {
+  .tawny-shell > .g3-body,
+  .auxiliary-cover > .g3-body {
     position: relative;
     z-index: 1;
     min-height: 0;

@@ -2,19 +2,19 @@ use crate::{
     api::{get_comments_page, get_video_details, resolve_playback},
     app::Route,
     models::{
-        CaptionTrack, PlaybackProtocol, PlaybackSession, PlaybackSource, Video, VideoChapter,
-        VideoComment, VideoDetails, VideoPreviewFrames,
+        AudioTrackOption, CaptionTrack, PlaybackProtocol, PlaybackSession, PlaybackSource, Video,
+        VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames,
     },
     state::AppState,
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    Captions, Check, ChevronLeft, Clock, Heart, ListVideo, Maximize2, MessageSquare, Minimize2,
-    Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp,
-    User, Volume2, VolumeX, X,
+    Captions, Check, ChevronLeft, Clock, Heart, Languages, ListVideo, Maximize2, MessageSquare,
+    Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown,
+    ThumbsUp, User, Volume2, VolumeX, X,
 };
-use g3_route_transitions::animated_navigate;
-use g3_ui::{Badge, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
+use g3_route_transitions::{animated_go_back, animated_navigate};
+use g3_ui::{Badge, Body, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
 
 use super::VideoGrid;
 
@@ -206,6 +206,101 @@ fn set_player_speed(speed: f64) {
     });
 }
 
+/// Switch the live audio language.
+///
+/// The transport owns the decision - Shaka rebuilds its variant list around the
+/// chosen language - so this is a one-shot command rather than state Rust holds
+/// and replays. The reporter below sends the result back.
+fn set_player_audio_track(language: String) {
+    spawn(async move {
+        let script = format!(
+            r#"
+            const media = document.getElementById('tawny-player-media');
+            if (media && window.TawnyTransport?.setAudioTrack) {{
+                window.TawnyTransport.setAudioTrack(media, {language:?});
+            }}
+            dioxus.send(true);
+            "#
+        );
+        let mut eval = document::eval(&script);
+        let _ = eval.recv::<bool>().await;
+    });
+}
+
+/// Resolves once the route transition has finished and the page is idle.
+///
+/// Anything the watch route renders costs real main-thread time, and spending
+/// it while a transition is running is what starves that transition: the page
+/// slide runs on the compositor and keeps its frames, while the player's morph
+/// - which animates width and height, and so cannot - drops most of its own and
+/// arrives late, catching up in one jump. Chromium schedules this differently
+/// between builds, which is why the same page can look fine in one browser and
+/// snap in another. Rendering a beat later costs a late-arriving row of
+/// thumbnails and buys a transition that is smooth everywhere.
+///
+/// The related grid was the first thing held back here, but it was never the
+/// only one: the two closed sheets build their whole lists regardless, and the
+/// remote details land in the middle of the animation and re-render the body
+/// under it. See `VideoDetailInner` for what each of them waits on.
+const AFTER_ROUTE_TRANSITION_JS: &str = r#"
+const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+// Frames do not tick inside a view transition's update callback, but they do
+// once its animations are running, so this settles exactly when they end.
+let guard = 0;
+while (document.documentElement.dataset.routeTransition && guard < 120) {
+    guard += 1;
+    await frame();
+}
+await frame();
+dioxus.send(true);
+"#;
+
+/// Reports the transport's audio languages back to Rust.
+///
+/// Dubbed uploads carry a dozen or more, and which ones survive codec filtering
+/// is a decision only the transport has made by this point - so the list is read
+/// from it rather than from the extractor's track layout.
+const AUDIO_TRACK_REPORTER_JS: &str = r#"
+const key = Symbol.for('tawny.audio-track-reporter');
+window[key]?.dispose?.();
+
+const media = () => document.getElementById('tawny-player-media');
+let last = '';
+const send = () => {
+    const element = media();
+    if (!element || !window.TawnyTransport?.audioTrackState) return;
+    const state = window.TawnyTransport.audioTrackState(element);
+    // A single language is not a choice, so it is reported as none at all and
+    // the chip stays away.
+    const tracks = (state?.tracks || []).length > 1 ? state.tracks : [];
+    const payload = [
+        tracks.map((track) => [track.language, track.label]),
+        tracks.length ? (state.active || '') : '',
+    ];
+    const encoded = JSON.stringify(payload);
+    if (encoded === last) return;
+    last = encoded;
+    dioxus.send(payload);
+};
+
+// The list only exists once the manifest is parsed, and it changes again on a
+// quality or language switch.
+const timer = setInterval(send, 1000);
+const onChange = () => send();
+const element = media();
+element?.addEventListener('tawnyaudiotrackchange', onChange);
+element?.addEventListener('tawnytransportchange', onChange);
+element?.addEventListener('loadedmetadata', onChange);
+window[key] = {
+    dispose() {
+        clearInterval(timer);
+        element?.removeEventListener('tawnyaudiotrackchange', onChange);
+        element?.removeEventListener('tawnytransportchange', onChange);
+        element?.removeEventListener('loadedmetadata', onChange);
+    },
+};
+"#;
+
 fn persist_player_speed(mut app_state: AppState, is_short: bool) {
     spawn(async move {
         let mut eval = document::eval(
@@ -228,6 +323,8 @@ fn attach_player_session(
     playback_rate: f64,
     video_id: &str,
     prefer_sabr: bool,
+    audio_only: bool,
+    resume_seconds: u64,
 ) {
     let Ok(session) = serde_json::to_string(&session) else {
         return;
@@ -264,6 +361,8 @@ fn attach_player_session(
                     playbackRate: {playback_rate},
                     videoId,
                     serverUrl,
+                    audioOnly: {audio_only},
+                    startTime: {resume_seconds},
                     refreshUrl: new URL(refreshPath, `${{serverBase}}/`).href,
                 }});
                 window.__tawnyAttachEval = {{ phase: 'attached', hasMedia: true }};
@@ -280,6 +379,45 @@ fn attach_player_session(
         let _ = eval.recv::<bool>().await;
     });
 }
+
+/// Reports the media element's position back to Rust on a timer.
+///
+/// Each run replaces the previous registration outright: leaving the old timer
+/// and listeners in place leaked one set per video change, and a stale one would
+/// keep writing its own position over the video that replaced it.
+const PROGRESS_REPORTER_JS: &str = r#"
+const key = Symbol.for('tawny.progress-reporter');
+window[key]?.dispose?.();
+
+const media = () => document.getElementById('tawny-player-media');
+const send = (flush) => {
+    const element = media();
+    if (element && Number.isFinite(element.currentTime)) {
+        dioxus.send([Math.max(0, Math.floor(element.currentTime)), Boolean(flush)]);
+    }
+};
+
+const timer = setInterval(() => send(false), 5000);
+// The moments where losing the position would actually be felt.
+const onPause = () => send(true);
+const onHide = () => send(true);
+// pagehide is not reliable when a mobile browser is merely backgrounded;
+// visibility is, and it is the edge where a position is most often lost.
+const onVisibility = () => { if (document.visibilityState !== 'visible') send(true); };
+document.addEventListener('pause', onPause, true);
+document.addEventListener('visibilitychange', onVisibility);
+window.addEventListener('pagehide', onHide);
+window.addEventListener('beforeunload', onHide);
+window[key] = {
+    dispose() {
+        clearInterval(timer);
+        document.removeEventListener('pause', onPause, true);
+        document.removeEventListener('visibilitychange', onVisibility);
+        window.removeEventListener('pagehide', onHide);
+        window.removeEventListener('beforeunload', onHide);
+    },
+};
+"#;
 
 #[component]
 pub fn PersistentPlayer(expanded: bool) -> Element {
@@ -327,6 +465,62 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             failure_detail.set(String::new());
         }
     });
+    // Persist where playback has reached. Polled rather than driven by
+    // `timeupdate`, which fires several times a second and would drag a
+    // re-render along with it.
+    //
+    // Declared before the early return below: a hook that only runs on renders
+    // where a video happens to be active is a conditional hook, and it never
+    // registers. Tracking the signal here also means the effect re-runs when the
+    // video changes, which is what replaces the previous reporter.
+    let progress_state = app_state;
+    use_effect(move || {
+        let Some(playing_id) = (progress_state.active_video)().map(|video| video.id) else {
+            return;
+        };
+        spawn(async move {
+            let mut eval = document::eval(PROGRESS_REPORTER_JS);
+            let mut ticks: u32 = 0;
+            while let Ok((seconds, flush)) = eval.recv::<(u64, bool)>().await {
+                if !progress_state.record_progress(&playing_id, seconds) {
+                    continue;
+                }
+                ticks += 1;
+                // Local on every tick so the card updates as you watch; the
+                // server every third - about fifteen seconds - plus whenever
+                // the page says it is going away, the video changes, or
+                // playback stops.
+                if flush || ticks.is_multiple_of(3) {
+                    progress_state.flush_progress();
+                }
+            }
+        });
+    });
+
+    // Same shape as the progress reporter above, and declared before the same
+    // early return for the same reason: a hook that only runs when a video
+    // happens to be active never registers at all.
+    let mut audio_state = app_state;
+    use_effect(move || {
+        if (audio_state.active_video)().is_none() {
+            return;
+        }
+        spawn(async move {
+            let mut eval = document::eval(AUDIO_TRACK_REPORTER_JS);
+            while let Ok((tracks, active)) = eval.recv::<(Vec<(String, String)>, String)>().await {
+                audio_state.active_audio_tracks.set(
+                    tracks
+                        .into_iter()
+                        .map(|(language, label)| AudioTrackOption { language, label })
+                        .collect(),
+                );
+                audio_state
+                    .selected_audio_track
+                    .set((!active.is_empty()).then_some(active));
+            }
+        });
+    });
+
     let Some(video) = active_video else {
         return rsx! {};
     };
@@ -383,6 +577,18 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let current_speed = app_state.settings().speed_for(is_short);
     let session_to_attach = playback_session.clone();
     let attach_video_id = video.id.clone();
+    // Per-video preference, read here so a change re-attaches the transport with
+    // (or without) the video stream rather than only hiding the picture.
+    let attach_audio_only = video.audio_only;
+    // Resume where this video was left, unless it already ran to the end - then
+    // starting over is what replaying it means.
+    let attach_resume_seconds = if video.watched {
+        0
+    } else {
+        video.progress_seconds
+    };
+    let audio_only_active = video.audio_only;
+    let audio_only_video_id = video.id.clone();
     let captions_to_sync = app_state.active_captions;
     let selected_caption_to_sync = app_state.selected_caption;
     let captions_enabled_to_sync = app_state.captions_enabled;
@@ -406,7 +612,16 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let caption_tracks_to_render = (app_state.active_captions)();
     let mut chapters_sheet = app_state.chapters_sheet_open;
     let open_video_id = video.id.clone();
-    let player_key = format!("{}-{}", video.id, playback_attempt());
+    // The audio-only choice is baked into the manifest the transport builds, so
+    // it only takes effect on attach. Keying the element on it forces a remount
+    // and re-attach; without it the toggle changed state while the already-
+    // attached video stream kept playing.
+    let player_key = format!(
+        "{}-{}-{}",
+        video.id,
+        playback_attempt(),
+        if video.audio_only { "audio" } else { "av" }
+    );
     let auto_landscape = app_state.settings().auto_landscape_fullscreen;
     let playback_title = video.title.clone();
 
@@ -414,9 +629,16 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         div { class: if expanded { "persistent-player expanded" } else { "persistent-player mini" },
             section {
                 id: "tawny-player",
-                class: "persistent-player-stage",
+                // Dropping the video AdaptationSets covers the adaptive path, but a
+                // progressive or HLS source has no separable video track to leave
+                // out. Covering the surface with the artwork makes "audio only"
+                // mean the same thing whichever transport ends up being used.
+                class: if video.audio_only { "persistent-player-stage audio-only" } else { "persistent-player-stage" },
                 "data-video-id": "{video.id}",
                 "data-thumbnail": "{video.thumbnail_url}",
+                // Feeds the audio-only artwork above; a CSS rule cannot reach the
+                // thumbnail on its own.
+                style: "--player-artwork: url('{video.thumbnail_url}');",
                 "data-auto-landscape": auto_landscape.to_string(),
                 if direct_stream {
                     video {
@@ -433,6 +655,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     current_speed,
                                     &attach_video_id,
                                     prefer_sabr,
+                                    attach_audio_only,
+                                    attach_resume_seconds,
                                 );
                             }
                         },
@@ -541,6 +765,20 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 }
                             }
                             div { class: "player-options-section",
+                                strong { "Audio only" }
+                                div { class: "player-option-grid",
+                                    button {
+                                        r#type: "button",
+                                        class: if audio_only_active { "player-option-button selected" } else { "player-option-button" },
+                                        onclick: move |_| {
+                                            let id = audio_only_video_id.clone();
+                                            app_state.set_audio_only(&id, !audio_only_active);
+                                        },
+                                        if audio_only_active { "On" } else { "Off" }
+                                    }
+                                }
+                            }
+                            div { class: "player-options-section",
                                 strong { "Quality" }
                                 div { class: "player-option-grid", "data-player-quality-options": "",
                                     button { r#type: "button", class: "player-option-button selected", "Auto" }
@@ -596,7 +834,12 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     tabindex: "-1",
                                     aria_hidden: "true",
                                     "data-player-minimize": "",
-                                    onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
+                                    // Minimizing dismisses the watch sheet, so it has to pop
+                                    // history rather than push Feed: pushing sent anyone who
+                                    // opened the video from Subscriptions or a playlist to the
+                                    // wrong page, and left the watch route ahead in history.
+                                    // Feed is only the deep-link fallback.
+                                    onclick: move |_| { spawn(async move { animated_go_back(Route::Feed {}).await; }); },
                                 }
                                 button {
                                     r#type: "button",
@@ -878,7 +1121,31 @@ fn VideoDetailInner(id: String) -> Element {
     let mut description_expanded = use_signal(|| false);
     let mut chapters_open = app_state.chapters_sheet_open;
     let mut captions_open = use_signal(|| false);
+    let mut audio_open = use_signal(|| false);
+    let audio_tracks = app_state.active_audio_tracks;
+    let selected_audio = app_state.selected_audio_track;
     let mut comments_open = use_signal(|| false);
+    // Everything this route can put off until the sheet has landed - see
+    // AFTER_ROUTE_TRANSITION_JS.
+    //
+    // The player is the only thing in a cover transition whose two snapshots
+    // differ in size, so its `::view-transition-group` animates width and
+    // height while every other group is a pure translate. Width and height are
+    // main-thread work: the sheet glides on the compositor whatever happens,
+    // and the player alone starves on any long task this route runs while the
+    // animation is in flight - which is why opening stutters and minimizing,
+    // landing on a page that is already built, never does.
+    //
+    // So nothing renders here that the first 0.6s does not need.
+    let mut transition_settled = use_signal(|| false);
+    use_effect(move || {
+        spawn(async move {
+            let mut eval = document::eval(AFTER_ROUTE_TRANSITION_JS);
+            if eval.recv::<bool>().await.is_ok() {
+                transition_settled.set(true);
+            }
+        });
+    });
     let mut comments = use_signal(Vec::<VideoComment>::new);
     let mut comments_next_page = use_signal(|| None::<String>);
     let mut comments_initialized = use_signal(|| false);
@@ -898,14 +1165,30 @@ fn VideoDetailInner(id: String) -> Element {
             async move { get_video_details(video_id).await }
         })
     };
-    let remote_details = details_resource
-        .read()
-        .as_ref()
-        .and_then(|result| result.as_ref().ok())
-        .cloned();
+    let library = app_state.library();
+    let cached_video = library.videos.iter().find(|video| video.id == id).cloned();
+    // Swapping the cached copy for the remote one re-renders the whole details
+    // body, and opening from the mini player is exactly the case where the
+    // cached copy is already correct. Waiting costs nothing visible: the page
+    // is showing the right video throughout, and 0.6s later it quietly gets the
+    // remote refinements. With nothing cached there is a loading state on
+    // screen instead, and holding *that* back would be worse than the stutter.
+    let hold_remote_details = cached_video.is_some() && !transition_settled();
+    let remote_details = if hold_remote_details {
+        None
+    } else {
+        details_resource
+            .read()
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .cloned()
+    };
     let details_to_cache = details_resource.clone();
     use_effect(move || {
-        if details_cached() {
+        // This one always waits. It writes the library, which every subscriber
+        // on this page reads, so landing it mid-morph re-renders the details
+        // body even when `hold_remote_details` kept the swap itself back.
+        if !transition_settled() || details_cached() {
             return;
         }
         let details = details_to_cache
@@ -922,8 +1205,6 @@ fn VideoDetailInner(id: String) -> Element {
         }
     });
 
-    let library = app_state.library();
-    let cached_video = library.videos.iter().find(|video| video.id == id).cloned();
     let cached_related = library
         .videos
         .iter()
@@ -940,27 +1221,40 @@ fn VideoDetailInner(id: String) -> Element {
     let player_library = app_state.library;
     let player_video_id = id.clone();
     use_effect(move || {
-        let remote = player_details_resource
-            .read()
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .cloned();
-        let details = remote.or_else(|| {
+        let local = {
             let library = player_library();
-            let video = library
+            library
                 .videos
                 .iter()
                 .find(|video| video.id == player_video_id)
-                .cloned()?;
-            let related = library
-                .videos
-                .iter()
-                .filter(|candidate| candidate.id != player_video_id)
-                .take(8)
                 .cloned()
-                .collect();
-            Some(local_details(video, related))
-        });
+                .map(|video| {
+                    let related = library
+                        .videos
+                        .iter()
+                        .filter(|candidate| candidate.id != player_video_id)
+                        .take(8)
+                        .cloned()
+                        .collect();
+                    local_details(video, related)
+                })
+        };
+        // `set_player_metadata` re-renders the player - its caption `<track>`
+        // children come from here - and during a cover transition that player
+        // is the element the morph is painting live. So the remote copy waits
+        // out the animation whenever the library already answered, on the same
+        // terms as `hold_remote_details`. Nothing cached means nothing is
+        // playing yet, and starting playback is worth more than a smooth 0.6s.
+        let details = if local.is_some() && !transition_settled() {
+            local
+        } else {
+            player_details_resource
+                .read()
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned()
+                .or(local)
+        };
         if let Some(details) = details {
             let video = &details.video;
             if app_state
@@ -989,6 +1283,7 @@ fn VideoDetailInner(id: String) -> Element {
             // new DOM when the snapshot is taken, and details arrive later than
             // that. Without it the route committed first and the animation then
             // played over the page it had already swapped to.
+            Body { padding: false,
             main { class: "page player-loading route-transition-cover",
                     div { class: "empty-state",
                         if failed {
@@ -997,6 +1292,7 @@ fn VideoDetailInner(id: String) -> Element {
                             div { class: "loading-orbit" }
                         }
                     }
+            }
             }
         };
     };
@@ -1032,6 +1328,13 @@ fn VideoDetailInner(id: String) -> Element {
     let caption_tracks = details.captions.clone();
     let chapters = details.chapters.clone();
     let comments_disabled = details.comments.disabled;
+    // The seeding effect waits out the transition, so until it has run the
+    // count comes from the details themselves rather than reading 0.
+    let comments_count = if comments_initialized() {
+        comments().len()
+    } else {
+        details.comments.comments.len()
+    };
     let details_remote_available = details.remote_available;
     let description_class = if description_expanded() {
         "video-description expanded"
@@ -1042,6 +1345,7 @@ fn VideoDetailInner(id: String) -> Element {
     rsx! {
         // The sheet itself: this is what slides up over the shell and back
         // down off it, so it is what carries the cover snapshot.
+        Body { padding: false,
         main { class: "player-content player-detail-content route-transition-cover",
                     section { class: "player-details page",
                         h1 { "{video.title}" }
@@ -1050,7 +1354,7 @@ fn VideoDetailInner(id: String) -> Element {
                         // Captions and chapters are chips that open their own
                         // sheet, so the page is not padded out with two panels
                         // that are mostly idle.
-                        if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() {
+                        if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() || audio_tracks().len() > 1 {
                             div { class: "video-engagement",
                                 if details.like_count > 0 {
                                     span { ThumbsUp { size: 15 } "{compact_number(details.like_count)}" }
@@ -1064,6 +1368,16 @@ fn VideoDetailInner(id: String) -> Element {
                                         onclick: move |_| captions_open.set(true),
                                         Captions { size: 15 }
                                         "{caption_tracks.len()} captions"
+                                    }
+                                }
+                                // Only a dubbed upload offers a choice here, and only
+                                // then is the chip worth a slot in this row.
+                                if audio_tracks().len() > 1 {
+                                    button {
+                                        class: "engagement-chip",
+                                        onclick: move |_| audio_open.set(true),
+                                        Languages { size: 15 }
+                                        "{audio_track_label(&audio_tracks(), &selected_audio())}"
                                     }
                                 }
                                 if !chapters.is_empty() {
@@ -1167,7 +1481,7 @@ fn VideoDetailInner(id: String) -> Element {
                             if comments_disabled {
                                 "Comments are disabled"
                             } else {
-                                "Comments · {comments().len()}"
+                                "Comments · {comments_count}"
                             }
                         }
 
@@ -1177,7 +1491,9 @@ fn VideoDetailInner(id: String) -> Element {
                                 h2 { if details.remote_available { "Related videos" } else { "From your library" } }
                             }
                         }
-                        VideoGrid { videos: related }
+                        if transition_settled() {
+                            VideoGrid { videos: related }
+                        }
                     }
         }
 
@@ -1186,7 +1502,10 @@ fn VideoDetailInner(id: String) -> Element {
         Sheet { is_open: chapters_open, class: "player-sheet",
             p { class: "sheet-label", "Chapters" }
             div { class: "chapter-sheet-list",
-                for chapter in chapters.clone() {
+                // A closed sheet still renders its list. This one cannot be
+                // open while the route that owns it is animating in, so it is
+                // pure cost there - and a long upload has a hundred rows.
+                for chapter in if transition_settled() { chapters.clone() } else { Vec::new() } {
                     {
                         let start_seconds = chapter.start_seconds;
                         rsx! {
@@ -1214,11 +1533,24 @@ fn VideoDetailInner(id: String) -> Element {
             }
         }
 
+        Sheet { is_open: audio_open, class: "player-sheet",
+            p { class: "sheet-label", "Audio track" }
+            AudioTrackPicker {
+                tracks: audio_tracks(),
+                selected: selected_audio(),
+            }
+        }
+
         // No heading and no running count: the button that opened this already
         // said "Comments", so the sheet is just the list. Load-more lives at the
         // end of the scrolled list rather than pinned above it.
         Sheet { is_open: comments_open, class: "player-sheet comments-sheet",
-            if comments().is_empty() {
+            // Same as the chapter list, and the heaviest of the two: twenty
+            // cards, each with an avatar, built while the player is trying to
+            // grow.
+            if !transition_settled() {
+                p { class: "detail-muted", "Loading comments…" }
+            } else if comments().is_empty() {
                 p { class: "detail-muted",
                     if comments_initialized() && !details.comments.remote_available {
                         "Comments need a connected video source."
@@ -1258,6 +1590,38 @@ fn VideoDetailInner(id: String) -> Element {
                             if comments_loading() { "Loading…" } else { "Load more comments" }
                         }
                     }
+                }
+            }
+        }
+        }
+    }
+}
+
+/// What the chip says: the language you are hearing, not a count.
+///
+/// A count would be the wrong fact here - the question a dubbed video raises is
+/// "which language is this?", and the answer is the thing to show.
+fn audio_track_label(tracks: &[AudioTrackOption], selected: &Option<String>) -> String {
+    selected
+        .as_ref()
+        .and_then(|language| tracks.iter().find(|track| &track.language == language))
+        .map(|track| track.label.clone())
+        .unwrap_or_else(|| "Audio".to_string())
+}
+
+#[component]
+fn AudioTrackPicker(tracks: Vec<AudioTrackOption>, selected: Option<String>) -> Element {
+    rsx! {
+        div { class: "caption-strip",
+            for track in tracks {
+                button {
+                    key: "{track.language}",
+                    class: if selected.as_deref() == Some(track.language.as_str()) { "caption-chip active" } else { "caption-chip" },
+                    onclick: {
+                        let language = track.language.clone();
+                        move |_| set_player_audio_track(language.clone())
+                    },
+                    "{track.label}"
                 }
             }
         }

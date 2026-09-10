@@ -16,6 +16,6 @@ pub use overlays::AppOverlays;
 pub use player::{PersistentPlayer, VideoDetail};
 pub use playlists::{PlaylistDetail, Playlists};
 pub use settings::SettingsPage;
-pub use shell::AppShell;
+pub use shell::{AppShell, PageHeader};
 pub use subscriptions::Subscriptions;
 pub use video_card::VideoGrid;

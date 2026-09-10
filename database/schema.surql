@@ -5,6 +5,7 @@ DEFINE FIELD IF NOT EXISTS handle ON channel TYPE string;
 DEFINE FIELD IF NOT EXISTS avatar_url ON channel TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS subscriber_count ON channel TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS subscribed ON channel TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS subscription_content ON channel TYPE string DEFAULT "all";
 DEFINE FIELD IF NOT EXISTS description ON channel TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS banner_url ON channel TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS last_polled_at ON channel TYPE option<datetime>;
@@ -28,6 +29,7 @@ DEFINE FIELD IF NOT EXISTS is_live ON video TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS is_short ON video TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS progress_seconds ON video TYPE int DEFAULT 0;
 DEFINE FIELD IF NOT EXISTS watched ON video TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS audio_only ON video TYPE bool DEFAULT false;
 DEFINE INDEX IF NOT EXISTS video_external_id_idx ON video FIELDS video_id UNIQUE;
 DEFINE INDEX IF NOT EXISTS video_channel_published_idx ON video FIELDS channel_id, published_sort;
 
@@ -72,3 +74,10 @@ DEFINE FIELD IF NOT EXISTS cache_revision ON library_state TYPE int DEFAULT 0;
 DEFINE FIELD IF NOT EXISTS queue_json ON library_state TYPE string DEFAULT "[]";
 DEFINE FIELD IF NOT EXISTS history_json ON library_state TYPE string DEFAULT "[]";
 DEFINE FIELD IF NOT EXISTS updated_at ON library_state TYPE datetime DEFAULT time::now();
+
+-- Backfill for channels stored before subscription_content existed. A DEFINE
+-- FIELD DEFAULT only applies to writes, so rows written earlier keep NONE and
+-- would fail to deserialize into a plain string. Idempotent: once every row has
+-- a value this matches nothing.
+UPDATE channel SET subscription_content = "all" WHERE subscription_content = NONE;
+UPDATE video SET audio_only = false WHERE audio_only = NONE;

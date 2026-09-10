@@ -1,8 +1,9 @@
 use crate::models::{
     CaptionTrack, Channel, ChannelDetails, ChannelMediaPage, ChannelMediaTab, CommentsPage,
-    FeedRefreshResult, HistoryEntry, LibrarySnapshot, PlaybackByteRange, PlaybackProtocol,
-    PlaybackSession, PlaybackSource, PlaybackTrack, PlaybackTrackKind, Playlist, SearchResults,
-    SubscriptionGroup, Video, VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames,
+    FeedRefreshResult, HistoryEntry, LibrarySnapshot, LibraryUserState, PlaybackByteRange,
+    PlaybackProtocol, PlaybackSession, PlaybackSource, PlaybackTrack, PlaybackTrackKind, Playlist,
+    SearchResults, SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoComment,
+    VideoDetails, VideoPreviewFrames,
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -342,6 +343,7 @@ fn ytdlp_flat_playlist_videos(
             watched: false,
             is_live: false,
             is_short: true,
+            audio_only: false,
         })
         .collect()
 }
@@ -374,6 +376,11 @@ struct DbChannel {
     avatar_url: Option<String>,
     subscriber_count: String,
     subscribed: bool,
+    /// Optional because rows written before this column existed read back as
+    /// NONE, and `SurrealValue` does not honour `#[serde(default)]`. The
+    /// backfill in schema.surql fills them in, but a row can still be read
+    /// during the same startup that adds the column.
+    subscription_content: Option<String>,
     description: String,
     banner_url: Option<String>,
 }
@@ -405,6 +412,10 @@ struct DbVideo {
     is_short: bool,
     progress_seconds: i64,
     watched: bool,
+    /// Optional for the same reason as `subscription_content`: rows written
+    /// before the column existed read back as NONE, and `SurrealValue` does not
+    /// honour `#[serde(default)]`.
+    audio_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
@@ -444,6 +455,9 @@ impl From<DbChannel> for Channel {
             subscribed: value.subscribed,
             description: value.description,
             banner_url: value.banner_url,
+            subscription_content: SubscriptionContent::from_storage(
+                value.subscription_content.as_deref().unwrap_or_default(),
+            ),
         }
     }
 }
@@ -463,6 +477,7 @@ impl From<DbVideo> for Video {
             watched: value.watched,
             is_live: value.is_live,
             is_short: value.is_short,
+            audio_only: value.audio_only.unwrap_or(false),
         }
     }
 }
@@ -651,14 +666,14 @@ impl AppServerState {
         let channels: Vec<DbChannel> = self
             .db
             .query(
-                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, description, banner_url FROM channel ORDER BY name",
+                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel ORDER BY name",
             )
             .await?
             .take(0)?;
         let videos: Vec<DbVideo> = self
             .db
             .query(
-                "SELECT video_id, title, channel_id, channel_name, thumbnail_url, published_at, published_sort, duration_seconds, view_count, is_live, is_short, progress_seconds, watched FROM video ORDER BY published_sort DESC",
+                "SELECT video_id, title, channel_id, channel_name, thumbnail_url, published_at, published_sort, duration_seconds, view_count, is_live, is_short, progress_seconds, watched, audio_only FROM video ORDER BY published_sort DESC",
             )
             .await?
             .take(0)?;
@@ -818,6 +833,145 @@ impl AppServerState {
         }
 
         self.library_snapshot().await
+    }
+
+    /// Apply the client-owned half of the library.
+    ///
+    /// The counterpart to [`Self::sync_library`] for the common case: a single
+    /// mutation such as marking a video watched. It touches only rows the client
+    /// can actually change, where the full snapshot path rewrote every cached
+    /// channel and video on every keystroke-sized edit.
+    pub async fn apply_user_state(&self, user: LibraryUserState) -> Result<u64> {
+        let guard = self.sync_lock.lock().await;
+        let server_revision = self.library_revision().await?;
+        if user.cache_revision <= server_revision {
+            return Ok(server_revision);
+        }
+
+        let prior_subscriptions: Vec<DbSubscriptionState> = self
+            .db
+            .query("SELECT channel_id, subscribed FROM channel")
+            .await?
+            .take(0)?;
+        let prior_subscriptions = prior_subscriptions
+            .into_iter()
+            .map(|channel| (channel.channel_id, channel.subscribed))
+            .collect::<HashMap<_, _>>();
+
+        // Only the two columns the client owns. Metadata stays whatever the
+        // extractor last wrote.
+        let mut changed_ids = Vec::new();
+        for subscription in &user.subscriptions {
+            let was_subscribed = prior_subscriptions
+                .get(&subscription.channel_id)
+                .copied()
+                .unwrap_or(false);
+            if was_subscribed != subscription.subscribed {
+                changed_ids.push(subscription.channel_id.clone());
+            }
+            self.db
+                .query(
+                    r#"UPDATE channel SET
+                        subscribed = $subscribed,
+                        subscription_content = $subscription_content
+                    WHERE channel_id = $channel_id"#,
+                )
+                .bind(("channel_id", subscription.channel_id.clone()))
+                .bind(("subscribed", subscription.subscribed))
+                .bind((
+                    "subscription_content",
+                    subscription.content.as_storage().to_string(),
+                ))
+                .await?
+                .check()?;
+        }
+
+        for progress in &user.progress {
+            self.db
+                .query(
+                    r#"UPDATE video SET
+                        watched = $watched,
+                        progress_seconds = $progress_seconds,
+                        audio_only = $audio_only
+                    WHERE video_id = $video_id"#,
+                )
+                .bind(("video_id", progress.video_id.clone()))
+                .bind(("watched", progress.watched))
+                .bind(("progress_seconds", progress.progress_seconds as i64))
+                .bind(("audio_only", progress.audio_only))
+                .await?
+                .check()?;
+        }
+
+        for playlist in &user.playlists {
+            self.upsert_playlist(playlist).await?;
+        }
+        let playlist_ids = user
+            .playlists
+            .iter()
+            .map(|playlist| playlist.id.clone())
+            .collect::<Vec<_>>();
+        self.db
+            .query("DELETE playlist WHERE playlist_id NOT IN $playlist_ids")
+            .bind(("playlist_ids", playlist_ids))
+            .await?
+            .check()?;
+
+        for group in &user.subscription_groups {
+            self.upsert_subscription_group(group).await?;
+        }
+        let group_ids = user
+            .subscription_groups
+            .iter()
+            .map(|group| group.id.clone())
+            .collect::<Vec<_>>();
+        self.db
+            .query("DELETE subscription_group WHERE group_id NOT IN $group_ids")
+            .bind(("group_ids", group_ids))
+            .await?
+            .check()?;
+
+        self.db
+            .query(
+                r#"UPSERT library_state:primary SET
+                    cache_revision = $cache_revision,
+                    queue_json = $queue_json,
+                    history_json = $history_json,
+                    updated_at = time::now()"#,
+            )
+            .bind(("cache_revision", user.cache_revision as i64))
+            .bind(("queue_json", serde_json::to_string(&user.queue)?))
+            .bind(("history_json", serde_json::to_string(&user.history)?))
+            .await?
+            .check()?;
+
+        drop(guard);
+
+        // Subscribing still has to kick off WebSub and a first feed fetch, and
+        // that side of it needs the full channel records.
+        if !changed_ids.is_empty() {
+            let changed_channels: Vec<DbChannel> = self
+                .db
+                .query("SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel WHERE channel_id IN $ids")
+                .bind(("ids", changed_ids))
+                .await?
+                .take(0)?;
+            let changed_channels = changed_channels
+                .into_iter()
+                .map(Channel::from)
+                .filter(|channel| {
+                    channel.id.starts_with("UC") && !channel.id.starts_with("UC-tawny")
+                })
+                .collect::<Vec<_>>();
+            if !changed_channels.is_empty() {
+                let state = self.clone();
+                tokio::spawn(async move {
+                    state.process_subscription_changes(changed_channels).await;
+                });
+            }
+        }
+
+        Ok(user.cache_revision)
     }
 
     async fn process_subscription_changes(&self, changed_channels: Vec<Channel>) {
@@ -1345,7 +1499,7 @@ impl AppServerState {
         let existing: Vec<DbChannel> = self
             .db
             .query(
-                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, description, banner_url FROM channel LIMIT 1",
+                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel LIMIT 1",
             )
             .await?
             .take(0)?;
@@ -1391,6 +1545,7 @@ impl AppServerState {
                     avatar_url = $avatar_url,
                     subscriber_count = $subscriber_count,
                     subscribed = $subscribed,
+                    subscription_content = $subscription_content,
                     description = $description,
                     banner_url = $banner_url"#,
             )
@@ -1401,6 +1556,10 @@ impl AppServerState {
             .bind(("avatar_url", channel.avatar_url.clone()))
             .bind(("subscriber_count", channel.subscriber_count.clone()))
             .bind(("subscribed", channel.subscribed))
+            .bind((
+                "subscription_content",
+                channel.subscription_content.as_storage(),
+            ))
             .bind(("description", channel.description.clone()))
             .bind(("banner_url", channel.banner_url.clone()))
             .await?
@@ -1425,7 +1584,8 @@ impl AppServerState {
                     is_live = $is_live,
                     is_short = $is_short,
                     progress_seconds = $progress_seconds,
-                    watched = $watched"#,
+                    watched = $watched,
+                    audio_only = $audio_only"#,
             )
             .bind(("record_key", video.id.clone()))
             .bind(("video_id", video.id.clone()))
@@ -1441,6 +1601,7 @@ impl AppServerState {
             .bind(("is_short", video.is_short))
             .bind(("progress_seconds", video.progress_seconds as i64))
             .bind(("watched", video.watched))
+            .bind(("audio_only", video.audio_only))
             .await?
             .check()?;
         Ok(())
@@ -1531,7 +1692,8 @@ impl AppServerState {
                     subscriber_count = $subscriber_count,
                     description = $description,
                     banner_url = $banner_url,
-                    subscribed = $subscribed"#,
+                    subscribed = $subscribed,
+                    subscription_content = $subscription_content"#,
             )
             .bind(("record_key", channel.id.clone()))
             .bind(("channel_id", channel.id.clone()))
@@ -1542,6 +1704,10 @@ impl AppServerState {
             .bind(("description", merged.description))
             .bind(("banner_url", merged.banner_url))
             .bind(("subscribed", merged.subscribed))
+            .bind((
+                "subscription_content",
+                merged.subscription_content.as_storage(),
+            ))
             .await?
             .check()?;
         Ok(())
@@ -1810,6 +1976,7 @@ impl AppServerState {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             };
             let video = self.enrich_video_player(video).await;
             let published = video.published_at.clone();
@@ -2244,6 +2411,7 @@ impl AppServerState {
         if let Ok(videos) = &videos_result {
             let mut enriched_channel = rusty_channel_to_channel(videos, channel.subscribed);
             enriched_channel.subscribed = true;
+            enriched_channel.subscription_content = channel.subscription_content;
             self.upsert_channel(&enriched_channel).await?;
             for item in &videos.content.items {
                 let video = rusty_video_item_to_video(
@@ -2303,7 +2471,7 @@ impl AppServerState {
         let channels: Vec<DbChannel> = self
             .db
             .query(
-                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, description, banner_url, last_polled_at FROM channel WHERE subscribed = true ORDER BY last_polled_at ASC",
+                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url, last_polled_at FROM channel WHERE subscribed = true ORDER BY last_polled_at ASC",
             )
             .await?
             .take(0)?;
@@ -2898,6 +3066,7 @@ fn rusty_channel_to_channel<T>(channel: &RustyChannel<T>, subscribed: bool) -> C
         subscribed,
         description: channel.description.clone(),
         banner_url: best_thumbnail(&channel.banner),
+        subscription_content: SubscriptionContent::default(),
     }
 }
 
@@ -2919,6 +3088,7 @@ fn rusty_channel_item_to_channel(item: &RustyChannelItem) -> Channel {
         subscribed: false,
         description: item.short_description.clone(),
         banner_url: None,
+        subscription_content: SubscriptionContent::default(),
     }
 }
 
@@ -2974,6 +3144,7 @@ fn rusty_video_item_to_video(
         watched: false,
         is_live: item.is_live,
         is_short: force_short || item.is_short,
+        audio_only: false,
     }
 }
 
@@ -3624,6 +3795,10 @@ fn normalize_rusty_video_details(
             .as_ref()
             .map(|channel| channel.description.clone())
             .unwrap_or_default(),
+        subscription_content: fallback_channel
+            .as_ref()
+            .map(|channel| channel.subscription_content)
+            .unwrap_or_default(),
         banner_url: fallback_channel.and_then(|channel| channel.banner_url),
     };
     let video = Video {
@@ -3660,6 +3835,7 @@ fn normalize_rusty_video_details(
                             .any(|stream| stream.height > stream.width)
                 })
             }),
+        audio_only: false,
     };
     let captions = player
         .as_ref()
@@ -3933,6 +4109,7 @@ fn feed_entry_video(entry: &FeedEntry, channel: &Channel) -> Video {
         watched: false,
         is_live: false,
         is_short: false,
+        audio_only: false,
     }
 }
 

@@ -373,23 +373,53 @@ const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduc
 // There is deliberately no requestAnimationFrame fallback: rendering is paused
 // inside a view transition's update callback, so frames do not tick and it
 // could never fire.
+// Resolving on the *first* mutation was too eager for anything but a trivial
+// page. A heavy route renders in several batches, so the transition captured a
+// half-built page and then had to share the main thread with the rest of the
+// render - measured on the watch route as two long tasks, 87ms and 80ms, the
+// second landing after the animation had already started. Anything the browser
+// cannot run on the compositor stalls there: a `view-transition-group` whose
+// two snapshots differ in size animates width and height, so it starves while a
+// sibling`s pure translate glides on regardless. That is the "the page slides
+// but the thing inside it teleports" bug.
+//
+// So: wait for quiet, not for first contact. Time spent here is spent with the
+// old frame still held, which reads as the tap taking effect a moment later -
+// far cheaper than an animation that visibly drops half its frames.
+const DX_ROUTE_TRANSITION_QUIET_MS = 48;
+const DX_ROUTE_TRANSITION_FIRST_CONTACT_MS = 120;
+const DX_ROUTE_TRANSITION_CEILING_MS = 400;
 const dxRouteTransitionRouteRendered = () => new Promise((resolve) => {
     let settled = false;
+    let quiet = 0;
     const finish = () => {
         if (settled) return;
         settled = true;
+        window.clearTimeout(quiet);
+        window.clearTimeout(firstContact);
         window.clearTimeout(ceiling);
         observer?.disconnect?.();
         resolve();
     };
-    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => finish());
+    // Each batch of mutations pushes the settle back, up to the ceiling.
+    const restartQuietWindow = () => {
+        window.clearTimeout(firstContact);
+        window.clearTimeout(quiet);
+        quiet = window.setTimeout(finish, DX_ROUTE_TRANSITION_QUIET_MS);
+    };
+    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(restartQuietWindow);
     // Only structural changes: an attribute tick from a clock or a progress bar
     // is not the route arriving.
     observer?.observe?.(document.body ?? document.documentElement, {
         childList: true,
         subtree: true,
     });
-    const ceiling = window.setTimeout(() => finish(), 120);
+    // A route that renders something indistinguishable never mutates at all, and
+    // must not be made to wait for the ceiling to notice.
+    const firstContact = window.setTimeout(finish, DX_ROUTE_TRANSITION_FIRST_CONTACT_MS);
+    // Still bounded: a route that never stops mutating - a spinner, a running
+    // clock - must not hold the old frame indefinitely.
+    const ceiling = window.setTimeout(() => finish(), DX_ROUTE_TRANSITION_CEILING_MS);
     if (!observer) finish();
 });
 
@@ -784,6 +814,56 @@ mod tests {
         );
         assert!(flush < capture, "the flush must come before the snapshot");
     }
+    /// Animations start when the update callback resolves, so it must resolve on
+    /// a page that has stopped changing. Resolving on the first mutation left the
+    /// rest of a heavy render to run *during* the animation, which starves
+    /// anything the compositor cannot own - notably a `view-transition-group`
+    /// whose two snapshots differ in size and so animates width and height.
+    #[test]
+    fn the_update_callback_waits_for_the_route_to_stop_mutating() {
+        // A debounce, not a one-shot: every batch pushes the settle back.
+        assert!(
+            VIEW_TRANSITION_NAVIGATE.contains("new MutationObserver(restartQuietWindow)"),
+            "each batch of mutations must restart the quiet window",
+        );
+        assert!(VIEW_TRANSITION_NAVIGATE.contains("quiet = window.setTimeout(finish, DX_ROUTE_TRANSITION_QUIET_MS)"),);
+        // A route that renders something indistinguishable never mutates, and must
+        // not be made to wait out the ceiling.
+        assert!(
+            VIEW_TRANSITION_NAVIGATE
+                .contains("window.setTimeout(finish, DX_ROUTE_TRANSITION_FIRST_CONTACT_MS)"),
+            "a route that never mutates still settles promptly",
+        );
+        // And a route that never stops mutating must not hold the old frame.
+        assert!(
+            VIEW_TRANSITION_NAVIGATE
+                .contains("window.setTimeout(() => finish(), DX_ROUTE_TRANSITION_CEILING_MS)"),
+            "the wait stays bounded",
+        );
+        let quiet = extract_ms("DX_ROUTE_TRANSITION_QUIET_MS");
+        let first_contact = extract_ms("DX_ROUTE_TRANSITION_FIRST_CONTACT_MS");
+        let ceiling = extract_ms("DX_ROUTE_TRANSITION_CEILING_MS");
+        assert!(
+            quiet < first_contact && first_contact < ceiling,
+            "quiet {quiet} < first contact {first_contact} < ceiling {ceiling}",
+        );
+    }
+
+    fn extract_ms(name: &str) -> u32 {
+        let declaration = format!("const {name} = ");
+        let start = VIEW_TRANSITION_NAVIGATE
+            .find(&declaration)
+            .unwrap_or_else(|| panic!("{name} is declared"))
+            + declaration.len();
+        VIEW_TRANSITION_NAVIGATE[start..]
+            .split(';')
+            .next()
+            .expect("the declaration ends")
+            .trim()
+            .parse()
+            .expect("a whole number of milliseconds")
+    }
+
     #[test]
     fn view_transition_update_waits_for_native_route_commit_without_blocking_on_raf() {
         assert!(VIEW_TRANSITION_NAVIGATE.contains("document.startViewTransition(async () =>"),);

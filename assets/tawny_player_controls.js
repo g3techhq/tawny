@@ -150,19 +150,28 @@
       }, delay);
     }
 
-    function showControls(permanent) {
+    // Long enough to read the bar and reach for a control, short enough that the
+    // picture is not left with furniture on it.
+    const CONTROLS_HIDE_MS = 2000;
+    // The pointer has left the player entirely, so there is nothing left to
+    // aim at and no reason to wait the full dwell.
+    const CONTROLS_LEAVE_HIDE_MS = 450;
+
+    function showControls(permanent, delay) {
       controls.classList.add("controls-visible");
       root.classList.add("player-controls-visible");
       if (hideTimer) clearTimeout(hideTimer);
-      if (!permanent && !video.paused && optionsMenu && !optionsMenu.hidden) return;
-      if (!permanent && !video.paused) {
-        hideTimer = setTimeout(() => {
-          if (!scrubbing && (optionsMenu?.hidden ?? true)) {
-            controls.classList.remove("controls-visible");
-            root.classList.remove("player-controls-visible");
-          }
-        }, 2800);
-      }
+      hideTimer = null;
+      if (permanent || video.paused) return;
+      // An open menu holds the controls up - but only while it is open. Closing
+      // it has to re-arm this, or the bar stays for the rest of the video.
+      if (optionsMenu && !optionsMenu.hidden) return;
+      hideTimer = setTimeout(() => {
+        if (!scrubbing && (optionsMenu?.hidden ?? true)) {
+          controls.classList.remove("controls-visible");
+          root.classList.remove("player-controls-visible");
+        }
+      }, delay ?? CONTROLS_HIDE_MS);
     }
 
     function scheduleHide() {
@@ -397,6 +406,8 @@
       if (!optionsMenu || optionsMenu.hidden) return;
       optionsMenu.hidden = true;
       controls.classList.remove("options-open");
+      // The menu was what kept the bar up; hand the dwell back to the timer.
+      showControls(false);
     }
 
     function refreshQualities() {
@@ -591,7 +602,25 @@
 
     // Tapping anywhere on the video toggles playback — unless the pointer just
     // travelled far enough to be a swipe, in which case the gesture owns it.
-    listen(video, "click", () => {
+    //
+    // Bound on the player root, not the video. A mouse gesture takes pointer
+    // capture on the root at pointerdown, and capture retargets the click that
+    // follows to the capture element — so a listener on the video never heard
+    // a desktop click at all, and only touch (which captures lazily) worked.
+    // Anything clickable inside the player owns its own click. Listing only the
+    // data-attribute controls missed the buttons that carry a Dioxus handler
+    // instead - Back, and the hidden bridges that `runAction` clicks - so their
+    // clicks bubbled to the root and toggled playback on the way out.
+    const isPlayerChrome = (target) =>
+      !!(target instanceof Element) &&
+      !!target.closest(
+        "button, a, input, select, [role='button'], [data-player-action], [data-player-progress], .player-options-menu",
+      );
+
+    listen(root, "click", (event) => {
+      // The controls own their own clicks, including the options menu, which
+      // must not be torn down by the press that is choosing from it.
+      if (isPlayerChrome(event.target)) return;
       closeOptions();
       if (swallowNextClick) {
         swallowNextClick = false;
@@ -692,15 +721,27 @@
       gestureStart = null;
       resetGestureVisuals();
     });
-    listen(video, "dblclick", (event) => {
+    // Also on the root rather than the video, for the pointer-capture reason
+    // above. A double click is two clicks, so playback has already toggled
+    // twice and is back where it started - nothing to undo here.
+    listen(root, "dblclick", (event) => {
+      if (isPlayerChrome(event.target)) return;
+      // Double tap near an edge skips, the way every video player does it. The
+      // middle is the only part that is unambiguously "the picture", so that is
+      // where fullscreen lives - and only with a mouse, since on touch
+      // fullscreen belongs to the upward swipe.
       const bounds = video.getBoundingClientRect();
       const position = (event.clientX - bounds.left) / bounds.width;
-      if (position < 0.4) seekBy(-10);
-      else if (position > 0.6) seekBy(10);
-      else Promise.resolve(toggleFullscreen(root)).catch(() => {});
+      if (position < 0.35) {
+        seekBy(-10);
+      } else if (position > 0.65) {
+        seekBy(10);
+      } else if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        Promise.resolve(toggleFullscreen(root)).catch(() => {});
+      }
     });
     listen(root, "pointermove", () => showControls(false));
-    listen(root, "pointerleave", scheduleHide);
+    listen(root, "pointerleave", () => showControls(false, CONTROLS_LEAVE_HIDE_MS));
     listen(root, "keydown", (event) => {
       if (event.target instanceof HTMLInputElement) return;
       const key = event.key.toLowerCase();

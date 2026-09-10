@@ -7,7 +7,12 @@ class CommandTests(unittest.TestCase):
     def test_command_has_token_provider_and_supported_js_runtime(self) -> None:
         command = server.build_video_command("aNXB-8Aqt88")
         self.assertIn("node", command)
-        self.assertIn("youtube:player_client=mweb", command)
+        # Pinning a player client is what broke extraction once already: `mweb`
+        # started returning "Video unavailable" and playback fell back to gated
+        # URLs that die after about a minute. Let yt-dlp choose.
+        self.assertFalse(
+            any(value.startswith("youtube:player_client=") for value in command)
+        )
         self.assertTrue(
             any(value.startswith("youtubepot-bgutilhttp:base_url=") for value in command)
         )

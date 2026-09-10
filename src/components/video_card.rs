@@ -77,12 +77,13 @@ pub fn VideoCard(video: Video) -> Element {
     let avatar_channel_id = video.channel_id.clone();
     let watched_video_id = video.id.clone();
     let menu_video = video.clone();
-    let channel_avatar_url = app_state
-        .library()
-        .channels
-        .into_iter()
-        .find(|channel| channel.id == video.channel_id)
-        .and_then(|channel| channel.avatar_url);
+    let channel_avatar_url = app_state.with_library(|library| {
+        library
+            .channels
+            .iter()
+            .find(|channel| channel.id == video.channel_id)
+            .and_then(|channel| channel.avatar_url.clone())
+    });
     let keyboard_video = video.clone();
     let open_video = video.clone();
     let meta_open_video = video.clone();

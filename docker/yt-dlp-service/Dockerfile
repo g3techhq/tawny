@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim AS node-runtime
 
 FROM python:3.13-slim-bookworm
 
-ARG YTDLP_VERSION=2026.7.4
+ARG YTDLP_VERSION=2026.8.19
 ARG POT_PROVIDER_VERSION=1.3.1
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node

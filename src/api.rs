@@ -1,6 +1,6 @@
 use crate::models::{
     ChannelDetails, ChannelMediaPage, CommentsPage, FeedRefreshResult, LibrarySnapshot,
-    PlaybackSession, SearchResults, VideoDetails,
+    LibraryUserState, PlaybackSession, SearchResults, VideoDetails,
 };
 use dioxus::prelude::*;
 
@@ -22,6 +22,23 @@ pub async fn get_library() -> Result<LibrarySnapshot> {
 pub async fn sync_library(snapshot: LibrarySnapshot) -> Result<LibrarySnapshot> {
     Ok(state
         .sync_library(snapshot)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?)
+}
+
+/// The hot path: one mutation, only the rows the client owns.
+///
+/// `sync_library` above round-trips the entire cache and is reserved for the
+/// two places that genuinely reconcile - first load and pull-to-refresh. Using
+/// it for every edit meant a 4.3 MB upload, a discarded 4.3 MB reply, and
+/// ~11,900 redundant upserts each time a video was marked watched.
+#[post(
+    "/api/v1/library/state",
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>
+)]
+pub async fn push_library_state(user_state: LibraryUserState) -> Result<u64> {
+    Ok(state
+        .apply_user_state(user_state)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }

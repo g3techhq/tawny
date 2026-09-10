@@ -1,14 +1,19 @@
+use crate::subscriptions_io::{ImportSummary, ParsedImport};
 use crate::{
-    api::{get_library, sync_library},
+    api::{get_library, push_library_state, sync_library},
     cache::use_persistent_signal,
     models::{
-        AppSettings, CaptionTrack, Channel, ChannelDetails, HistoryEntry, LibrarySnapshot,
-        Playlist, SearchResults, SubscriptionGroup, Video, VideoChapter, VideoDetails,
-        VideoPreviewFrames,
+        AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, HistoryEntry,
+        LibrarySnapshot, LibraryUserState, Playlist, SearchResults, SubscriptionContent,
+        SubscriptionGroup, Video, VideoChapter, VideoDetails, VideoPreviewFrames,
     },
 };
 use dioxus::prelude::*;
 use g3_ui::StatusColor;
+
+/// How close to the end counts as finished. YouTube stops short of the exact
+/// duration often enough that an exact match would rarely fire.
+const PROGRESS_WATCHED_TAIL_SECONDS: u64 = 15;
 
 #[derive(Clone, Copy)]
 pub struct AppState {
@@ -29,6 +34,11 @@ pub struct AppState {
     pub selected_caption: Signal<Option<usize>>,
     pub captions_enabled: Signal<bool>,
     pub active_chapters: Signal<Vec<VideoChapter>>,
+    /// Audio languages the transport can switch between, and which one is live.
+    /// Empty for the ordinary single-language upload, which is why the chip that
+    /// reads these only appears when there is a choice to make.
+    pub active_audio_tracks: Signal<Vec<AudioTrackOption>>,
+    pub selected_audio_track: Signal<Option<String>>,
     pub active_preview_frames: Signal<Option<VideoPreviewFrames>>,
     pub syncing: Signal<bool>,
     /// Segment selections live here because the header owns the segmented
@@ -42,6 +52,18 @@ pub struct AppState {
 impl AppState {
     pub fn library(self) -> LibrarySnapshot {
         (self.library)()
+    }
+
+    /// Read the library without copying it.
+    ///
+    /// [`Self::library`] clones the whole snapshot, which is tens of thousands
+    /// of videos and channels once a cache has filled up. That is fine for a
+    /// caller that needs to own the data, but ruinous on a render path: every
+    /// video card was cloning the entire library three times just to look up a
+    /// playlist name and an avatar, which stalled the swipe release animation.
+    /// Subscribes to the signal, so it stays reactive.
+    pub fn with_library<T>(self, read: impl FnOnce(&LibrarySnapshot) -> T) -> T {
+        read(&(self.library).read())
     }
 
     pub fn settings(self) -> AppSettings {
@@ -70,11 +92,17 @@ impl AppState {
             .as_ref()
             .is_none_or(|active| active.id != video.id)
         {
+            // The outgoing video keeps whatever position its last tick recorded.
+            // Locally that is already correct; this is what stops the server
+            // from being up to half a minute behind when a video is swapped.
+            self.flush_progress();
             self.active_captions.set(Vec::new());
             self.selected_caption.set(None);
             self.captions_enabled.set(false);
             self.active_chapters.set(Vec::new());
             self.active_preview_frames.set(None);
+            self.active_audio_tracks.set(Vec::new());
+            self.selected_audio_track.set(None);
         }
         self.active_video.set(Some(video));
     }
@@ -94,19 +122,91 @@ impl AppState {
     }
 
     pub fn stop_playback(mut self) {
+        self.flush_progress();
         self.active_video.set(None);
         self.active_captions.set(Vec::new());
         self.selected_caption.set(None);
         self.captions_enabled.set(false);
         self.active_chapters.set(Vec::new());
         self.active_preview_frames.set(None);
+        self.active_audio_tracks.set(Vec::new());
+        self.selected_audio_track.set(None);
     }
 
     fn sync_in_background(self) {
-        let snapshot = self.library();
+        // Only the client-owned half. The reply is just the accepted revision,
+        // so this costs kilobytes rather than the whole cache in both
+        // directions - see `LibraryUserState`. Built from a borrow: cloning the
+        // snapshot first made every edit copy the entire cache before sending a
+        // few kilobytes of it.
+        let user_state = LibraryUserState::from(&*self.library.peek());
         spawn(async move {
-            let _ = sync_library(snapshot).await;
+            let _ = push_library_state(user_state).await;
         });
+    }
+
+    /// Remember where playback has reached.
+    ///
+    /// Called on a timer while a video plays, so it deliberately does not push
+    /// to the server on every tick - `flush_progress` does that at the points
+    /// where losing the position would actually matter. A whole second of
+    /// change is the smallest step worth a re-render.
+    pub fn record_progress(mut self, video_id: &str, seconds: u64) -> bool {
+        {
+            let mut library = self.library.write();
+            let Some(video) = library.videos.iter_mut().find(|video| video.id == video_id) else {
+                return false;
+            };
+            if video.progress_seconds == seconds {
+                return false;
+            }
+            video.progress_seconds = seconds;
+            // Treated as watched once it is effectively over, which is what the
+            // card's progress bar and the "hide watched" filter both key on.
+            if video.duration_seconds > 0
+                && seconds + PROGRESS_WATCHED_TAIL_SECONDS >= video.duration_seconds
+            {
+                video.watched = true;
+            }
+            library.cache_revision += 1;
+        }
+        true
+    }
+
+    /// Push the remembered positions to the server.
+    ///
+    /// Separate from [`Self::record_progress`] so the timer can run often while
+    /// the network call stays rare: on pause, on leaving the video, and on a
+    /// slower interval than the tick itself.
+    pub fn flush_progress(self) {
+        self.sync_in_background();
+    }
+
+    /// Play this video without its video stream, and remember that choice for
+    /// this video specifically.
+    pub fn set_audio_only(mut self, video_id: &str, audio_only: bool) -> bool {
+        {
+            let mut library = self.library.write();
+            let Some(video) = library.videos.iter_mut().find(|video| video.id == video_id) else {
+                return false;
+            };
+            if video.audio_only == audio_only {
+                return false;
+            }
+            video.audio_only = audio_only;
+            library.cache_revision += 1;
+        }
+        // Also mirror onto the playing copy so the player re-reads it without
+        // waiting for a library round trip.
+        if let Some(active) = (self.active_video)()
+            && active.id == video_id
+        {
+            let mut updated = active;
+            updated.audio_only = audio_only;
+            self.active_video.set(Some(updated));
+        }
+        self.sync_in_background();
+        true
     }
 
     pub fn show_toast(mut self, message: impl Into<String>, color: StatusColor) {
@@ -249,6 +349,114 @@ impl AppState {
         Some(subscribed)
     }
 
+    /// Narrow (or widen) which of a channel's uploads reach the feed. Leaves
+    /// the subscription itself alone: this is a filter, not an unsubscribe.
+    pub fn set_subscription_content(
+        mut self,
+        channel_id: &str,
+        content: SubscriptionContent,
+    ) -> bool {
+        let mut library = self.library.write();
+        let Some(channel) = library
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == channel_id)
+        else {
+            return false;
+        };
+        if channel.subscription_content == content {
+            return false;
+        }
+        channel.subscription_content = content;
+        library.cache_revision += 1;
+        drop(library);
+        self.sync_in_background();
+        true
+    }
+
+    /// Apply a parsed subscription export to the library.
+    ///
+    /// Channels already known are subscribed in place so their cached metadata
+    /// and videos survive. Unknown channels are written as stubs carrying only
+    /// the id and name from the export: the next sync fills in the avatar,
+    /// handle, and uploads, which is the same path a freshly discovered channel
+    /// takes.
+    pub fn import_subscriptions(mut self, parsed: ParsedImport) -> ImportSummary {
+        let mut summary = ImportSummary::default();
+        let mut library = self.library.write();
+
+        for entry in parsed.subscriptions {
+            // Handle-only records cannot be matched or fetched offline. They
+            // are counted rather than silently dropped so the toast can say so.
+            if entry.channel_id.is_empty() {
+                summary.unresolved += 1;
+                continue;
+            }
+            match library
+                .channels
+                .iter_mut()
+                .find(|channel| channel.id == entry.channel_id)
+            {
+                Some(channel) => {
+                    let was_subscribed = channel.subscribed;
+                    channel.subscribed = true;
+                    channel.subscription_content = entry.content;
+                    if channel.name.trim().is_empty() && !entry.name.is_empty() {
+                        channel.name = entry.name;
+                    }
+                    if was_subscribed {
+                        summary.already_subscribed += 1;
+                    } else {
+                        summary.subscribed += 1;
+                    }
+                }
+                None => {
+                    library.channels.push(Channel {
+                        id: entry.channel_id,
+                        name: entry.name,
+                        handle: entry.handle,
+                        avatar_url: None,
+                        subscriber_count: String::new(),
+                        subscribed: true,
+                        description: String::new(),
+                        banner_url: None,
+                        subscription_content: entry.content,
+                    });
+                    summary.subscribed += 1;
+                }
+            }
+        }
+
+        // Groups only ever arrive from Tawny's own export. Matching on name
+        // keeps a re-import from stacking duplicates of the same group.
+        for group in parsed.groups {
+            match library
+                .subscription_groups
+                .iter_mut()
+                .find(|existing| existing.name.eq_ignore_ascii_case(&group.name))
+            {
+                Some(existing) => {
+                    for channel_id in group.channel_ids {
+                        if !existing.channel_ids.contains(&channel_id) {
+                            existing.channel_ids.push(channel_id);
+                        }
+                    }
+                }
+                None => {
+                    summary.groups += 1;
+                    library.subscription_groups.push(group);
+                }
+            }
+        }
+
+        if summary.changed() {
+            library.cache_revision += 1;
+            drop(library);
+            self.sync_in_background();
+        }
+        summary
+    }
+
     pub fn create_subscription_group(mut self, name: String) -> String {
         let slug = name
             .to_lowercase()
@@ -355,6 +563,7 @@ impl AppState {
                     subscribed: false,
                     description: String::new(),
                     banner_url: None,
+                    subscription_content: SubscriptionContent::All,
                 });
                 changed = true;
             }
@@ -534,13 +743,14 @@ impl AppState {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };
         match kind {
-            SwipeActionKind::AddToPlaylist => self
-                .library()
-                .playlists
-                .iter()
-                .find(|playlist| playlist.id == playlist_id)
-                .map(|playlist| playlist.name.clone())
-                .unwrap_or_else(|| "Playlist".into()),
+            SwipeActionKind::AddToPlaylist => self.with_library(|library| {
+                library
+                    .playlists
+                    .iter()
+                    .find(|playlist| playlist.id == playlist_id)
+                    .map(|playlist| playlist.name.clone())
+                    .unwrap_or_else(|| "Playlist".into())
+            }),
             other => other.label().to_string(),
         }
     }
@@ -687,6 +897,8 @@ pub fn AppStateProvider(children: Element) -> Element {
         selected_caption: Signal::new(None),
         captions_enabled: Signal::new(false),
         active_chapters: Signal::new(Vec::new()),
+        active_audio_tracks: Signal::new(Vec::new()),
+        selected_audio_track: Signal::new(None),
         active_preview_frames: Signal::new(None),
         syncing: initial_syncing,
         chapters_sheet_open: Signal::new(false),

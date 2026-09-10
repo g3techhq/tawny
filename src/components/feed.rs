@@ -4,9 +4,9 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use g3_ui::{Button, ButtonStyle, Refresher, StatusColor};
+use g3_ui::{Body, Button, ButtonStyle, Refresher, SegmentButton, SegmentGroup, StatusColor};
 
-use super::VideoGrid;
+use super::{PageHeader, VideoGrid};
 
 /// How many videos the feed renders before asking for more.
 ///
@@ -29,16 +29,32 @@ pub fn Feed() -> Element {
         3 => FeedFilter::Live,
         _ => FeedFilter::All,
     };
-    let library = app_state.library();
-    let groups = library.subscription_groups.clone();
-    let subscribed_channel_ids = library
-        .channels
-        .iter()
-        .filter(|channel| channel.subscribed)
-        .map(|channel| channel.id.clone())
-        .collect::<Vec<_>>();
-    let mut videos = library.videos;
-    videos.retain(|video| subscribed_channel_ids.contains(&video.channel_id));
+    // Read through a borrow and copy out only the videos that survive the
+    // subscription filter. Cloning the whole snapshot first meant every render
+    // copied the entire cache - tens of thousands of videos - to show a page of
+    // them, which is what stalled the swipe release animation.
+    let (groups, mut videos) = app_state.with_library(|library| {
+        // Each subscription carries its own Videos/Shorts/both preference, so
+        // the feed keeps a video only when its channel is subscribed *and* that
+        // channel still wants that kind of upload.
+        let subscribed_channels = library
+            .channels
+            .iter()
+            .filter(|channel| channel.subscribed)
+            .map(|channel| (channel.id.as_str(), channel.subscription_content))
+            .collect::<std::collections::HashMap<_, _>>();
+        let videos = library
+            .videos
+            .iter()
+            .filter(|video| {
+                subscribed_channels
+                    .get(video.channel_id.as_str())
+                    .is_some_and(|content| content.accepts(video.is_short))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        (library.subscription_groups.clone(), videos)
+    });
     videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
     let active_group = selected_group();
     if active_group == "ungrouped" {
@@ -70,6 +86,17 @@ pub fn Feed() -> Element {
     videos.truncate(visible_count());
 
     rsx! {
+        PageHeader {
+            toolbar: rsx! {
+                SegmentGroup { active: app_state.feed_filter_index,
+                    SegmentButton { index: 0, "All" }
+                    SegmentButton { index: 1, "Videos" }
+                    SegmentButton { index: 2, "Shorts" }
+                    SegmentButton { index: 3, "Live" }
+                }
+            },
+        }
+        Body { padding: false,
         // Pull down to refresh, replacing the button that sat in the intro row.
         Refresher {
             refreshing: app_state.syncing(),
@@ -166,6 +193,7 @@ pub fn Feed() -> Element {
                     }
                 }
             }
+        }
         }
         }
     }

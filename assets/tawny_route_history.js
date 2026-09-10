@@ -94,14 +94,33 @@
       if (!observer) finish();
     });
 
+  // g3-ui reuses one scroll container for every route, so nothing resets
+  // scrollTop the way a document-level scroller would: a new page opened at
+  // whatever offset the previous one had been left at. Resetting from here,
+  // at the moment the route commits, puts the reset after the outgoing frame
+  // is captured and before the incoming one is, so the new page is snapshotted
+  // already at the top and there is no visible jump. Restoring it afterwards
+  // instead is what produced the old scroll-then-snap.
+  const resetBodyScroll = () => {
+    const scroller = document.querySelector?.(".g3-body-content");
+    if (!scroller) return;
+    try {
+      scroller.scrollTop = 0;
+    } catch (_) {}
+  };
+
   let lastRoute = routeKey(window.location.href);
 
   // Keep the source side current for pushes, which do not emit popstate.
   for (const method of ["pushState", "replaceState"]) {
     const original = history[method];
     history[method] = function patched(...args) {
+      const previous = lastRoute;
       const result = original.apply(this, args);
       lastRoute = routeKey(window.location.href);
+      // Compare paths, not full keys: a query-only update is the same page
+      // reconfiguring itself and should keep its place.
+      if (routePath(previous) !== routePath(lastRoute)) resetBodyScroll();
       return result;
     };
   }
@@ -125,7 +144,13 @@
       delete root.dataset.routeTransitionPlatform;
     };
     try {
-      const transition = document.startViewTransition(() => routeRendered());
+      // Browser Back never calls pushState, so the scroll reset is attached to
+      // the traversal callback instead - still inside the transition, so it is
+      // captured rather than seen.
+      const transition = document.startViewTransition(async () => {
+        await routeRendered();
+        resetBodyScroll();
+      });
       transition.finished.then(clear, clear);
       return transition;
     } catch (_) {

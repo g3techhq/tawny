@@ -12,3 +12,7 @@
 __pycache__/
 *.pyc
 dx*.log
+
+# The vendored crate builds standalone, so it grows its own build output.
+/vendor/*/target
+/vendor/*/Cargo.lock

@@ -1,6 +1,64 @@
 use serde::{Deserialize, Serialize};
 use surrealdb_types::SurrealValue;
 
+/// Which of a channel's uploads a subscription actually wants in the feed.
+///
+/// A channel's Shorts and its long-form uploads are often two different shows,
+/// and subscribing is currently all-or-nothing. This narrows a subscription
+/// without unsubscribing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubscriptionContent {
+    /// Everything the channel publishes, including livestreams.
+    #[default]
+    All,
+    /// Long-form uploads only; Shorts are dropped from the feed.
+    Videos,
+    /// Shorts only.
+    Shorts,
+}
+
+impl SubscriptionContent {
+    /// SurrealDB stores this as a plain string so the column stays readable and
+    /// an unknown value degrades to "everything" instead of failing the row.
+    /// Only the server reads and writes it.
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    pub fn from_storage(value: &str) -> Self {
+        match value {
+            "videos" => Self::Videos,
+            "shorts" => Self::Shorts,
+            _ => Self::All,
+        }
+    }
+
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    pub fn as_storage(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Videos => "videos",
+            Self::Shorts => "shorts",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "Videos & Shorts",
+            Self::Videos => "Videos only",
+            Self::Shorts => "Shorts only",
+        }
+    }
+
+    /// Livestreams follow the long-form side: they are the channel's "not a
+    /// Short" output, so a Shorts-only subscription drops them too.
+    pub fn accepts(self, is_short: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Videos => !is_short,
+            Self::Shorts => is_short,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
 pub struct Channel {
     pub id: String,
@@ -13,6 +71,8 @@ pub struct Channel {
     pub description: String,
     #[serde(default)]
     pub banner_url: Option<String>,
+    #[serde(default)]
+    pub subscription_content: SubscriptionContent,
 }
 
 impl Channel {
@@ -85,6 +145,7 @@ mod channel_tests {
             subscribed: true,
             description: "Rich description".into(),
             banner_url: Some("rich-banner".into()),
+            subscription_content: super::SubscriptionContent::All,
         }
     }
 
@@ -130,6 +191,11 @@ pub struct Video {
     pub is_live: bool,
     #[serde(default)]
     pub is_short: bool,
+    /// Play this one without its video stream. Remembered per video, because it
+    /// is a property of the thing being watched - a podcast stays audio, a music
+    /// video does not - rather than a global mode.
+    #[serde(default)]
+    pub audio_only: bool,
 }
 
 impl Video {
@@ -383,6 +449,17 @@ pub struct CaptionTrack {
     pub auto_generated: bool,
 }
 
+/// One selectable audio language for the video being watched.
+///
+/// Reported by the transport rather than the extractor: Shaka is the authority
+/// on which of the manifest's audio adaptations it can actually decode and
+/// switch between, and it carries the display names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioTrackOption {
+    pub language: String,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoComment {
     pub id: String,
@@ -485,6 +562,20 @@ impl Default for FeedFilter {
     }
 }
 
+/// Which native design language the component library renders with.
+///
+/// g3-ui detects this from the platform at startup, which is right for a
+/// packaged build but arbitrary on the web, where the same browser serves both
+/// looks. Storing an explicit override lets the choice be made once and kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlatformStyle {
+    /// Follow the running platform, which is what an installed build wants.
+    #[default]
+    Auto,
+    Ios,
+    Material,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Appearance {
     Dark,
@@ -500,6 +591,8 @@ impl Default for Appearance {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub appearance: Appearance,
+    #[serde(default)]
+    pub platform_style: PlatformStyle,
     pub playback_speed: f64,
     /// Shorts are watched at a different pace than long-form video, so the two
     /// speeds are remembered independently rather than sharing one setting.
@@ -611,6 +704,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             appearance: Appearance::Dark,
+            platform_style: PlatformStyle::Auto,
             playback_speed: 1.0,
             shorts_playback_speed: 1.0,
             swipe_right_action: SwipeActionKind::AddToPlaylist,
@@ -626,6 +720,79 @@ impl Default for AppSettings {
             shorts_medium_max_seconds: default_shorts_medium_max_seconds(),
             prefer_sabr: true,
             po_token_provider_url: None,
+        }
+    }
+}
+
+/// The half of the library the client actually owns.
+///
+/// Videos and channels are server-owned: every one the client holds arrived in
+/// a server response, and the server persisted it *before* returning it. Echoing
+/// them back made a routine "mark watched" a 4.3 MB upload and ~11,900 redundant
+/// database upserts. This carries only what the server cannot re-derive.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LibraryUserState {
+    pub cache_revision: u64,
+    pub subscriptions: Vec<SubscriptionState>,
+    pub playlists: Vec<Playlist>,
+    #[serde(default)]
+    pub subscription_groups: Vec<SubscriptionGroup>,
+    #[serde(default)]
+    pub queue: Vec<String>,
+    #[serde(default)]
+    pub history: Vec<HistoryEntry>,
+    /// Only videos the viewer has actually touched, not the whole cache.
+    #[serde(default)]
+    pub progress: Vec<VideoProgress>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionState {
+    pub channel_id: String,
+    pub subscribed: bool,
+    #[serde(default)]
+    pub content: SubscriptionContent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoProgress {
+    pub video_id: String,
+    pub watched: bool,
+    pub progress_seconds: u64,
+    #[serde(default)]
+    pub audio_only: bool,
+}
+
+impl From<&LibrarySnapshot> for LibraryUserState {
+    fn from(snapshot: &LibrarySnapshot) -> Self {
+        Self {
+            cache_revision: snapshot.cache_revision,
+            // Subscription rows are one flag and one enum each, so all of them
+            // together stay small even with several hundred channels.
+            subscriptions: snapshot
+                .channels
+                .iter()
+                .map(|channel| SubscriptionState {
+                    channel_id: channel.id.clone(),
+                    subscribed: channel.subscribed,
+                    content: channel.subscription_content,
+                })
+                .collect(),
+            playlists: snapshot.playlists.clone(),
+            subscription_groups: snapshot.subscription_groups.clone(),
+            queue: snapshot.queue.clone(),
+            history: snapshot.history.clone(),
+            progress: snapshot
+                .videos
+                .iter()
+                .filter(|video| video.watched || video.progress_seconds > 0 || video.audio_only)
+                .map(|video| VideoProgress {
+                    video_id: video.id.clone(),
+                    watched: video.watched,
+                    progress_seconds: video.progress_seconds,
+                    audio_only: video.audio_only,
+                })
+                .collect(),
         }
     }
 }
@@ -657,6 +824,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Practical Rust and software architecture.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
             Channel {
                 id: "UC-tawny-signal".into(),
@@ -667,6 +835,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Signals, space, and ambitious experiments.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
             Channel {
                 id: "UC-tawny-field".into(),
@@ -677,6 +846,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Thoughtful stories from outdoors.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
             Channel {
                 id: "UC-tawny-slow".into(),
@@ -687,6 +857,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Make technology feel quieter.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
         ];
 
@@ -704,6 +875,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "M7lc1UVf-VE".into(),
@@ -718,6 +890,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "ysz5S6PUM-U".into(),
@@ -732,6 +905,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "jNQXAC9IVRw".into(),
@@ -746,6 +920,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: true,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "dQw4w9WgXcQ".into(),
@@ -760,6 +935,7 @@ impl LibrarySnapshot {
                 watched: true,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "ScMzIvxBSi4".into(),
@@ -774,6 +950,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
         ];
 
