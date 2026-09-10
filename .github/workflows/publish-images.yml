@@ -1,0 +1,101 @@
+name: Publish images
+
+# Builds the two images a deployment needs and pushes them to GHCR, so a home
+# lab can run Tawny with `docker compose pull && docker compose up -d` and never
+# needs a Rust toolchain or this repository.
+#
+# Both images, deliberately: compose builds the yt-dlp sidecar from
+# `docker/yt-dlp-service`, so publishing only the app would leave a pull-only
+# deployment unable to start.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Extra tag to publish alongside `edge` and the commit SHA (e.g. v0.1.0)"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  # Never two publishes racing for the same tag. Not cancel-in-progress: a
+  # half-pushed manifest is worse than a slow queue.
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Independent images. One failing should not hide whether the other built.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Tawny server
+            image: tawny
+            context: .
+            dockerfile: Dockerfile
+          - name: yt-dlp sidecar
+            image: tawny-yt-dlp
+            context: ./docker/yt-dlp-service
+            dockerfile: ./docker/yt-dlp-service/Dockerfile
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
+            type=sha,format=long
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # linux/amd64 only. The Tawny image compiles Rust and a WASM bundle;
+          # building it for arm64 under QEMU takes hours rather than minutes.
+          # Add linux/arm64 here if the lab ever needs it, and expect the wait.
+          platforms: linux/amd64
+          # The Rust build is the whole cost of this workflow, so its cache is
+          # what makes a re-run cheap. Scoped per image or the two would evict
+          # each other.
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: false
+
+      - name: Report what was published
+        run: |
+          echo "### ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
