@@ -5,7 +5,7 @@
 ```text
 YouTube Innertube/RSS ──► source normalization
           │                       │
-YouTube WebSub ──────────► SurrealDB/RocksDB ◄──── library sync
+YouTube WebSub ──────────► SurrealDB/SurrealKV ◄── library sync
           │                       │
           └──► yt-dlp sidecar ◄── PO-token provider
                                   │
@@ -35,7 +35,7 @@ Local storage is appropriate for the initial bounded feed. Before offline downlo
 
 ## Server and SurrealDB
 
-Compose points the server at a dedicated SurrealDB container backed by a named RocksDB volume. Tawny itself uses the configured `SURREALDB_HOST` endpoint rather than embedding a storage engine; server tests use `mem://`. The schema models:
+Compose points the server at a dedicated SurrealDB container backed by a named SurrealKV volume. Tawny itself uses the configured `SURREALDB_HOST` endpoint rather than embedding a storage engine; server tests use `mem://`. SurrealKit embeds and hash-tracks `database/schema/**/*.surql`, applying changed schema files at startup. The schema models:
 
 - channels and videos;
 - users and subscription relations;

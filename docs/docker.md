@@ -83,7 +83,7 @@ environment variables it requires, and the one-time package visibility step.
 
 ## State, updates, and backups
 
-`tawny_surrealdb-data` contains the SurrealDB RocksDB files and
+`tawny_surrealdb-data` contains the SurrealDB SurrealKV files and
 `tawny_tawny-data` contains extractor caches and the generated WebSub secret.
 Compose does not delete either volume during ordinary stop, restart, or image
 updates. Do not use `docker compose down -v` unless the library should be
@@ -99,8 +99,7 @@ docker compose --profile production build tawny
 docker compose --profile production up -d
 ```
 
-SurrealDB defaults to a 2 GB container memory ceiling so RocksDB does not size
-its block cache against all memory assigned to Docker Desktop. Override
+SurrealDB defaults to a 2 GB container memory ceiling. Override
 `SURREALDB_MEMORY_LIMIT` for a larger server after measuring the workload.
 
 For a consistent backup, stop the stack and archive both named volumes with a

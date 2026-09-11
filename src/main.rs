@@ -5,6 +5,8 @@ mod auth;
 mod cache;
 mod components;
 mod config;
+#[cfg(feature = "server")]
+mod database;
 mod models;
 #[cfg(feature = "server")]
 mod server;

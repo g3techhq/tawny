@@ -34,7 +34,7 @@ dx serve
 
 The default Compose project starts only Tawny's server dependencies:
 
-- SurrealDB with a persistent named volume, published on `127.0.0.1:8001`;
+- SurrealDB 3.2 with a persistent SurrealKV named volume, published on `127.0.0.1:8001`;
 - a pinned bgutil PO-token provider, published on `127.0.0.1:4416`;
 - a pinned yt-dlp sidecar with its plugin and Node challenge runtime, published on `127.0.0.1:8090`.
 

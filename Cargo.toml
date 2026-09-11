@@ -26,6 +26,7 @@ tokio = { version = "1.42.0", features = ["full"], optional = true }
 axum = { version = "0.8.9", optional = true }
 reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
 surrealdb = { version = "=3.2.4", features = ["kv-mem"], optional = true }
+surrealkit = { version = "=0.6.3", default-features = false, optional = true }
 anyhow = { version = "1.0.98", optional = true }
 dotenvy = { version = "0.15.7", optional = true }
 quick-xml = { version = "0.37.5", optional = true }
@@ -61,6 +62,7 @@ server = [
     "axum",
     "reqwest",
     "surrealdb",
+    "surrealkit",
     "anyhow",
     "dotenvy",
     "quick-xml",

@@ -77,8 +77,6 @@ DEFINE FIELD IF NOT EXISTS updated_at ON library_state TYPE datetime DEFAULT tim
 -- FIELD DEFAULT only applies to writes, so rows written earlier keep NONE and
 -- would fail to deserialize into a plain string. Idempotent: once every row has
 -- a value this matches nothing.
-UPDATE channel SET subscription_content = "all" WHERE subscription_content = NONE;
-UPDATE video SET audio_only = false WHERE audio_only = NONE;
 
 -- --------------------------------------------------------------------------
 -- Accounts
@@ -146,14 +144,10 @@ DEFINE FIELD IF NOT EXISTS owner ON subscription_group TYPE option<record<app_us
 -- library starts with a "watch-later". Two accounts must be able to hold the
 -- same id, so uniqueness is per owner, not global.
 --
--- The REMOVE is for databases that predate this; the global definitions are
--- gone from this file rather than merely dropped here, because an IF NOT EXISTS
--- re-creates its index on every startup and the re-creation is what fails once
--- two accounts legitimately share an id.
-REMOVE INDEX IF EXISTS playlist_external_id_idx ON playlist;
+-- The old global indexes are removed by `database/backfill.surql`, before
+-- these owner-scoped replacements are created for an existing deployment.
 DEFINE INDEX IF NOT EXISTS playlist_owner_external_id_idx ON playlist
   FIELDS owner, playlist_id UNIQUE;
-REMOVE INDEX IF EXISTS subscription_group_external_id_idx ON subscription_group;
 DEFINE INDEX IF NOT EXISTS subscription_group_owner_external_id_idx ON subscription_group
   FIELDS owner, group_id UNIQUE;
 
@@ -171,8 +165,3 @@ DEFINE FIELD IF NOT EXISTS owner ON library_state TYPE option<record<app_user>>;
 -- Same NONE handling as the email index above: the pre-accounts singleton row
 -- carries no owner and does not collide with the per-user rows beside it.
 DEFINE INDEX IF NOT EXISTS library_state_owner_idx ON library_state FIELDS owner UNIQUE;
-
--- Backfill for accounts stored before the columns above existed, matching the
--- channel/video backfills near the top. A row that predates accounts was never
--- registered, so it is a guest by definition.
-UPDATE app_user SET is_guest = (email = NONE) WHERE is_guest = NONE;

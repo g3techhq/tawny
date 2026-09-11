@@ -394,7 +394,7 @@ struct DbChannel {
     subscribed: bool,
     /// Optional because rows written before this column existed read back as
     /// NONE, and `SurrealValue` does not honour `#[serde(default)]`. The
-    /// backfill in schema.surql fills them in, but a row can still be read
+    /// startup backfill fills them in, but a row can still be read
     /// during the same startup that adds the column.
     subscription_content: Option<String>,
     description: String,
@@ -603,11 +603,7 @@ impl AppServerState {
             .use_db(std::env::var("SURREALDB_NAME").unwrap_or_else(|_| "main".into()))
             .await
             .context("select SurrealDB namespace and database")?;
-        db.query(include_str!("../database/schema.surql"))
-            .await
-            .context("apply Tawny schema")?
-            .check()
-            .context("validate Tawny schema")?;
+        crate::database::sync_schema(&db).await?;
 
         let extractor_cache = std::env::var("TAWNY_EXTRACTOR_CACHE_DIR")
             .map(std::path::PathBuf::from)
@@ -3451,8 +3447,14 @@ pub async fn playback_proxy_options() -> Response {
     response
 }
 
-pub async fn health() -> StatusCode {
-    StatusCode::OK
+pub async fn health(Extension(state): Extension<AppServerState>) -> StatusCode {
+    match state.db.health().await {
+        Ok(()) => StatusCode::OK,
+        Err(error) => {
+            eprintln!("SurrealDB health check failed: {error}");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
 }
 
 fn center_vtt_cues(input: &str) -> String {
@@ -4783,7 +4785,11 @@ mod tests {
 
     #[tokio::test]
     async fn reports_container_health() {
-        assert_eq!(health().await, axum::http::StatusCode::OK);
+        let state = AppServerState::initialize().await.unwrap();
+        assert_eq!(
+            health(axum::Extension(state)).await,
+            axum::http::StatusCode::OK
+        );
     }
 
     #[test]

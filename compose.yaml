@@ -20,7 +20,7 @@ services:
       - ${SURREALDB_USER:-root}
       - --pass
       - ${SURREALDB_PASSWORD:-root}
-      - rocksdb:/data/tawny.db
+      - surrealkv:///data/surrealkv
     working_dir: /data
     ports:
       - "127.0.0.1:${SURREALDB_PORT:-8001}:8000"

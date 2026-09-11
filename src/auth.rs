@@ -90,7 +90,7 @@ struct DbAccount {
     email: Option<String>,
     /// Optional for the same reason as `DbChannel::subscription_content`: rows
     /// written before accounts existed read back as NONE, and `SurrealValue`
-    /// does not honour `#[serde(default)]`. The backfill in schema.surql fills
+    /// does not honour `#[serde(default)]`. The startup backfill fills
     /// them in, but a row can still be read during the startup that adds it.
     is_guest: Option<bool>,
 }

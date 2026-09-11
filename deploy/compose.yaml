@@ -38,7 +38,7 @@ services:
       # is worse than a stack that refuses to start with a readable message.
       - --pass
       - ${SURREALDB_PASSWORD:?set SURREALDB_PASSWORD to something private}
-      - rocksdb:/data/tawny.db
+      - surrealkv:///data/surrealkv
     working_dir: /data
     volumes:
       - surrealdb-data:/data
