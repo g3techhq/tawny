@@ -1181,9 +1181,26 @@ fn source_is_transportable(source: &PlaybackSource) -> bool {
     }
 }
 
+/// Splits the route param off from the page so that changing it builds a new
+/// page rather than re-rendering the old one.
+///
+/// The key has to hang off a *list* to do anything. Dioxus only compares keys in
+/// `diff_keyed_children`, which runs for siblings; a single keyed child goes down
+/// the positional path where the key is never read, so the inner page kept its
+/// scope across a watch-to-watch navigation and every `use_resource` and
+/// `use_effect` in it went on serving the video it had captured at mount. The
+/// address bar changed and nothing else did - by autoplay, by a related video,
+/// by anything that moved between two watch pages.
+///
+/// A one-element loop is a keyed sibling list, so the key is compared, and a new
+/// id unmounts the old page and mounts a fresh one.
 #[component]
 pub fn VideoDetail(id: String) -> Element {
-    rsx! { VideoDetailInner { key: "{id}", id } }
+    rsx! {
+        for video_id in [id.clone()] {
+            VideoDetailInner { key: "{video_id}", id: video_id.clone() }
+        }
+    }
 }
 
 #[component]
@@ -1875,6 +1892,30 @@ mod timeline_tests {
         assert!(
             timeline_segments(&[segment(SponsorCategory::Sponsor, 0.0, 10.0)], &settings)
                 .is_empty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    /// A string check, because the thing being guarded is a diffing rule rather
+    /// than anything this crate can call: Dioxus compares keys only in
+    /// `diff_keyed_children`, which runs for a list of siblings. Written as a
+    /// single keyed child the key is never read, the page keeps its scope across
+    /// a watch-to-watch navigation, and every hook in it goes on serving the
+    /// video it captured at mount. Nothing errors - the address bar changes and
+    /// the page does not - so only the shape of the call can defend it.
+    #[test]
+    fn the_watch_page_is_keyed_through_a_sibling_list() {
+        let source = include_str!("player.rs");
+        let body = source
+            .split("pub fn VideoDetail(id: String) -> Element {")
+            .nth(1)
+            .expect("the route component");
+        let body = body.split("#[component]").next().expect("its body");
+        assert!(
+            body.contains("for video_id in [id.clone()]"),
+            "VideoDetailInner must be keyed inside a list or it never remounts: {body}"
         );
     }
 }
