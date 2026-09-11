@@ -338,6 +338,7 @@ fn attach_player_session(
     player_key: &str,
     prefer_sabr: bool,
     audio_only: bool,
+    preferred_audio_language: &str,
     resume_seconds: u64,
 ) {
     let Ok(session) = serde_json::to_string(&session) else {
@@ -348,12 +349,14 @@ fn attach_player_session(
     };
     let video_id = video_id.to_string();
     let player_key = player_key.to_string();
+    let preferred_audio_language = preferred_audio_language.to_string();
     spawn(async move {
         let script = format!(
             r#"
             const session = {session};
             const videoId = {video_id:?};
             const playerKey = {player_key:?};
+            const preferredAudioLanguage = {preferred_audio_language:?};
             const serverUrl = {server_url};
             const media = document.getElementById('tawny-player-media');
             window.__tawnyAttachEval = {{ phase: 'starting', hasMedia: Boolean(media) }};
@@ -395,6 +398,7 @@ fn attach_player_session(
                     videoId,
                     serverUrl,
                     audioOnly: {audio_only},
+                    preferredAudioLanguage,
                     startTime: {resume_seconds},
                     refreshUrl: new URL(refreshPath, `${{serverBase}}/`).href,
                 }});
@@ -470,6 +474,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let mut failure_detail = use_signal(String::new);
     let mut observed_video_id = use_signal(String::new);
     let prefer_sabr = app_state.settings().prefer_sabr;
+    let preferred_audio_language = app_state.settings().preferred_audio_language;
 
     // The resolved session is tagged with the video it belongs to. `use_resource`
     // keeps serving its previous value while it re-runs, so without the tag a
@@ -558,6 +563,17 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     .set((!active.is_empty()).then_some(active));
             }
         });
+    });
+
+    // The transport gets the saved preference at attachment time. This effect
+    // additionally applies a preference changed in Settings to the video that
+    // is already playing, without waiting for the next one to start.
+    let audio_preference_state = app_state;
+    use_effect(move || {
+        let preferred_language = audio_preference_state.settings().preferred_audio_language;
+        if audio_preference_state.active_video().is_some() {
+            set_player_audio_track(preferred_language);
+        }
     });
 
     let Some(video) = active_video else {
@@ -716,6 +732,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     &player_key,
                                     prefer_sabr,
                                     attach_audio_only,
+                                    &preferred_audio_language,
                                     attach_resume_seconds,
                                 );
                             }
@@ -1816,7 +1833,7 @@ fn audio_track_label(tracks: &[AudioTrackOption], selected: &Option<String>) -> 
 #[component]
 fn AudioTrackPicker(tracks: Vec<AudioTrackOption>, selected: Option<String>) -> Element {
     rsx! {
-        div { class: "caption-strip",
+        div { class: "audio-track-strip",
             for track in tracks {
                 button {
                     key: "{track.language}",

@@ -9,7 +9,8 @@ use g3_route_transitions::ROUTE_TRANSITION_COVER_CLASS;
 
 use super::{AccountSettings, BackendSettings, PageHeader};
 use dioxus_icons::lucide::{
-    Database, Download, Gauge, HardDrive, ListPlus, RotateCw, Server, ShieldCheck, Upload,
+    Database, Download, Gauge, HardDrive, Languages, ListPlus, RotateCw, Server, ShieldCheck,
+    Upload,
 };
 use g3_ui::{
     Badge, Body, Button, ButtonStyle, Card, Field, Item, List, RightSlot, SegmentButton,
@@ -43,6 +44,35 @@ fn download_text_file(file_name: &str, mime_type: &str, contents: String) {
         let mut eval = document::eval(&script);
         let _ = eval.recv::<bool>().await;
     });
+}
+
+const PREFERRED_AUDIO_LANGUAGES: [(&str, &str); 10] = [
+    ("en", "English"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("it", "Italian"),
+    ("pt", "Portuguese"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("zh", "Chinese"),
+    ("hi", "Hindi"),
+];
+
+fn audio_language_label(language: &str) -> String {
+    PREFERRED_AUDIO_LANGUAGES
+        .iter()
+        .find(|(code, _)| *code == language)
+        .map(|(_, label)| (*label).to_string())
+        .unwrap_or_else(|| language.to_string())
+}
+
+fn audio_language_code(label: &str) -> String {
+    PREFERRED_AUDIO_LANGUAGES
+        .iter()
+        .find(|(_, option_label)| *option_label == label)
+        .map(|(code, _)| (*code).to_string())
+        .unwrap_or_else(|| "en".to_string())
 }
 
 #[component]
@@ -81,6 +111,12 @@ pub fn SettingsPage() -> Element {
     let cache_size = library.videos.len() + library.channels.len() + library.playlists.len();
     let autoplay = use_signal(|| settings.autoplay);
     let shorts_autoplay = use_signal(|| settings.shorts_autoplay);
+    let preferred_audio_language =
+        use_signal(|| audio_language_label(&settings.preferred_audio_language));
+    let preferred_audio_language_options = PREFERRED_AUDIO_LANGUAGES
+        .iter()
+        .map(|(_, label)| SelectOption::from((*label).to_string()))
+        .collect::<Vec<_>>();
     let prefer_sabr = use_signal(|| settings.prefer_sabr);
     // Both segmented controls are index-driven, so the stored enum is mirrored
     // into a signal and written back when the index moves.
@@ -251,6 +287,20 @@ pub fn SettingsPage() -> Element {
                                                 checked: shorts_autoplay,
                                                 onchange: move |enabled| {
                                                     app_state.settings.write().shorts_autoplay = enabled
+                                                },
+                                            }
+                                        },
+                                    }
+                                    Item {
+                                        start: rsx! { Languages { size: 19 } },
+                                        label: "Preferred audio language".to_string(),
+                                        description: "Use this dub when a video offers one".to_string(),
+                                        end: rsx! {
+                                            Select {
+                                                value: preferred_audio_language,
+                                                options: preferred_audio_language_options,
+                                                onchange: move |label: String| {
+                                                    app_state.settings.write().preferred_audio_language = audio_language_code(&label);
                                                 },
                                             }
                                         },

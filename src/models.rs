@@ -685,6 +685,11 @@ pub struct AppSettings {
     pub shorts_medium_max_seconds: u64,
     #[serde(default)]
     pub sponsor_block: SponsorBlockSettings,
+    /// BCP-47 language tag the playback transport should prefer for dubbed
+    /// uploads. Stored separately from the browser locale so a device's UI
+    /// language cannot unexpectedly change what a viewer hears.
+    #[serde(default = "default_audio_language")]
+    pub preferred_audio_language: String,
     pub prefer_sabr: bool,
     pub po_token_provider_url: Option<String>,
 }
@@ -695,6 +700,10 @@ fn default_speed() -> f64 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_audio_language() -> String {
+    "en".to_string()
 }
 
 fn default_video_short_max_seconds() -> u64 {
@@ -803,9 +812,20 @@ impl Default for AppSettings {
             shorts_short_max_seconds: default_shorts_short_max_seconds(),
             shorts_medium_max_seconds: default_shorts_medium_max_seconds(),
             sponsor_block: SponsorBlockSettings::default(),
+            preferred_audio_language: default_audio_language(),
             prefer_sabr: true,
             po_token_provider_url: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::AppSettings;
+
+    #[test]
+    fn audio_preference_starts_with_english() {
+        assert_eq!(AppSettings::default().preferred_audio_language, "en");
     }
 }
 

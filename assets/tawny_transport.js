@@ -307,7 +307,7 @@
     }
   }
 
-  function configureShaka(player) {
+  function configureShaka(player, preferredAudioLanguage) {
     const retry = {
       maxAttempts: 4,
       baseDelay: 500,
@@ -339,8 +339,7 @@
       // one, which is how an English video ended up playing in Italian. Shaka
       // falls back to the first track when the viewer speaks none of them, so
       // this can only improve the guess. The chip stays the way to override it.
-      preferredAudioLanguage:
-        (navigator.languages && navigator.languages[0]) || navigator.language || "en",
+      preferredAudioLanguage: preferredAudioLanguage || "en",
       streaming: {
         retryParameters: retry,
         bufferingGoal: 40,
@@ -395,13 +394,15 @@
     }
   }
 
-  async function loadShaka(video, source, runtime, kind, startTime, audioOnly) {
+  async function loadShaka(video, source, runtime, kind, startTime, options) {
     if (!window.shaka || !window.shaka.Player.isBrowserSupported()) {
       throw new Error("Media Source playback is unavailable");
     }
     const player = new window.shaka.Player();
     runtime.player = player;
-    configureShaka(player);
+    const audioOnly = Boolean(options?.audioOnly);
+    const preferredAudioLanguage = String(options?.preferredAudioLanguage || "en").trim() || "en";
+    configureShaka(player, preferredAudioLanguage);
     const pendingRanges = new Map();
     const networking = player.getNetworkingEngine();
     networking.registerRequestFilter((_requestType, request) => {
@@ -512,7 +513,7 @@
       return loadNative(video, source, runtime, startTime);
     }
     if (kind === "dash" || kind === "hls" || kind === "generated-dash") {
-      return loadShaka(video, source, runtime, kind, startTime, options && options.audioOnly);
+      return loadShaka(video, source, runtime, kind, startTime, options);
     }
     if (kind === "sabr") {
       return window.TawnySabrAdapter.load(video, source, runtime, {

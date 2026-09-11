@@ -1809,6 +1809,17 @@ textarea {
   color: var(--color-text);
 }
 
+/* Captions may be a long browsing strip, but audio is a short, deliberate
+   choice. Wrap it in the sheet so every language is visible without a
+   horizontal-scroll gesture. */
+.audio-track-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  padding-bottom: 0.25rem;
+  touch-action: pan-y;
+}
+
 /* Inherits the plain card surface. It used to be tinted amber, which made it
    the only panel on the page that did not match the channel row and the
    comments button sitting right beside it. */

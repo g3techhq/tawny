@@ -1756,6 +1756,13 @@ button, input, textarea {
   background: var(--tawny-amber-soft);
   color: var(--color-text);
 }
+.audio-track-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  padding-bottom: 0.25rem;
+  touch-action: pan-y;
+}
 .video-description {
   display: -webkit-box;
   overflow: hidden;
