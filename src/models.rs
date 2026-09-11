@@ -622,36 +622,6 @@ impl PlaylistSort {
     }
 }
 
-/// How the playlist index is ordered.
-///
-/// Separate from [`PlaylistSort`] because it sorts playlists, not videos, and
-/// the two share no keys: a playlist has no date of its own.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlaylistOrder {
-    Added,
-    Name,
-    Size,
-}
-
-impl PlaylistOrder {
-    pub const ALL: [Self; 3] = [Self::Added, Self::Name, Self::Size];
-
-    pub fn label(self, descending: bool) -> &'static str {
-        match (self, descending) {
-            (Self::Added, false) => "Oldest first",
-            (Self::Added, true) => "Newest first",
-            (Self::Name, false) => "A-Z",
-            (Self::Name, true) => "Z-A",
-            (Self::Size, true) => "Most videos",
-            (Self::Size, false) => "Fewest videos",
-        }
-    }
-
-    pub fn default_descending(self) -> bool {
-        matches!(self, Self::Size)
-    }
-}
-
 /// Which native design language the component library renders with.
 ///
 /// g3-ui detects this from the platform at startup, which is right for a
@@ -1834,9 +1804,6 @@ mod tests {
     fn every_sort_labels_both_directions_distinctly() {
         for sort in PlaylistSort::ALL {
             assert_ne!(sort.label(true), sort.label(false), "{sort:?}");
-        }
-        for order in PlaylistOrder::ALL {
-            assert_ne!(order.label(true), order.label(false), "{order:?}");
         }
     }
 }

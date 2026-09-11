@@ -49,6 +49,14 @@ pub struct AppState {
     /// Segment selections live here because the header owns the segmented
     /// control while the page owns the list it filters.
     pub chapters_sheet_open: Signal<bool>,
+    /// Videos this sitting has advanced away from, most recent last.
+    ///
+    /// Deliberately not in the library: it is what "previous" means during one
+    /// run of the queue, not something worth carrying to another device or
+    /// remembering tomorrow. History cannot answer it - playing a video moves it
+    /// to the front of history, so stepping back through history immediately
+    /// starts bouncing between two videos.
+    pub run_back_stack: Signal<Vec<String>>,
     pub feed_filter_index: Signal<usize>,
     pub explore_filter_index: Signal<usize>,
     pub channel_tab_index: Signal<usize>,
@@ -762,10 +770,12 @@ impl AppState {
         }
     }
 
-    /// Take the next queued video, skipping the one that just finished.
+    /// Take the next queued video, skipping the one that just finished, and
+    /// remember the one being left so [`Self::step_back_in_run`] can return to it.
     ///
-    /// Removing it as it is handed over is what stops autoplay looping: a video
-    /// that stays queued would be chosen again the moment it ends.
+    /// Removing the next video as it is handed over is what stops autoplay
+    /// looping: a video that stays queued would be chosen again the moment it
+    /// ends.
     pub fn take_next_queued(mut self, finished_video_id: &str) -> Option<String> {
         let mut library = self.library.write();
         let position = library
@@ -777,8 +787,45 @@ impl AppState {
         library.queue.retain(|id| id != finished_video_id);
         library.cache_revision += 1;
         drop(library);
+        self.push_back_stack(finished_video_id);
         self.sync_in_background();
         Some(next)
+    }
+
+    /// Whether there is a video to go back to without leaving the run.
+    pub fn can_step_back_in_run(self) -> bool {
+        !(self.run_back_stack)().is_empty()
+    }
+
+    /// Return to the video this run last advanced away from.
+    ///
+    /// The video being left goes back to the front of the queue, so the run is
+    /// exactly where it was: pressing next again plays it, rather than skipping
+    /// whatever the viewer stepped back past.
+    pub fn step_back_in_run(mut self, current_video_id: &str) -> Option<String> {
+        let previous = self.run_back_stack.write().pop()?;
+        if previous == current_video_id {
+            return None;
+        }
+        let mut library = self.library.write();
+        library.queue.retain(|id| id != current_video_id);
+        library.queue.insert(0, current_video_id.to_string());
+        library.cache_revision += 1;
+        drop(library);
+        self.sync_in_background();
+        Some(previous)
+    }
+
+    fn push_back_stack(mut self, video_id: &str) {
+        let mut stack = self.run_back_stack.write();
+        if stack.last().is_some_and(|last| last == video_id) {
+            return;
+        }
+        stack.push(video_id.to_string());
+        // One sitting's worth. The stack is only ever walked from the end.
+        if stack.len() > 50 {
+            stack.remove(0);
+        }
     }
 
     /// Append a whole run of videos to the queue, in the order given.
@@ -955,6 +1002,7 @@ pub fn AppStateProvider(children: Element) -> Element {
         active_preview_frames: Signal::new(None),
         syncing: initial_syncing,
         chapters_sheet_open: Signal::new(false),
+        run_back_stack: Signal::new(Vec::new()),
         feed_filter_index: Signal::new(0),
         explore_filter_index: Signal::new(0),
         channel_tab_index: Signal::new(0),

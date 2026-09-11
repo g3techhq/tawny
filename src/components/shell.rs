@@ -124,9 +124,18 @@ pub fn PageHeader(
     back_to: Option<Route>,
     /// Optional segmented control rendered under the bar.
     toolbar: Option<Element>,
+    /// Set false on a page that is somewhere the viewer went on purpose and is
+    /// working inside. Queue, History and Settings are app-wide errands, and
+    /// offering them from the top of a playlist puts three ways to leave next
+    /// to the name of the thing that was opened.
+    global_actions: Option<bool>,
 ) -> Element {
     let route: Route = use_route();
     let app_state = use_context::<AppState>();
+    // All three are one group of peers presented over the page that launched
+    // them. Once any of them is up, the group has done its job - offering it
+    // again from inside itself is just chrome the sheet has to carry.
+    let show_global_actions = global_actions.unwrap_or(true) && !is_auxiliary_route(&route);
 
     let start_button = match back_to {
         Some(home) => rsx! {
@@ -161,11 +170,7 @@ pub fn PageHeader(
             start_button,
             end_button: rsx! {
                 div { class: "header-actions",
-                    // All three are one group of peers presented over the page
-                    // that launched them. Once any of them is up, the group has
-                    // done its job - offering it again from inside itself is
-                    // just chrome the sheet has to carry.
-                    if !is_auxiliary_route(&route) {
+                    if show_global_actions {
                         Button {
                             style: ButtonStyle::Clear,
                             aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
@@ -173,8 +178,6 @@ pub fn PageHeader(
                             onclick: move |_| { spawn(async move { animated_navigate(Route::QueuePage {}).await; }); },
                             ListVideo { size: 19 }
                         }
-                    }
-                    if !is_auxiliary_route(&route) {
                         Button {
                             style: ButtonStyle::Clear,
                             aria_label: "History".to_string(),
@@ -182,8 +185,6 @@ pub fn PageHeader(
                             onclick: move |_| { spawn(async move { animated_navigate(Route::HistoryPage {}).await; }); },
                             History { size: 19 }
                         }
-                    }
-                    if !is_auxiliary_route(&route) {
                         Button {
                             style: ButtonStyle::Clear,
                             aria_label: "Settings".to_string(),

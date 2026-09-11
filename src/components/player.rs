@@ -11,8 +11,8 @@ use crate::{
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
     Captions, Check, ChevronLeft, Clock, Heart, Languages, ListVideo, Maximize2, MessageSquare,
-    Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown,
-    ThumbsUp, User, Volume2, VolumeX, X,
+    Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, SkipBack,
+    SkipForward, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, User, Volume2, VolumeX, X,
 };
 use g3_route_transitions::{animated_go_back, animated_navigate};
 use g3_ui::{Badge, Body, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
@@ -646,6 +646,15 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let autoplay_enabled = app_state.settings().autoplay_for(is_short);
     let autoplay_video_id = video.id.clone();
     let mut autoplay_settings = app_state.settings;
+    // A run is anything with somewhere to go: a queue ahead, a video stepped
+    // back from, or both. Outside one there is nothing for the pair to do, and
+    // a permanently dead control either side of play is worse than no control.
+    let has_next_queued =
+        app_state.with_library(|library| library.queue.iter().any(|id| id != &video.id));
+    let can_step_back = app_state.can_step_back_in_run();
+    let in_a_run = has_next_queued || can_step_back;
+    let step_forward_id = video.id.clone();
+    let step_back_id = video.id.clone();
     let playback_title = video.title.clone();
 
     rsx! {
@@ -761,10 +770,15 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                             .write()
                                             .set_autoplay_for(is_short, !autoplay_enabled);
                                     },
+                                    // A switch rather than a glyph: this button
+                                    // reports a state as much as it invites a
+                                    // tap, and the list icon it used to carry
+                                    // said "queue" - which is the thing beside
+                                    // it in the header.
                                     if autoplay_enabled {
-                                        ListVideo { size: 21 }
+                                        ToggleRight { size: 23 }
                                     } else {
-                                        ListVideo { size: 21 }
+                                        ToggleLeft { size: 23 }
                                     }
                                 }
                                 // Clicked by the player JS when a video ends.
@@ -804,11 +818,31 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 }
                             }
                         }
-                        // Play/pause alone. Skipping is a double-tap on either
-                        // side of the video on any platform, and the arrow keys
-                        // on a keyboard, so dedicated buttons only crowded the
-                        // video they sit on.
+                        // Seeking has no buttons here on purpose - it is a
+                        // double-tap on either side of the video, and the arrow
+                        // keys on a keyboard - but moving through a queue is not
+                        // seeking, and there is no gesture for it. The pair only
+                        // appears when there is a run to move through.
                         div { class: "player-controls-center",
+                            if in_a_run {
+                                button {
+                                    r#type: "button",
+                                    class: "player-control-button player-step-button",
+                                    aria_label: "Previous in queue",
+                                    title: "Previous in queue",
+                                    disabled: !can_step_back,
+                                    onclick: move |_| {
+                                        let current = step_back_id.clone();
+                                        spawn(async move {
+                                            let Some(previous) = app_state.step_back_in_run(&current) else {
+                                                return;
+                                            };
+                                            animated_navigate(Route::VideoDetail { id: previous }).await;
+                                        });
+                                    },
+                                    SkipBack { size: 24, fill: "currentColor" }
+                                }
+                            }
                             button {
                                 r#type: "button",
                                 class: "player-control-button player-play-button",
@@ -817,6 +851,25 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 "data-player-action": "toggle",
                                 span { class: "player-play-icon", Play { size: 38, fill: "currentColor" } }
                                 span { class: "player-pause-icon", Pause { size: 38, fill: "currentColor" } }
+                            }
+                            if in_a_run {
+                                button {
+                                    r#type: "button",
+                                    class: "player-control-button player-step-button",
+                                    aria_label: "Next in queue",
+                                    title: "Next in queue",
+                                    disabled: !has_next_queued,
+                                    onclick: move |_| {
+                                        let current = step_forward_id.clone();
+                                        spawn(async move {
+                                            let Some(next) = app_state.take_next_queued(&current) else {
+                                                return;
+                                            };
+                                            animated_navigate(Route::VideoDetail { id: next }).await;
+                                        });
+                                    },
+                                    SkipForward { size: 24, fill: "currentColor" }
+                                }
                             }
                         }
                         div { class: "player-options-menu", "data-player-options-menu": "", hidden: true,

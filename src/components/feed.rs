@@ -83,6 +83,10 @@ pub fn Feed() -> Element {
     //
     // The filter itself is right to exclude them - an unknown length is not
     // long. What was missing is saying so.
+    //
+    // The server now fills these in from each channel's uploads tab, a few
+    // channels per refresh, so the number here should fall on its own. It will
+    // not reach zero: a channel has to come up in the rotation first.
     let mut without_duration = 0usize;
     if let Some(duration) = selected_duration() {
         let settings = app_state.settings();
@@ -197,7 +201,7 @@ pub fn Feed() -> Element {
                     p { class: "feed-filter-note",
                         "{without_duration} more "
                         if without_duration == 1 { "video has" } else { "videos have" }
-                        " no length yet, so they cannot be sorted by duration. Opening one records it."
+                        " no length yet, so a duration filter cannot speak for them. Each refresh fills in a few more channels."
                     }
                 }
 

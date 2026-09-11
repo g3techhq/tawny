@@ -201,6 +201,33 @@ textarea {
   display: none;
 }
 
+/* Sideways gestures must not move the page.
+
+   Two halves of the same problem. A horizontal strip declares `pan-x`, which
+   tells the browser the gesture is ours before it starts, so a flick along the
+   chips cannot also scroll the feed.
+
+   A swipeable row cannot do that - it has to keep `pan-y` so an ordinary
+   vertical scroll still starts anywhere on the list - so the browser is free to
+   begin scrolling before the swipe is recognised, and by the time g3-ui knows
+   the gesture is sideways its `preventDefault` is too late to cancel a scroll
+   already running on the compositor. It does mark the row it is dragging, and
+   taking the overflow off the scroller for as long as that mark is up stops the
+   scroll dead. Height and scroll position are untouched, so nothing jumps. */
+.group-filter-row,
+.channel-result-row,
+.speed-strip,
+.player-actions,
+.chapter-strip,
+.caption-strip {
+  touch-action: pan-x;
+}
+
+.g3-body-content:has(.g3-swipe-item[data-dragging="true"]) {
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+}
+
 .filter-divider {
   width: 1px;
   height: 1.45rem;
@@ -369,10 +396,45 @@ textarea {
   margin-bottom: 0.85rem;
 }
 
+/* The counts line and the actions line. Two rows, two jobs: what is in here,
+   and how to start it. */
+.playlist-lead {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.playlist-lead-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 1.9rem;
+}
+
+.playlist-lead-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Takes the width it is offered: starting the playlist is why this page exists,
+   and Shuffle is the variant of that decision, not its equal. */
+.playlist-lead-actions .playlist-play-all {
+  flex: 1 1 auto;
+}
+
+.playlist-lead-actions > :not(.playlist-play-all) {
+  flex: 0 0 auto;
+}
+
 .playlist-detail-count {
-  margin-right: auto;
   color: var(--color-text-secondary);
   font-size: 0.82rem;
+}
+
+.playlist-detail-dot {
+  opacity: 0.6;
 }
 
 .playlist-card-actions {
@@ -2494,6 +2556,28 @@ textarea {
 .player-play-button:hover,
 .player-play-button:focus-visible {
   background: rgba(0, 0, 0, 0.64);
+}
+
+/* Flanks play, so it takes the same treatment a size down. A bare glyph over
+   video disappears against anything bright, which is what the scrim is for. */
+.player-step-button {
+  width: clamp(2.6rem, 5.5vw, 3.15rem);
+  height: clamp(2.6rem, 5.5vw, 3.15rem);
+  background: rgba(0, 0, 0, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(5px);
+}
+
+/* Kept in place rather than removed at the end of a run: a control that
+   disappears moves play out from under the finger reaching for it. */
+.player-step-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.player-step-button:disabled:hover,
+.player-step-button:disabled:focus-visible {
+  background: rgba(0, 0, 0, 0.38);
 }
 
 .player-pause-icon,
