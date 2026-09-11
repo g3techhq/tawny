@@ -51,7 +51,11 @@ web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
 dirs = { version = "6", optional = true }
 
 [features]
-default = ["web"]
+# Keep the default target neutral.  Dioxus then builds the web client with the
+# `web` feature and the Axum host with `server` when `dx serve --web` runs a
+# full-stack app.  Defaulting to `web` made DX select the client-only `main`,
+# so none of the server-function or custom Axum routes existed at runtime.
+default = []
 web = ["dioxus/web", "dep:web-sys"]
 desktop = ["dioxus/desktop", "dep:dirs"]
 mobile = ["dioxus/mobile", "tokio", "dep:dirs"]

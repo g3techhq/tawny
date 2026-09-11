@@ -29,7 +29,7 @@ The seeded library is intentional: it keeps the first launch useful while the re
 ```sh
 npm install
 docker compose up -d --build
-dx serve
+dx serve --web
 ```
 
 The default Compose project starts only Tawny's server dependencies:
