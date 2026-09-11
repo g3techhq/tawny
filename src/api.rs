@@ -1,38 +1,18 @@
 use crate::models::{
-    Account, AuthSession, ChannelDetails, ChannelMediaPage, CommentsPage, Credentials,
-    FeedRefreshResult, LibrarySnapshot, LibraryUserState, PlaybackSession, SearchResults,
-    SponsorSegment, VideoDetails,
+    Account, ChannelDetails, ChannelMediaPage, CommentsPage, Credentials, FeedRefreshResult,
+    LibrarySnapshot, LibraryUserState, PlaybackSession, SearchResults, SponsorSegment,
+    VideoDetails,
 };
 use dioxus::prelude::*;
-
-/// Resolve the caller's account, or refuse.
-///
-/// Every endpoint below that reads or writes library data goes through this.
-/// There is deliberately no fallback owner: an unauthenticated request gets an
-/// error, not somebody else's subscriptions.
-#[cfg(feature = "server")]
-async fn owner_of(
-    state: &crate::server::AppServerState,
-    headers: &dioxus::fullstack::HeaderMap,
-) -> Result<String, ServerFnError> {
-    let token = crate::server::bearer_token(headers);
-    state
-        .accounts()
-        .authenticate(&token)
-        .await
-        .map(|account| account.id)
-        .map_err(|error| ServerFnError::new(error.to_string()))
-}
 
 #[get(
     "/api/v1/library",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn get_library() -> Result<LibrarySnapshot> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .library_snapshot(&owner)
+        .library_snapshot(&owner.0)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -40,12 +20,11 @@ pub async fn get_library() -> Result<LibrarySnapshot> {
 #[post(
     "/api/v1/library/sync",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn sync_library(snapshot: LibrarySnapshot) -> Result<LibrarySnapshot> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .sync_library(&owner, snapshot)
+        .sync_library(&owner.0, snapshot)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -59,12 +38,11 @@ pub async fn sync_library(snapshot: LibrarySnapshot) -> Result<LibrarySnapshot> 
 #[post(
     "/api/v1/library/state",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn push_library_state(user_state: LibraryUserState) -> Result<u64> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .apply_user_state(&owner, user_state)
+        .apply_user_state(&owner.0, user_state)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -72,12 +50,11 @@ pub async fn push_library_state(user_state: LibraryUserState) -> Result<u64> {
 #[get(
     "/api/v1/search?query&filter",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn search_catalog(query: String, filter: String) -> Result<SearchResults> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .search_catalog(&owner, &query, &filter)
+        .search_catalog(&owner.0, &query, &filter)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -111,12 +88,11 @@ pub async fn resolve_playback(video_id: String, prefer_sabr: bool) -> Result<Pla
 #[get(
     "/api/v1/videos/{video_id}",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn get_video_details(video_id: String) -> Result<VideoDetails> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .video_details(&owner, &video_id)
+        .video_details(&owner.0, &video_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -135,12 +111,11 @@ pub async fn get_comments_page(video_id: String, next_page: String) -> Result<Co
 #[get(
     "/api/v1/channels/{channel_id}",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn get_channel_details(channel_id: String) -> Result<ChannelDetails> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .channel_details(&owner, &channel_id)
+        .channel_details(&owner.0, &channel_id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -148,7 +123,7 @@ pub async fn get_channel_details(channel_id: String) -> Result<ChannelDetails> {
 #[get(
     "/api/v1/channels/{channel_id}/media?tab&next_page",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn get_channel_media_page(
     channel_id: String,
@@ -160,9 +135,8 @@ pub async fn get_channel_media_page(
         "live" => crate::models::ChannelMediaTab::Live,
         _ => crate::models::ChannelMediaTab::Videos,
     };
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .channel_media_page(&owner, &channel_id, tab, &next_page)
+        .channel_media_page(&owner.0, &channel_id, tab, &next_page)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -170,12 +144,11 @@ pub async fn get_channel_media_page(
 #[post(
     "/api/v1/feed/refresh",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn refresh_subscription_feed() -> Result<FeedRefreshResult> {
-    let owner = owner_of(&state, &headers).await?;
     Ok(state
-        .refresh_feed(&owner)
+        .refresh_feed(&owner.0)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -183,11 +156,8 @@ pub async fn refresh_subscription_feed() -> Result<FeedRefreshResult> {
 // ---------------------------------------------------------------------------
 // Accounts
 //
-// The session token travels in an `Authorization: Bearer` header rather than a
-// cookie, because a packaged client points at an arbitrary origin - often plain
-// http on a LAN - where a cookie would need `SameSite=None; Secure` and working
-// CORS credentials, and would simply not arrive. The client installs the header
-// once through `dioxus::fullstack::set_request_headers`.
+// Axum owns the opaque cookie and restores the account before each handler.
+// The client never receives a session identifier to persist or replay.
 //
 // Errors come back as their rendered message. Field-level marking is done on
 // the client with the shared validators in `models`, before the request is
@@ -201,27 +171,29 @@ pub async fn refresh_subscription_feed() -> Result<FeedRefreshResult> {
 /// credential, so requiring one would be circular.
 #[post(
     "/api/v1/auth/guest",
-    state: dioxus::fullstack::extract::State<crate::server::AppServerState>
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    session: crate::auth::SessionAuth
 )]
-pub async fn create_guest_account() -> Result<AuthSession> {
-    Ok(state
+pub async fn create_guest_account() -> Result<Account> {
+    let account = state
         .accounts()
         .create_guest()
         .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?)
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
+    crate::auth::sign_in_session(&session.0, &account);
+    Ok(account)
 }
 
 /// Promote the calling guest into a real account, keeping its library.
 #[post(
     "/api/v1/auth/register",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
-pub async fn register_account(credentials: Credentials) -> Result<AuthSession> {
-    let token = crate::server::bearer_token(&headers);
+pub async fn register_account(credentials: Credentials) -> Result<Account> {
     Ok(state
         .accounts()
-        .register(&token, &credentials.email, &credentials.password)
+        .register(&owner.0, &credentials.email, &credentials.password)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -229,43 +201,40 @@ pub async fn register_account(credentials: Credentials) -> Result<AuthSession> {
 /// Sign in to an existing account, abandoning whatever session was held.
 #[post(
     "/api/v1/auth/sign-in",
-    state: dioxus::fullstack::extract::State<crate::server::AppServerState>
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    session: crate::auth::SessionAuth
 )]
-pub async fn sign_in_to_account(credentials: Credentials) -> Result<AuthSession> {
-    Ok(state
+pub async fn sign_in_to_account(credentials: Credentials) -> Result<Account> {
+    let account = state
         .accounts()
         .sign_in(&credentials.email, &credentials.password)
         .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?)
+        .map_err(|error| ServerFnError::new(error.to_string()))?;
+    session.0.logout_user();
+    crate::auth::sign_in_session(&session.0, &account);
+    Ok(account)
 }
 
 /// Drop this device's session. Other devices keep theirs.
 #[post(
     "/api/v1/auth/sign-out",
-    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    session: crate::auth::SessionAuth
 )]
 pub async fn sign_out_of_account() -> Result<()> {
-    let token = crate::server::bearer_token(&headers);
-    Ok(state
-        .accounts()
-        .sign_out(&token)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?)
+    session.0.logout_user();
+    Ok(())
 }
 
-/// Who the caller is, used on launch to decide whether a stored token is still
-/// worth anything before the app renders as though it were.
+/// Who the caller is, used on launch to restore the cookie-backed session.
 #[get(
     "/api/v1/auth/account",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    owner: crate::auth::Owner
 )]
 pub async fn current_account() -> Result<Account> {
-    let token = crate::server::bearer_token(&headers);
     Ok(state
         .accounts()
-        .authenticate(&token)
+        .find(&owner.0)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
@@ -279,13 +248,12 @@ pub async fn current_account() -> Result<Account> {
 #[get(
     "/api/v1/videos/{video_id}/sponsor?categories",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    headers: dioxus::fullstack::HeaderMap
+    _owner: crate::auth::Owner
 )]
 pub async fn get_sponsor_segments(
     video_id: String,
     categories: String,
 ) -> Result<Vec<SponsorSegment>> {
-    owner_of(&state, &headers).await?;
     let categories = categories
         .split(',')
         .filter(|name| !name.is_empty())

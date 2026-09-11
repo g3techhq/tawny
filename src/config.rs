@@ -1,7 +1,7 @@
 //! Client configuration that has to exist *before* the app does.
 //!
-//! Two values live here: which backend to talk to, and the session token for
-//! it. Both are needed before `dioxus::launch`, which is why this does not use
+//! The backend address lives here because it must be known before
+//! `dioxus::launch`. This does not use
 //! [`crate::cache::use_persistent_signal`] - that reads localStorage through
 //! `document::eval`, and there is no document yet.
 //!
@@ -29,7 +29,6 @@ const FALLBACK_DEFAULT: &str = "http://127.0.0.1:8080";
 const FALLBACK_DEFAULT: &str = "http://localhost:8080";
 
 const BACKEND_URL_KEY: &str = "tawny.backend-url";
-const SESSION_TOKEN_KEY: &str = "tawny.session-token";
 
 /// Trim a URL into the form the server functions want: an origin with no
 /// trailing slash.
@@ -91,20 +90,7 @@ pub fn set_backend_url(url: &str) -> Option<String> {
     Some(normalized)
 }
 
-pub fn session_token() -> Option<String> {
-    stored(SESSION_TOKEN_KEY).filter(|token| !token.is_empty())
-}
-
-pub fn set_session_token(token: &str) {
-    store(SESSION_TOKEN_KEY, token);
-}
-
-pub fn clear_session_token() {
-    clear(SESSION_TOKEN_KEY);
-}
-
-/// Point this process's server-function client at the configured backend, and
-/// install the stored session token so every request carries it.
+/// Point this process's server-function client at the configured backend.
 ///
 /// Called once from `main`, before `dioxus::launch`.
 pub fn install() {
@@ -113,28 +99,6 @@ pub fn install() {
     // leak per launch, of one URL.
     let url: &'static str = Box::leak(backend_url().into_boxed_str());
     dioxus::fullstack::set_server_url(url);
-    if let Some(token) = session_token() {
-        install_session_header(&token);
-    }
-}
-
-/// Attach (or replace) the bearer token on every subsequent server-function
-/// call.
-///
-/// `set_request_headers` replaces the whole map rather than merging, so this
-/// rebuilds it. Nothing else in Tawny sets a global request header; if anything
-/// ever does, it has to be rebuilt here too.
-pub fn install_session_header(token: &str) {
-    use dioxus::fullstack::{HeaderMap, HeaderValue};
-    let mut headers = HeaderMap::new();
-    if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-        headers.insert(dioxus::fullstack::http::header::AUTHORIZATION, value);
-    }
-    dioxus::fullstack::set_request_headers(headers);
-}
-
-pub fn clear_session_header() {
-    dioxus::fullstack::set_request_headers(dioxus::fullstack::HeaderMap::new());
 }
 
 // ---------------------------------------------------------------------------
@@ -158,13 +122,6 @@ fn stored(key: &str) -> Option<String> {
 fn store(key: &str, value: &str) {
     if let Some(storage) = local_storage() {
         let _ = storage.set_item(key, value);
-    }
-}
-
-#[cfg(all(not(feature = "server"), target_arch = "wasm32"))]
-fn clear(key: &str) {
-    if let Some(storage) = local_storage() {
-        let _ = storage.remove_item(key);
     }
 }
 
@@ -235,17 +192,6 @@ fn store(key: &str, value: &str) {
     write_config(&config);
 }
 
-#[cfg(all(
-    not(feature = "server"),
-    not(target_arch = "wasm32"),
-    any(feature = "desktop", feature = "mobile")
-))]
-fn clear(key: &str) {
-    let mut config = read_config();
-    config.remove(key);
-    write_config(&config);
-}
-
 // No client store: the server binary, which links this module for its shared
 // constants, and any host build of the web client - `cargo test` compiles for
 // the host, where there is neither a `window` nor a packaged config directory.
@@ -272,16 +218,6 @@ fn stored(_key: &str) -> Option<String> {
     )
 ))]
 fn store(_key: &str, _value: &str) {}
-
-#[cfg(any(
-    feature = "server",
-    all(
-        not(target_arch = "wasm32"),
-        not(feature = "desktop"),
-        not(feature = "mobile")
-    )
-))]
-fn clear(_key: &str) {}
 
 #[cfg(test)]
 mod tests {

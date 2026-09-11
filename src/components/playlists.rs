@@ -12,10 +12,8 @@ use super::{PageHeader, VideoGrid};
 
 /// Fisher-Yates with a generator of its own.
 ///
-/// `rand` is a server-only dependency here - it is pulled in for session tokens,
-/// and a wasm client does not have it - while a shuffled playlist needs no more
-/// than an order the viewer cannot predict. That does not justify a second
-/// randomness crate in the client bundle.
+/// A shuffled playlist needs no more than an order the viewer cannot predict.
+/// That does not justify a randomness crate in the client bundle.
 fn shuffled(mut ids: Vec<String>) -> Vec<String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     use web_time::{SystemTime, UNIX_EPOCH};

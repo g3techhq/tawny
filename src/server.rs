@@ -50,7 +50,7 @@ use surrealdb_types::SurrealValue;
 
 #[derive(Clone)]
 pub struct AppServerState {
-    db: Arc<Surreal<Any>>,
+    pub(crate) db: Arc<Surreal<Any>>,
     http: reqwest::Client,
     media_http: reqwest::Client,
     ytdlp_http: reqwest::Client,
@@ -4762,7 +4762,6 @@ mod tests {
             .create_guest()
             .await
             .expect("mint a guest for the test")
-            .account
             .id
     }
 
@@ -5434,56 +5433,6 @@ mod tests {
         let mp4 = mp4_head(&[(b"ftyp", 28), (b"sidx", 100)]);
         assert!(segment_ranges(&mp4).is_some());
         assert_eq!(segment_ranges(b"not a media container at all"), None);
-    }
-}
-
-/// Pull the bearer token out of an `Authorization` header.
-///
-/// Returns an empty string rather than an error for anything malformed or
-/// missing: every caller then hands it to `authenticate`, which refuses an
-/// empty token the same way it refuses a wrong one. One rejection path, not
-/// two.
-pub fn bearer_token(headers: &axum::http::HeaderMap) -> String {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| {
-            // RFC 7235 makes the scheme case-insensitive, and clients differ.
-            let (scheme, token) = value.split_once(' ')?;
-            scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
-        })
-        .unwrap_or_default()
-        .to_string()
-}
-
-#[cfg(test)]
-mod bearer_tests {
-    use super::bearer_token;
-    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
-
-    fn headers(value: &str) -> HeaderMap {
-        let mut map = HeaderMap::new();
-        map.insert(AUTHORIZATION, HeaderValue::from_str(value).expect("header"));
-        map
-    }
-
-    #[test]
-    fn a_bearer_header_yields_its_token() {
-        assert_eq!(bearer_token(&headers("Bearer abc123")), "abc123");
-    }
-
-    #[test]
-    fn the_scheme_is_case_insensitive() {
-        assert_eq!(bearer_token(&headers("bearer abc123")), "abc123");
-        assert_eq!(bearer_token(&headers("BEARER abc123")), "abc123");
-    }
-
-    #[test]
-    fn anything_else_yields_nothing_rather_than_a_second_failure_path() {
-        assert_eq!(bearer_token(&HeaderMap::new()), "");
-        assert_eq!(bearer_token(&headers("abc123")), "");
-        assert_eq!(bearer_token(&headers("Basic abc123")), "");
-        assert_eq!(bearer_token(&headers("Bearer")), "");
     }
 }
 

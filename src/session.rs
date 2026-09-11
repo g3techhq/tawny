@@ -10,8 +10,7 @@ use dioxus::prelude::*;
 
 use crate::{
     api::{create_guest_account, current_account},
-    config,
-    models::{Account, AuthSession},
+    models::Account,
 };
 
 /// Where the session is in its bootstrap.
@@ -34,18 +33,13 @@ pub struct Session {
 }
 
 impl Session {
-    /// Adopt a freshly issued session: persist the token, put it on every
-    /// subsequent request, and record who it belongs to.
-    pub fn adopt(&mut self, issued: AuthSession) {
-        config::set_session_token(&issued.token);
-        config::install_session_header(&issued.token);
-        self.account.set(Some(issued.account));
+    /// The server wrote the cookie; retain only the account display state.
+    pub fn adopt(&mut self, account: Account) {
+        self.account.set(Some(account));
         self.status.set(SessionStatus::Ready);
     }
 
     pub fn forget(&mut self) {
-        config::clear_session_token();
-        config::clear_session_header();
         self.account.set(None);
     }
 
@@ -72,24 +66,12 @@ pub fn use_session_provider() -> Session {
         }
         started.set(true);
         spawn(async move {
-            // A stored token is worth trying before minting anything: it is the
-            // difference between resuming an account and silently starting a
-            // second empty one beside it.
-            if config::session_token().is_some() {
-                match current_account().await {
-                    Ok(account) => {
-                        session.account.set(Some(account));
-                        session.status.set(SessionStatus::Ready);
-                        return;
-                    }
-                    // Expired, or issued by a different backend. Falling through
-                    // to mint a guest is right for the first; for the second the
-                    // old library simply stays on the server that holds it.
-                    Err(_) => session.forget(),
-                }
+            if let Ok(account) = current_account().await {
+                session.adopt(account);
+                return;
             }
             match create_guest_account().await {
-                Ok(issued) => session.adopt(issued),
+                Ok(account) => session.adopt(account),
                 Err(error) => session
                     .status
                     .set(SessionStatus::Failed(readable(&error.to_string()))),

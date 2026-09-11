@@ -20,9 +20,13 @@ use app::App;
 fn main() {
     let _ = dotenvy::dotenv();
     dioxus::serve(|| async move {
-        use dioxus::server::axum::Extension;
+        use std::sync::Arc;
+
+        use axum_session::{SessionConfig, SessionLayer, SessionStore};
+        use axum_session_auth::{AuthConfig, AuthSessionLayer};
         use dioxus::server::axum::extract::DefaultBodyLimit;
         use dioxus::server::axum::routing::get;
+        use dioxus::server::axum::{Extension, Router};
 
         /// `/api/v1/library/sync` POSTs the entire library snapshot, which grows
         /// with the cache: at 11k cached videos it is already past axum's 2 MB
@@ -39,8 +43,18 @@ fn main() {
             .expect("initialize Tawny server");
         server::spawn_subscription_poller(state.clone());
 
+        let db = Arc::clone(&state.db);
+        let session_config = SessionConfig::default().with_cookie_path("/");
+        let session_store = SessionStore::new(
+            Some(auth::SurrealSessionPool::new(Arc::clone(&db))),
+            session_config,
+        )
+        .await
+        .expect("create Tawny session store");
+        let auth_config = AuthConfig::<String>::default();
+        let health_state = state.clone();
+
         Ok(dioxus::server::router(App)
-            .route("/api/v1/health", get(server::health))
             .route(
                 "/api/v1/playback/proxy/{token}",
                 get(server::playback_proxy).options(server::playback_proxy_options),
@@ -50,17 +64,35 @@ fn main() {
                 get(server::youtube_websub_verify).post(server::youtube_websub_notification),
             )
             .layer(DefaultBodyLimit::max(LIBRARY_SYNC_BODY_LIMIT))
-            .layer(Extension(state)))
+            .layer(Extension(state))
+            .layer(
+                AuthSessionLayer::<
+                    auth::SessionUser,
+                    String,
+                    auth::SurrealSessionPool<surrealdb::engine::any::Any>,
+                    Arc<surrealdb::Surreal<surrealdb::engine::any::Any>>,
+                >::new(Some(db))
+                .with_config(auth_config),
+            )
+            .layer(SessionLayer::new(session_store))
+            // Probes should not allocate or load a viewer session.
+            .merge(
+                Router::new()
+                    .route("/api/v1/health", get(server::health))
+                    .layer(Extension(health_state)),
+            ))
     });
 }
 
 #[cfg(not(feature = "server"))]
 fn main() {
+    #[cfg(any(feature = "desktop", feature = "mobile"))]
+    dioxus_cookie::init();
     g3_ui::init_auto_mode();
-    // Before `launch`, not after: `set_server_url` keeps only its first value,
-    // and the stored session token has to be on the very first request the app
-    // makes. See `config` for why neither can come from the usual persistence
-    // helper.
+    // Before `launch`, not after: `set_server_url` keeps only its first value.
+    // The cookie runtime is initialized above so the first request can restore
+    // its session. See `config` for why the URL cannot come from the usual
+    // persistence helper.
     config::install();
     dioxus::launch(App);
 }

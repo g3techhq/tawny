@@ -5,8 +5,8 @@
 //! 1. No backend has been chosen, so [`AccountGate`] shows the setup screen
 //!    instead of the app. Nothing else can work until this is answered - there
 //!    is no library to show and no server to ask.
-//! 2. With a backend, the gate mints a guest account and stores its token. No
-//!    sign-in wall: the app is usable immediately, and the account exists so
+//! 2. With a backend, the gate mints a guest account and receives its session
+//!    cookie. No sign-in wall: the app is usable immediately, and the account exists so
 //!    that everything saved from this moment has an owner.
 //! 3. Later, from settings, that guest can be promoted to a real account
 //!    (keeping its library) or abandoned by signing in to another one.
@@ -212,9 +212,9 @@ pub fn AccountSettings() -> Element {
                                 sign_in_to_account(credentials).await
                             };
                             match result {
-                                Ok(issued) => {
+                                Ok(account) => {
                                     let switched = !upgrade;
-                                    session.adopt(issued);
+                                    session.adopt(account);
                                     password.set(String::new());
                                     signing_in.set(false);
                                     app_state.show_toast(
@@ -262,9 +262,6 @@ pub fn AccountSettings() -> Element {
                     expand: true,
                     onclick: move |_| {
                         spawn(async move {
-                            // Best effort: a server that cannot be reached
-                            // still has to leave this device signed out, so
-                            // the local token is dropped either way.
                             let _ = sign_out_of_account().await;
                             session.forget();
                             reload_client();
@@ -312,11 +309,6 @@ pub fn BackendSettings() -> Element {
                     match config::set_backend_url(&url()) {
                         Some(_) => {
                             saved.set(true);
-                            // The signed-in account belongs to the *old*
-                            // server, so its token means nothing to the new
-                            // one. Dropping it lets the next launch mint a
-                            // guest there instead of failing to authenticate.
-                            config::clear_session_token();
                             reload_client();
                         }
                         None => error.set(

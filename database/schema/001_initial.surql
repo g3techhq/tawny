@@ -100,17 +100,6 @@ DEFINE FIELD IF NOT EXISTS updated_at ON app_user TYPE datetime DEFAULT time::no
 -- (It has no filtered indexes at all - `UNIQUE WHERE` is a parse error.)
 DEFINE INDEX IF NOT EXISTS app_user_email_idx ON app_user FIELDS email UNIQUE;
 
--- Only the hash is stored. A stolen database then yields no usable bearer
--- token, the same reason the password beside it is hashed.
-DEFINE TABLE IF NOT EXISTS user_session TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
-DEFINE FIELD IF NOT EXISTS token_hash ON user_session TYPE string;
-DEFINE FIELD IF NOT EXISTS user ON user_session TYPE record<app_user>;
-DEFINE FIELD IF NOT EXISTS created_at ON user_session TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS last_seen_at ON user_session TYPE datetime DEFAULT time::now();
-DEFINE FIELD IF NOT EXISTS expires_at ON user_session TYPE datetime;
-DEFINE INDEX IF NOT EXISTS user_session_token_idx ON user_session FIELDS token_hash UNIQUE;
-DEFINE INDEX IF NOT EXISTS user_session_user_idx ON user_session FIELDS user;
-
 -- --------------------------------------------------------------------------
 -- Per-user library state
 --

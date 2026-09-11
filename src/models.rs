@@ -1193,9 +1193,9 @@ pub struct Account {
 }
 
 impl Account {
-    /// A guest has nothing to sign back in with, so losing the token loses the
-    /// library. That is worth saying out loud in the UI, and this is the test
-    /// the UI asks.
+    /// A guest has nothing to sign back in with, so clearing its cookie loses
+    /// the library. That is worth saying out loud in the UI, and this is the
+    /// test the UI asks.
     pub fn is_recoverable(&self) -> bool {
         !self.is_guest && self.email.is_some()
     }
@@ -1207,16 +1207,6 @@ impl Account {
             &self.display_name
         }
     }
-}
-
-/// A successful sign-in, sign-up, guest mint, or upgrade.
-///
-/// The token is the bearer credential the client stores and replays; the server
-/// keeps only its digest, so this is the one and only time it exists in full.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthSession {
-    pub token: String,
-    pub account: Account,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
