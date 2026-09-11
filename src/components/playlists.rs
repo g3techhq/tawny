@@ -1,25 +1,89 @@
-use crate::{app::Route, models::Playlist, state::AppState};
+use crate::{
+    app::Route,
+    models::{DurationFilter, PlaylistOrder, PlaylistSort, Video},
+    state::AppState,
+};
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{CheckCheck, ListPlus, Plus, Trash2};
+use dioxus_icons::lucide::{CheckCheck, ListPlus, Play, Plus, Shuffle, Trash2};
 use g3_route_transitions::animated_navigate;
 use g3_ui::{Body, Button, ButtonStyle, Card, Field, Modal, RightSlot, StatusColor};
 
 use super::{PageHeader, VideoGrid};
 
-fn playlist_thumbnails(state: AppState, playlist: &Playlist) -> Vec<(String, bool)> {
-    playlist
-        .video_ids
-        .iter()
-        .filter_map(|id| {
-            state
-                .library()
-                .videos
-                .iter()
-                .find(|video| &video.id == id)
-                .map(|video| (video.thumbnail_url.clone(), video.is_short))
-        })
-        .take(3)
-        .collect()
+/// Fisher-Yates with a generator of its own.
+///
+/// `rand` is a server-only dependency here - it is pulled in for session tokens,
+/// and a wasm client does not have it - while a shuffled playlist needs no more
+/// than an order the viewer cannot predict. That does not justify a second
+/// randomness crate in the client bundle.
+fn shuffled(mut ids: Vec<String>) -> Vec<String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use web_time::{SystemTime, UNIX_EPOCH};
+
+    // The clock alone is not enough. On the web `SystemTime` is `Date.now()`,
+    // so two shuffles inside the same millisecond would deal the same order;
+    // the counter is what separates a second tap from the first.
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+        ^ SEQUENCE.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+    let mut state = seed;
+    let mut next = move || {
+        // splitmix64.
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    for index in (1..ids.len()).rev() {
+        ids.swap(index, (next() % (index as u64 + 1)) as usize);
+    }
+    ids
+}
+
+/// Start a run of videos: the first one plays, the rest wait in the queue.
+///
+/// The playing video is deliberately left out of the queue. It is what the
+/// queue is *for* - the list of what comes next - and the player drops the
+/// finished video from it as it advances anyway.
+fn play_run(app_state: AppState, ids: Vec<String>, verb: &str) {
+    let Some((first, rest)) = ids.split_first() else {
+        return;
+    };
+    app_state.queue_run(rest);
+    let count = ids.len();
+    app_state.show_toast(
+        format!("{verb} {count} video{}", if count == 1 { "" } else { "s" }),
+        StatusColor::Success,
+    );
+    let first = first.clone();
+    spawn(async move {
+        animated_navigate(Route::VideoDetail { id: first }).await;
+    });
+}
+
+/// One row of the index, resolved once per render.
+///
+/// Built from a lookup rather than a scan per playlist: finding three
+/// thumbnails used to walk the whole video cache for every playlist on the
+/// page, which is tens of thousands of rows each time.
+struct PlaylistRow {
+    id: String,
+    name: String,
+    count: usize,
+    unwatched: usize,
+    thumbnails: Vec<(String, bool)>,
+}
+
+fn chip_class(active: bool) -> &'static str {
+    if active {
+        "group-filter active"
+    } else {
+        "group-filter"
+    }
 }
 
 #[component]
@@ -29,7 +93,58 @@ pub fn Playlists() -> Element {
     let mut playlist_name = use_signal(String::new);
     let mut delete_target = use_signal(|| None::<(String, String)>);
     let mut delete_open = use_signal(|| false);
-    let playlists = app_state.library().playlists;
+    let mut only_unwatched = use_signal(|| false);
+    let mut order = use_signal(|| PlaylistOrder::Added);
+    let mut descending = use_signal(|| PlaylistOrder::Added.default_descending());
+
+    let mut rows = app_state.with_library(|library| {
+        let by_id = library
+            .videos
+            .iter()
+            .map(|video| (video.id.as_str(), video))
+            .collect::<std::collections::HashMap<_, _>>();
+        library
+            .playlists
+            .iter()
+            .map(|playlist| {
+                let mut unwatched = 0;
+                let mut thumbnails = Vec::new();
+                for id in &playlist.video_ids {
+                    let Some(video) = by_id.get(id.as_str()) else {
+                        continue;
+                    };
+                    if !video.watched {
+                        unwatched += 1;
+                    }
+                    if thumbnails.len() < 3 {
+                        thumbnails.push((video.thumbnail_url.clone(), video.is_short));
+                    }
+                }
+                PlaylistRow {
+                    id: playlist.id.clone(),
+                    name: playlist.name.clone(),
+                    count: playlist.video_ids.len(),
+                    unwatched,
+                    thumbnails,
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let total = rows.len();
+    if only_unwatched() {
+        rows.retain(|row| row.unwatched > 0);
+    }
+    match order() {
+        // The stored order is creation order, so this sorts on nothing.
+        PlaylistOrder::Added => {}
+        PlaylistOrder::Name => rows.sort_by_cached_key(|row| row.name.to_lowercase()),
+        PlaylistOrder::Size => rows.sort_by_key(|row| row.count),
+    }
+    if descending() {
+        rows.reverse();
+    }
+    let hidden = total.saturating_sub(rows.len());
+
     let delete_name = delete_target()
         .map(|(_, name)| name)
         .unwrap_or_else(|| "This playlist".into());
@@ -45,20 +160,67 @@ pub fn Playlists() -> Element {
                         "New playlist"
                     }
                 }
+                // Only worth the row once there is more than one playlist to
+                // order; a single card has no order to speak of.
+                if total > 1 {
+                    nav { class: "group-filter-row", aria_label: "Playlist filters and order",
+                        span { class: "group-filter-label", "Show" }
+                        button {
+                            class: chip_class(only_unwatched()),
+                            aria_pressed: only_unwatched().to_string(),
+                            onclick: move |_| only_unwatched.toggle(),
+                            "Unwatched"
+                        }
+                        span { class: "filter-divider", aria_hidden: "true" }
+                        span { class: "group-filter-label", "Sort" }
+                        for option in PlaylistOrder::ALL {
+                            {
+                                let active = order() == option;
+                                // An inactive chip advertises the order a tap
+                                // would give, not the one it is not in.
+                                let direction = if active { descending() } else { option.default_descending() };
+                                rsx! {
+                                    button {
+                                        key: "{option:?}",
+                                        class: chip_class(active),
+                                        aria_pressed: active.to_string(),
+                                        title: if active { "Tap again to reverse" } else { "" },
+                                        onclick: move |_| {
+                                            if order() == option {
+                                                descending.toggle();
+                                            } else {
+                                                order.set(option);
+                                                descending.set(option.default_descending());
+                                            }
+                                        },
+                                        "{option.label(direction)}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if hidden > 0 {
+                    p { class: "feed-filter-note",
+                        "{hidden} "
+                        if hidden == 1 { "playlist has" } else { "playlists have" }
+                        " nothing unwatched left."
+                    }
+                }
                 div { class: "playlist-grid",
-                    for playlist in playlists {
+                    for row in rows {
                         {
-                            let playlist_id = playlist.id.clone();
-                            let remove_id = playlist.id.clone();
-                            let remove_name = playlist.name.clone();
-                            let thumbs = playlist_thumbnails(app_state, &playlist);
-                            let collage_class = format!("playlist-collage count-{}", thumbs.len());
-                            let video_count = playlist.video_ids.len();
+                            let playlist_id = row.id.clone();
+                            let remove_id = row.id.clone();
+                            let remove_name = row.name.clone();
+                            let collage_class = format!("playlist-collage count-{}", row.thumbnails.len());
+                            let video_count = row.count;
+                            let unwatched = row.unwatched;
                             rsx! {
                                 Card {
-                                    key: "{playlist.id}",
+                                    key: "{row.id}",
                                     class: "playlist-card",
-                                    title: playlist.name.clone(),
+                                    title: row.name.clone(),
                                     right_slot: RightSlot::Element(rsx! {
                                         div { class: "playlist-card-actions",
                                             button {
@@ -76,10 +238,10 @@ pub fn Playlists() -> Element {
                                     }),
                                     onclick: move |_| { { let v = playlist_id.clone(); spawn(async move { animated_navigate(Route::PlaylistDetail { id: v }).await; }); }; },
                                     div { class: collage_class,
-                                        if thumbs.is_empty() {
+                                        if row.thumbnails.is_empty() {
                                             div { class: "playlist-empty-art", ListPlus { size: 30 } }
                                         } else {
-                                            for (thumbnail, is_short) in thumbs {
+                                            for (thumbnail, is_short) in row.thumbnails {
                                                 img {
                                                     class: if is_short { "playlist-collage-short" } else { "" },
                                                     src: "{thumbnail}",
@@ -92,6 +254,12 @@ pub fn Playlists() -> Element {
                                     div { class: "playlist-card-meta",
                                         span { class: "playlist-count",
                                             if video_count == 1 { "1 video" } else { "{video_count} videos" }
+                                        }
+                                        // The count that answers "is there
+                                        // anything left in here", which is the
+                                        // reason to open one.
+                                        if unwatched > 0 && unwatched < video_count {
+                                            span { class: "playlist-unwatched", "{unwatched} unwatched" }
                                         }
                                     }
                                 }
@@ -154,12 +322,37 @@ pub fn Playlists() -> Element {
 #[component]
 pub fn PlaylistDetail(id: String) -> Element {
     let app_state = use_context::<AppState>();
-    let library = app_state.library();
-    let playlist = library
-        .playlists
-        .iter()
-        .find(|playlist| playlist.id == id)
-        .cloned();
+    let mut only_unwatched = use_signal(|| false);
+    let mut selected_duration = use_signal(|| None::<DurationFilter>);
+    let mut sort = use_signal(|| PlaylistSort::Added);
+    let mut descending = use_signal(|| PlaylistSort::Added.default_descending());
+
+    // Resolved through a borrow, and through a lookup rather than a scan per
+    // entry: a playlist of fifty videos was walking the whole cache fifty times
+    // on every render.
+    let (playlist, mut videos) = app_state.with_library(|library| {
+        let playlist = library
+            .playlists
+            .iter()
+            .find(|playlist| playlist.id == id)
+            .cloned();
+        let videos = playlist
+            .as_ref()
+            .map(|playlist| {
+                let by_id = library
+                    .videos
+                    .iter()
+                    .map(|video| (video.id.as_str(), video))
+                    .collect::<std::collections::HashMap<_, _>>();
+                playlist
+                    .video_ids
+                    .iter()
+                    .filter_map(|id| by_id.get(id.as_str()).map(|video| (*video).clone()))
+                    .collect::<Vec<Video>>()
+            })
+            .unwrap_or_default();
+        (playlist, videos)
+    });
 
     let Some(playlist) = playlist else {
         // Still renders the bar: reaching a stale deep link with no way back was
@@ -174,13 +367,35 @@ pub fn PlaylistDetail(id: String) -> Element {
         };
     };
 
-    let videos = playlist
-        .video_ids
-        .iter()
-        .filter_map(|id| library.videos.iter().find(|video| &video.id == id).cloned())
-        .collect::<Vec<_>>();
-    let video_count = videos.len();
+    let saved_count = playlist.video_ids.len();
     let watched_count = videos.iter().filter(|video| video.watched).count();
+    if only_unwatched() {
+        videos.retain(|video| !video.watched);
+    }
+    // Same trap as the feed: the subscription RSS carries no duration, so most
+    // cached rows store 0, and a duration chip is right to exclude them but
+    // cannot say so on its own. Counted before the filter runs, because after it
+    // they are gone.
+    let mut without_duration = 0usize;
+    if let Some(duration) = selected_duration() {
+        let settings = app_state.settings();
+        without_duration = videos
+            .iter()
+            .filter(|video| !video.is_live && video.duration_seconds == 0)
+            .count();
+        videos.retain(|video| duration.matches(video, &settings));
+    }
+    sort().apply(&mut videos, descending());
+
+    // The run is what the filters and the sort left, in the order shown. Playing
+    // a playlist you have just narrowed to "short and unwatched" should give you
+    // exactly that.
+    let run: Vec<String> = videos.iter().map(|video| video.id.clone()).collect();
+    let shuffle_run = run.clone();
+    // Asked of the filters, not of the count: a playlist can also be shorter
+    // than its own id list, when an entry is not in the local cache, and that is
+    // not the reader filtering anything.
+    let filtered = only_unwatched() || selected_duration().is_some();
     let clear_id = playlist.id.clone();
 
     rsx! {
@@ -188,7 +403,27 @@ pub fn PlaylistDetail(id: String) -> Element {
         Body { padding: false,
             main { class: "page playlist-detail-page",
                 div { class: "page-actions-row",
-                    span { class: "playlist-detail-count", "{video_count} saved" }
+                    span { class: "playlist-detail-count",
+                        if filtered {
+                            "{videos.len()} of {saved_count} saved"
+                        } else {
+                            "{saved_count} saved"
+                        }
+                    }
+                    Button {
+                        style: ButtonStyle::Solid,
+                        disabled: run.is_empty(),
+                        start: rsx! { Play { size: 16 } },
+                        onclick: move |_| play_run(app_state, run.clone(), "Playing"),
+                        "Play all"
+                    }
+                    Button {
+                        style: ButtonStyle::Neutral,
+                        disabled: shuffle_run.len() < 2,
+                        start: rsx! { Shuffle { size: 16 } },
+                        onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
+                        "Shuffle"
+                    }
                     Button {
                         style: ButtonStyle::Neutral,
                         disabled: watched_count == 0,
@@ -205,10 +440,72 @@ pub fn PlaylistDetail(id: String) -> Element {
                         "Remove watched"
                     }
                 }
+                if saved_count > 1 {
+                    nav { class: "group-filter-row", aria_label: "Playlist filters and order",
+                        span { class: "group-filter-label", "Show" }
+                        button {
+                            class: chip_class(only_unwatched()),
+                            aria_pressed: only_unwatched().to_string(),
+                            onclick: move |_| only_unwatched.toggle(),
+                            "Unwatched"
+                        }
+                        for duration in DurationFilter::ALL {
+                            button {
+                                key: "{duration.label()}",
+                                class: if selected_duration() == Some(duration) { "group-filter duration-filter active" } else { "group-filter duration-filter" },
+                                aria_pressed: (selected_duration() == Some(duration)).to_string(),
+                                onclick: move |_| {
+                                    selected_duration.set(if selected_duration() == Some(duration) {
+                                        None
+                                    } else {
+                                        Some(duration)
+                                    });
+                                },
+                                "{duration.label()}"
+                            }
+                        }
+                        span { class: "filter-divider", aria_hidden: "true" }
+                        span { class: "group-filter-label", "Sort" }
+                        for option in PlaylistSort::ALL {
+                            {
+                                let active = sort() == option;
+                                let direction = if active { descending() } else { option.default_descending() };
+                                rsx! {
+                                    button {
+                                        key: "{option:?}",
+                                        class: chip_class(active),
+                                        aria_pressed: active.to_string(),
+                                        title: if active { "Tap again to reverse" } else { "" },
+                                        onclick: move |_| {
+                                            if sort() == option {
+                                                descending.toggle();
+                                            } else {
+                                                sort.set(option);
+                                                descending.set(option.default_descending());
+                                            }
+                                        },
+                                        "{option.label(direction)}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if without_duration > 0 {
+                    p { class: "feed-filter-note",
+                        "{without_duration} more "
+                        if without_duration == 1 { "video has" } else { "videos have" }
+                        " no length yet, so they cannot be sorted by duration. Opening one records it."
+                    }
+                }
                 VideoGrid {
                     videos,
                     playlist_id: playlist.id.clone(),
-                    empty_message: "Add videos from the buttons on a card.".to_string(),
+                    empty_message: if filtered {
+                        "Nothing here matches those filters.".to_string()
+                    } else {
+                        "Add videos from the buttons on a card.".to_string()
+                    },
                 }
             }
         }

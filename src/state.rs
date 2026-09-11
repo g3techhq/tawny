@@ -781,6 +781,27 @@ impl AppState {
         Some(next)
     }
 
+    /// Append a whole run of videos to the queue, in the order given.
+    ///
+    /// One write and one sync rather than one of each per video: queueing a
+    /// playlist through `add_to_queue` would hit the server once per entry.
+    ///
+    /// Ids already in the queue are moved rather than duplicated, because the
+    /// run is what the viewer just chose to watch, in the order they chose it;
+    /// a stale copy earlier in the queue would play them out of that order.
+    pub fn queue_run(mut self, video_ids: &[String]) -> usize {
+        if video_ids.is_empty() {
+            return 0;
+        }
+        let mut library = self.library.write();
+        library.queue.retain(|id| !video_ids.contains(id));
+        library.queue.extend(video_ids.iter().cloned());
+        library.cache_revision += 1;
+        drop(library);
+        self.sync_in_background();
+        video_ids.len()
+    }
+
     pub fn add_to_queue(mut self, video_id: &str, play_next: bool) -> String {
         let mut library = self.library.write();
         library.queue.retain(|id| id != video_id);

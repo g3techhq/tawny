@@ -360,6 +360,11 @@ textarea {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  /* Wraps because a playlist carries three actions plus its count, and a phone
+     is narrower than that. Squeezing them instead would shrink the labels to
+     the point where "Remove watched" reads as an icon. */
+  flex-wrap: wrap;
+  row-gap: 0.6rem;
   justify-content: flex-end;
   margin-bottom: 0.85rem;
 }
@@ -919,6 +924,14 @@ textarea {
   color: var(--color-text-secondary);
   font-size: 0.78rem;
   font-weight: 650;
+}
+
+/* Secondary to the total, and only shown when it differs from it: the count
+   that answers "is there anything left in here". */
+.playlist-unwatched {
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+  opacity: 0.85;
 }
 
 .playlist-card-meta {

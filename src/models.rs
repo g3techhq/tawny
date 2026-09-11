@@ -562,6 +562,96 @@ impl Default for FeedFilter {
     }
 }
 
+/// How a playlist's videos are ordered on its page.
+///
+/// `Added` is the playlist's own order and is the default, because a hand-built
+/// watchlist already carries the order its owner chose. Anything else would make
+/// the control destructive by default rather than helpful.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaylistSort {
+    Added,
+    Published,
+    Duration,
+    Title,
+}
+
+impl PlaylistSort {
+    pub const ALL: [Self; 4] = [Self::Added, Self::Published, Self::Duration, Self::Title];
+
+    /// The label names the resulting order rather than the field it sorts on,
+    /// because the chip is the only place the direction is visible: tapping an
+    /// active chip flips it, and the text has to be what says so.
+    pub fn label(self, descending: bool) -> &'static str {
+        match (self, descending) {
+            (Self::Added, false) => "First added",
+            (Self::Added, true) => "Last added",
+            (Self::Published, true) => "Newest",
+            (Self::Published, false) => "Oldest",
+            (Self::Duration, true) => "Longest",
+            (Self::Duration, false) => "Shortest",
+            (Self::Title, false) => "A-Z",
+            (Self::Title, true) => "Z-A",
+        }
+    }
+
+    /// Which direction a sort lands on when it is first picked. Newest and
+    /// longest are what someone reaches for; oldest and shortest are the second
+    /// tap.
+    pub fn default_descending(self) -> bool {
+        matches!(self, Self::Published | Self::Duration)
+    }
+
+    /// Order `videos` in place. They arrive in the playlist's own order, which
+    /// is why `Added` sorts on nothing.
+    ///
+    /// Reversing after a stable sort rather than comparing backwards also
+    /// inverts ties. For `Added` that is the whole point, and elsewhere a tie
+    /// means equal keys, so the two orders are equally correct.
+    pub fn apply(self, videos: &mut [Video], descending: bool) {
+        match self {
+            Self::Added => {}
+            // Cached, because parsing a published date is not free and a
+            // playlist can hold hundreds of them.
+            Self::Published => videos.sort_by_cached_key(|video| video.published_epoch()),
+            Self::Duration => videos.sort_by_key(|video| video.duration_seconds),
+            Self::Title => videos.sort_by_cached_key(|video| video.title.to_lowercase()),
+        }
+        if descending {
+            videos.reverse();
+        }
+    }
+}
+
+/// How the playlist index is ordered.
+///
+/// Separate from [`PlaylistSort`] because it sorts playlists, not videos, and
+/// the two share no keys: a playlist has no date of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaylistOrder {
+    Added,
+    Name,
+    Size,
+}
+
+impl PlaylistOrder {
+    pub const ALL: [Self; 3] = [Self::Added, Self::Name, Self::Size];
+
+    pub fn label(self, descending: bool) -> &'static str {
+        match (self, descending) {
+            (Self::Added, false) => "Oldest first",
+            (Self::Added, true) => "Newest first",
+            (Self::Name, false) => "A-Z",
+            (Self::Name, true) => "Z-A",
+            (Self::Size, true) => "Most videos",
+            (Self::Size, false) => "Fewest videos",
+        }
+    }
+
+    pub fn default_descending(self) -> bool {
+        matches!(self, Self::Size)
+    }
+}
+
 /// Which native design language the component library renders with.
 ///
 /// g3-ui detects this from the platform at startup, which is right for a
@@ -1661,6 +1751,92 @@ mod sponsor_tests {
                 category == SponsorCategory::Highlight,
                 "{category:?}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn video(id: &str, title: &str, published_at: &str, duration_seconds: u64) -> Video {
+        Video {
+            id: id.into(),
+            title: title.into(),
+            channel_id: "channel".into(),
+            channel_name: "Channel".into(),
+            thumbnail_url: String::new(),
+            published_at: published_at.into(),
+            duration_seconds,
+            view_count: String::new(),
+            progress_seconds: 0,
+            watched: false,
+            is_live: false,
+            is_short: false,
+            audio_only: false,
+        }
+    }
+
+    fn ids(videos: &[Video]) -> Vec<&str> {
+        videos.iter().map(|video| video.id.as_str()).collect()
+    }
+
+    fn sample() -> Vec<Video> {
+        vec![
+            video("b", "Beta", "2024-03-01T00:00:00Z", 600),
+            video("a", "alpha", "2024-01-01T00:00:00Z", 90),
+            video("c", "Gamma", "2024-02-01T00:00:00Z", 3600),
+        ]
+    }
+
+    #[test]
+    fn added_keeps_the_playlists_own_order() {
+        let mut videos = sample();
+        PlaylistSort::Added.apply(&mut videos, false);
+        assert_eq!(ids(&videos), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn added_reversed_walks_the_playlist_backwards() {
+        let mut videos = sample();
+        PlaylistSort::Added.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn published_sorts_newest_first_when_descending() {
+        let mut videos = sample();
+        PlaylistSort::Published.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["b", "c", "a"]);
+        let mut videos = sample();
+        PlaylistSort::Published.apply(&mut videos, false);
+        assert_eq!(ids(&videos), ["a", "c", "b"]);
+    }
+
+    #[test]
+    fn duration_sorts_longest_first_when_descending() {
+        let mut videos = sample();
+        PlaylistSort::Duration.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["c", "b", "a"]);
+    }
+
+    /// Case is not order: "alpha" belongs before "Beta", not after "Gamma".
+    #[test]
+    fn title_ignores_case() {
+        let mut videos = sample();
+        PlaylistSort::Title.apply(&mut videos, false);
+        assert_eq!(ids(&videos), ["a", "b", "c"]);
+    }
+
+    /// Every chip is reachable in both directions, and the two directions never
+    /// read the same - the label is the only place the direction is shown.
+    #[test]
+    fn every_sort_labels_both_directions_distinctly() {
+        for sort in PlaylistSort::ALL {
+            assert_ne!(sort.label(true), sort.label(false), "{sort:?}");
+        }
+        for order in PlaylistOrder::ALL {
+            assert_ne!(order.label(true), order.label(false), "{order:?}");
         }
     }
 }
