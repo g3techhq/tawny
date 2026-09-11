@@ -335,6 +335,7 @@ fn attach_player_session(
     session: PlaybackSession,
     playback_rate: f64,
     video_id: &str,
+    player_key: &str,
     prefer_sabr: bool,
     audio_only: bool,
     resume_seconds: u64,
@@ -346,15 +347,21 @@ fn attach_player_session(
         return;
     };
     let video_id = video_id.to_string();
+    let player_key = player_key.to_string();
     spawn(async move {
         let script = format!(
             r#"
             const session = {session};
             const videoId = {video_id:?};
+            const playerKey = {player_key:?};
             const serverUrl = {server_url};
             const media = document.getElementById('tawny-player-media');
             window.__tawnyAttachEval = {{ phase: 'starting', hasMedia: Boolean(media) }};
-            if (!media) {{ dioxus.send(false); return; }}
+            // This work is launched from an onmounted callback, so a fast
+            // watch-to-watch navigation can replace the element before this
+            // script runs.  Never let an old resolver attach its stream to the
+            // newly mounted element simply because they share an id.
+            if (!media || media.dataset.playerKey !== playerKey) {{ dioxus.send(false); return; }}
             for (let attempt = 0; attempt < 100 && !window.TawnyTransport; attempt++) {{
                 await new Promise((resolve) => setTimeout(resolve, 25));
             }}
@@ -365,6 +372,19 @@ fn attach_player_session(
                 return;
             }}
             try {{
+                // A removed media node can continue playing in Chromium. Keep
+                // its element around long enough to detach its transport and
+                // pause it before the replacement starts, otherwise tapping a
+                // new player can leave both videos audible.
+                const previous = window.__tawnyActivePlayerMedia;
+                if (previous && previous !== media) {{
+                    window.TawnyPlayerControls?.detach?.(previous);
+                    await Promise.resolve(window.TawnyTransport.detach?.(previous)).catch(() => {{}});
+                    previous.pause();
+                    previous.removeAttribute('src');
+                    previous.load();
+                }}
+                window.__tawnyActivePlayerMedia = media;
                 if (window.TawnyPlayerControls) {{
                     window.TawnyPlayerControls.attach(media);
                 }}
@@ -378,6 +398,12 @@ fn attach_player_session(
                     startTime: {resume_seconds},
                     refreshUrl: new URL(refreshPath, `${{serverBase}}/`).href,
                 }});
+                if (window.__tawnyActivePlayerMedia !== media || media.dataset.playerKey !== playerKey) {{
+                    await Promise.resolve(window.TawnyTransport.detach?.(media)).catch(() => {{}});
+                    media.pause();
+                    dioxus.send(false);
+                    return;
+                }}
                 window.__tawnyAttachEval = {{ phase: 'attached', hasMedia: true }};
                 dioxus.send(true);
             }} catch (error) {{
@@ -676,6 +702,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     video {
                         id: "tawny-player-media",
                         key: "{player_key}",
+                        "data-player-key": "{player_key}",
                         autoplay: true,
                         playsinline: true,
                         crossorigin: "anonymous",
@@ -686,6 +713,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     session,
                                     current_speed,
                                     &attach_video_id,
+                                    &player_key,
                                     prefer_sabr,
                                     attach_audio_only,
                                     attach_resume_seconds,
@@ -765,10 +793,13 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     aria_label: if is_short { "Autoplay Shorts" } else { "Autoplay videos" },
                                     title: if autoplay_enabled { "Autoplay is on" } else { "Autoplay is off" },
                                     aria_pressed: autoplay_enabled.to_string(),
-                                    onclick: move |_| {
-                                        autoplay_settings
-                                            .write()
-                                            .set_autoplay_for(is_short, !autoplay_enabled);
+                                    onclick: move |event: Event<MouseData>| {
+                                        // Root owns media-surface taps. This is
+                                        // an independent state control, never a
+                                        // request to toggle playback too.
+                                        event.stop_propagation();
+                                        let enabled = autoplay_settings().autoplay_for(is_short);
+                                        autoplay_settings.write().set_autoplay_for(is_short, !enabled);
                                     },
                                     // A switch rather than a glyph: this button
                                     // reports a state as much as it invites a

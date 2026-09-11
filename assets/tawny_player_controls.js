@@ -807,9 +807,12 @@
 
     listen(root, "pointerdown", (event) => {
       swallowNextClick = false;
-      if (
-        event.target.closest("[data-player-action], [data-player-progress], .player-options-menu")
-      ) {
+      // Capture retargets the later click to `root`. Every interactive piece
+      // of chrome must opt out here, not only controls implemented by the JS
+      // action dispatcher. In particular the Rust-owned autoplay switch used
+      // to be captured as a surface tap, so one press toggled autoplay and
+      // play/pause at the same time.
+      if (isPlayerChrome(event.target)) {
         gestureStart = null;
         return;
       }

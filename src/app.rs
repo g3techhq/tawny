@@ -57,7 +57,10 @@ pub enum Route {
         #[transition(cover, forward = SettingsPage)]
         #[route("/history")]
         HistoryPage {},
-        #[transition(cover)]
+        // A new item in an active run replaces the current watch entry.  Back
+        // then dismisses the player to the page beneath it instead of walking
+        // back through every video autoplay (or the queue controls) visited.
+        #[transition(cover, replace)]
         #[route("/watch/:id")]
         VideoDetail { id: String },
         #[transition(pushed)]
@@ -281,5 +284,14 @@ mod transition_tests {
 
         assert_eq!(root.transition_to(&player), NavigationAnimation::CoverUp);
         assert_eq!(player.transition_back(), NavigationAnimation::UncoverDown);
+    }
+
+    #[test]
+    fn advancing_between_videos_reuses_the_watch_history_entry() {
+        let first = Route::VideoDetail { id: "first".into() };
+        let next = Route::VideoDetail { id: "next".into() };
+
+        assert!(first.replaces_history(&next));
+        assert!(!Route::Feed {}.replaces_history(&next));
     }
 }

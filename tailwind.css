@@ -3066,6 +3066,22 @@ textarea {
   height: 1.3rem;
 }
 
+/* Queue navigation remains available in the mini player, but it should read
+   as a pair of lightweight nudges beside play rather than three primary
+   controls competing for the thumbnail's limited width. */
+.persistent-player.mini .player-step-button {
+  width: 1.9rem;
+  height: 1.9rem;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.persistent-player.mini .player-step-button svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
 .persistent-player.mini .player-controls-scrim {
   background: rgba(0, 0, 0, 0.08);
 }
