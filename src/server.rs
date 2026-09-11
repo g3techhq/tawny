@@ -94,6 +94,14 @@ struct CachedSearch {
 
 const FEED_RECONCILE_BATCH_SIZE: usize = 48;
 const FEED_RSS_CONCURRENCY: usize = 32;
+/// How many channels one refresh will ask for video lengths, at most.
+///
+/// One call covers a channel's recent uploads, so this is the number of extra
+/// Innertube requests a pull-to-refresh can cost. Channels are picked by where
+/// the gaps are, so successive refreshes work through the backlog.
+const FEED_DURATION_BACKFILL_CHANNELS: usize = 6;
+/// How many rows to look at when deciding which channels those are.
+const FEED_DURATION_SCAN_ROWS: usize = 600;
 const WEBSUB_RENEW_CONCURRENCY: usize = 12;
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
@@ -2652,6 +2660,126 @@ impl AppServerState {
         Ok(entries.len())
     }
 
+    /// Channels with at least one video of unknown length, most recent first.
+    ///
+    /// Reads rows rather than grouping: the newest videos are the ones a viewer
+    /// is about to filter or sort, and a scan of a few hundred is cheaper than
+    /// an aggregate over the whole catalog.
+    async fn channels_missing_durations(&self, limit: usize) -> Result<Vec<String>> {
+        // `published_sort` is selected because SurrealDB 3.x refuses to order by
+        // an idiom the projection does not carry.
+        #[derive(Debug, Deserialize, SurrealValue)]
+        struct Row {
+            channel_id: String,
+            #[allow(dead_code)]
+            published_sort: String,
+        }
+        let rows: Vec<Row> = self
+            .db
+            .query(
+                "SELECT channel_id, published_sort FROM video WHERE duration_seconds = 0 AND is_live = false ORDER BY published_sort DESC LIMIT $scan",
+            )
+            .bind(("scan", FEED_DURATION_SCAN_ROWS as i64))
+            .await?
+            .take(0)?;
+        let mut seen = HashSet::new();
+        let mut channels = Vec::new();
+        for row in rows {
+            if !row.channel_id.starts_with("UC") || row.channel_id.starts_with("UC-tawny") {
+                continue;
+            }
+            if seen.insert(row.channel_id.clone()) {
+                channels.push(row.channel_id);
+            }
+            if channels.len() >= limit {
+                break;
+            }
+        }
+        Ok(channels)
+    }
+
+    /// Write lengths a listing reported onto rows that still have none.
+    ///
+    /// Guarded on `duration_seconds = 0` in the statement rather than in Rust:
+    /// the player writes an exact length when a video is opened, and a listing's
+    /// rounded seconds must never overwrite it.
+    async fn apply_video_durations(&self, rows: &[(String, u64, String)]) -> Result<usize> {
+        let mut filled = 0;
+        for (video_id, duration_seconds, view_count) in rows {
+            let updated: Vec<serde_json::Value> = self
+                .db
+                .query(
+                    r#"UPDATE video SET
+                        duration_seconds = $duration_seconds,
+                        view_count = IF $view_count = "" THEN view_count ELSE $view_count END
+                    WHERE video_id = $video_id AND duration_seconds = 0 RETURN video_id"#,
+                )
+                .bind(("video_id", video_id.clone()))
+                .bind(("duration_seconds", *duration_seconds as i64))
+                .bind(("view_count", view_count.clone()))
+                .await?
+                .take(0)?;
+            filled += updated.len();
+        }
+        Ok(filled)
+    }
+
+    /// Fill in lengths for videos that arrived over RSS.
+    ///
+    /// YouTube's subscription feed is an Atom document, and the format carries
+    /// no duration at all - which is why a video imported from it has none until
+    /// something opens it, and why a duration filter used to discard almost the
+    /// whole library. A channel's own uploads tab does report lengths, and one
+    /// call covers its recent uploads, so this costs one request per channel
+    /// with a gap rather than one per video.
+    ///
+    /// Best effort throughout. A refresh that cannot reach the extractor still
+    /// returns the feed it did reconcile; the lengths are simply filled in on a
+    /// later refresh.
+    async fn backfill_durations(&self) -> usize {
+        use futures_util::{StreamExt, stream};
+
+        let Ok(channels) = self
+            .channels_missing_durations(FEED_DURATION_BACKFILL_CHANNELS)
+            .await
+        else {
+            return 0;
+        };
+        let listings = stream::iter(channels.into_iter().map(|channel_id| async move {
+            youtube_call(
+                self.youtube.query().channel_videos(&channel_id),
+                "extract channel videos for lengths",
+            )
+            .await
+        }))
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+
+        let mut filled = 0;
+        for listing in listings.into_iter().flatten() {
+            let rows = listing
+                .content
+                .items
+                .iter()
+                .filter(|item| !item.is_live)
+                .filter_map(|item| {
+                    let duration = u64::from(item.duration?);
+                    if duration == 0 {
+                        return None;
+                    }
+                    let views = item
+                        .view_count
+                        .map(|count| compact_count(count as i64, " views"))
+                        .unwrap_or_default();
+                    Some((item.id.clone(), duration, views))
+                })
+                .collect::<Vec<_>>();
+            filled += self.apply_video_durations(&rows).await.unwrap_or(0);
+        }
+        filled
+    }
+
     async fn reconcile_channels_rss(
         &self,
         channels: Vec<Channel>,
@@ -2815,6 +2943,9 @@ impl AppServerState {
         if sources.is_empty() {
             sources.push("Local cache".into());
         }
+        // After reconciliation, so it sees the videos this refresh just
+        // imported, and before the snapshot, so their lengths travel with them.
+        self.backfill_durations().await;
         let refreshed_channels = covered_channels.len();
         let failed_channels = total_channels.saturating_sub(refreshed_channels);
         Ok(FeedRefreshResult {
@@ -4587,6 +4718,7 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 mod tests {
     use crate::models::{Playlist, SubscriptionGroup};
 
+    use super::DbVideo;
     use super::{
         AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters, health,
         mp4_segment_ranges, parse_youtube_feed, playback_proxy_options, reconciliation_limit,
@@ -4595,6 +4727,7 @@ mod tests {
         ytdlp_service_channel_shorts_url, ytdlp_service_video_url,
     };
     use crate::models::PlaybackProtocol;
+    use crate::models::Video;
 
     #[test]
     fn parses_youtube_atom_entries() {
@@ -4789,6 +4922,99 @@ mod tests {
         // call has to resolve to that video with something to show next, which
         // is what the offline library fallback guarantees.
         assert!(!details.related_videos.is_empty());
+    }
+
+    /// The guard that keeps a listing from overwriting a known length lives in
+    /// the statement, so the statement is what the test exercises. A rounded
+    /// duration from a channel page replacing the exact one the player recorded
+    /// would be a silent regression in every timeline and filter.
+    #[tokio::test]
+    async fn a_listing_fills_an_unknown_length_but_never_replaces_a_known_one() {
+        let state = AppServerState::initialize().await.unwrap();
+        let _owner = test_owner(&state).await;
+        let video = Video {
+            id: "duration-test".into(),
+            title: "From the subscription feed".into(),
+            channel_id: "UC-real-channel".into(),
+            channel_name: "Channel".into(),
+            thumbnail_url: String::new(),
+            published_at: "2026-08-10T12:00:00Z".into(),
+            duration_seconds: 0,
+            view_count: String::new(),
+            progress_seconds: 0,
+            watched: false,
+            is_live: false,
+            is_short: false,
+            audio_only: false,
+        };
+        state
+            .upsert_feed_hint(&video, video.published_at.clone())
+            .await
+            .unwrap();
+
+        let filled = state
+            .apply_video_durations(&[("duration-test".to_string(), 754, "12K views".to_string())])
+            .await
+            .unwrap();
+        assert_eq!(filled, 1, "an RSS row starts at zero and takes the length");
+
+        let again = state
+            .apply_video_durations(&[("duration-test".to_string(), 12, String::new())])
+            .await
+            .unwrap();
+        assert_eq!(again, 0, "a known length is never overwritten");
+
+        let stored: Vec<DbVideo> = state
+            .db
+            .query("SELECT * FROM video WHERE video_id = $video_id")
+            .bind(("video_id", "duration-test"))
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(stored[0].duration_seconds, 754);
+        assert_eq!(stored[0].view_count, "12K views");
+    }
+
+    /// Channels are chosen by where the gaps actually are. Picking them any
+    /// other way spends the refresh budget on channels that are already filled.
+    #[tokio::test]
+    async fn only_channels_with_unknown_lengths_are_asked_for_them() {
+        let state = AppServerState::initialize().await.unwrap();
+        let _owner = test_owner(&state).await;
+        let known = Video {
+            id: "known-length".into(),
+            title: "Already measured".into(),
+            channel_id: "UC-measured-channel".into(),
+            channel_name: "Measured".into(),
+            thumbnail_url: String::new(),
+            published_at: "2026-08-11T12:00:00Z".into(),
+            duration_seconds: 600,
+            view_count: String::new(),
+            progress_seconds: 0,
+            watched: false,
+            is_live: false,
+            is_short: false,
+            audio_only: false,
+        };
+        let unknown = Video {
+            id: "unknown-length".into(),
+            channel_id: "UC-unmeasured-channel".into(),
+            channel_name: "Unmeasured".into(),
+            ..known.clone()
+        };
+        state
+            .upsert_feed_video(&known, known.published_at.clone())
+            .await
+            .unwrap();
+        state
+            .upsert_feed_hint(&unknown, unknown.published_at.clone())
+            .await
+            .unwrap();
+
+        let channels = state.channels_missing_durations(6).await.unwrap();
+        assert!(channels.contains(&"UC-unmeasured-channel".to_string()));
+        assert!(!channels.contains(&"UC-measured-channel".to_string()));
     }
 
     #[tokio::test]
