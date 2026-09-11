@@ -10,9 +10,9 @@ use crate::{
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    Captions, Check, ChevronLeft, Clock, Heart, Languages, ListVideo, Maximize2, MessageSquare,
-    Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2, Share2, SkipBack,
-    SkipForward, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, User, Volume2, VolumeX, X,
+    Captions, Check, ChevronLeft, ChevronRight, Clock, Heart, Languages, ListVideo, Maximize2,
+    MessageSquare, Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2,
+    Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, User, Volume2, VolumeX, X,
 };
 use g3_route_transitions::{animated_go_back, animated_navigate};
 use g3_ui::{Badge, Body, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
@@ -840,7 +840,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                             animated_navigate(Route::VideoDetail { id: previous }).await;
                                         });
                                     },
-                                    SkipBack { size: 24, fill: "currentColor" }
+                                    ChevronLeft { size: 27 }
                                 }
                             }
                             button {
@@ -868,7 +868,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                             animated_navigate(Route::VideoDetail { id: next }).await;
                                         });
                                     },
-                                    SkipForward { size: 24, fill: "currentColor" }
+                                    ChevronRight { size: 27 }
                                 }
                             }
                         }
