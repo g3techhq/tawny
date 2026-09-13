@@ -6,7 +6,9 @@ use crate::{
 use dioxus::prelude::*;
 use g3_ui::{Body, Button, ButtonStyle, Refresher, SegmentButton, SegmentGroup, StatusColor};
 
-use super::{PageHeader, VideoGrid};
+use super::{
+    DURATION_LOOKAHEAD, PageHeader, VideoGrid, duration_candidates, use_duration_hydration,
+};
 
 /// How many videos the feed renders before asking for more.
 ///
@@ -74,19 +76,16 @@ pub fn Feed() -> Element {
         FeedFilter::Shorts => videos.retain(|video| video.is_short && !video.is_live),
         FeedFilter::Live => videos.retain(|video| video.is_live),
     }
-    // A duration chip can only speak for videos whose length is known, and the
-    // subscription feed is built from YouTube's RSS, which does not carry one -
-    // `feed_entry_video` stores 0 because there is nothing to store. Measured
-    // here: 57 of 11,762 rows had a duration, so a chip silently discarded 99.5%
-    // of the library and left too little behind to page, which is why the Load
-    // more button looked broken rather than the filter.
-    //
-    // The filter itself is right to exclude them - an unknown length is not
-    // long. What was missing is saying so.
-    //
-    // The server now fills these in from each channel's uploads tab, a few
-    // channels per refresh, so the number here should fall on its own. It will
-    // not reach zero: a channel has to come up in the rotation first.
+    if app_state.settings().hide_watched {
+        videos.retain(|video| !video.watched);
+    }
+    // Asked for before the duration filter runs - see `duration_candidates`.
+    let duration_window = if selected_duration().is_some() {
+        visible_count().max(DURATION_LOOKAHEAD)
+    } else {
+        visible_count()
+    };
+    use_duration_hydration(duration_candidates(&videos, duration_window));
     let mut without_duration = 0usize;
     if let Some(duration) = selected_duration() {
         let settings = app_state.settings();
@@ -95,9 +94,6 @@ pub fn Feed() -> Element {
             .filter(|video| !video.is_live && video.duration_seconds == 0)
             .count();
         videos.retain(|video| duration.matches(video, &settings));
-    }
-    if app_state.settings().hide_watched {
-        videos.retain(|video| !video.watched);
     }
     // Paged last, so the count reflects what the filters actually left.
     let remaining = videos.len().saturating_sub(visible_count());
@@ -115,112 +111,120 @@ pub fn Feed() -> Element {
             },
         }
         Body { padding: false,
-        // Pull down to refresh, replacing the button that sat in the intro row.
-        Refresher {
-            refreshing: app_state.syncing(),
-            can_refresh: true,
-            on_refresh: move |_| {
-                app_state.syncing.set(true);
-                spawn(async move {
-                    let local = app_state.library();
-                    let result = match sync_library(local).await {
-                        Ok(remote) => {
-                            app_state.adopt_library(remote);
-                            refresh_subscription_feed().await
+            // Pull down to refresh, replacing the button that sat in the intro row.
+            Refresher {
+                refreshing: app_state.syncing(),
+                can_refresh: true,
+                on_refresh: move |_| {
+                    app_state.syncing.set(true);
+                    spawn(async move {
+                        let local = app_state.library();
+                        let result = match sync_library(local).await {
+                            Ok(remote) => {
+                                app_state.adopt_library(remote);
+                                refresh_subscription_feed().await
+                            }
+                            Err(error) => Err(error),
+                        };
+                        match result {
+                            Ok(refresh) => {
+                                app_state.adopt_library(refresh.library);
+                                let message = if refresh.imported == 0 {
+                                    "No new videos".to_string()
+                                } else if refresh.failed_channels == 0 {
+                                    format!("Feed refreshed from {}", refresh.sources.join(" + "))
+                                } else {
+                                    "Feed refreshed"
+                                        .to_string()
+                                };
+                                app_state.show_toast(message, StatusColor::Success);
+                            }
+                            Err(_) => {
+                                app_state
+                                    .show_toast(
+                                        "Offline — showing your cached feed",
+                                        StatusColor::Warning,
+                                    )
+                            }
                         }
-                        Err(error) => Err(error),
-                    };
-                    match result {
-                        Ok(refresh) => {
-                            app_state.adopt_library(refresh.library);
-                            let message = if refresh.imported == 0 {
-                                "No new videos".to_string()
-                            } else if refresh.failed_channels == 0 {
-                                format!("Feed refreshed from {}", refresh.sources.join(" + "))
-                            } else {
-                                "Feed refreshed; cached results filled the few sources that were unavailable"
-                                    .to_string()
-                            };
-                            app_state.show_toast(message, StatusColor::Success);
-                        }
-                        Err(_) => app_state.show_toast(
-                            "Offline — showing your cached feed",
-                            StatusColor::Warning,
-                        ),
-                    }
-                    app_state.syncing.set(false);
-                });
-            },
-            main { class: "page feed-page",
-            // Count and group filters share one row rather than stacking two
-            // thin bands above the grid.
-            nav { class: "group-filter-row", aria_label: "Subscription groups",
-                for duration in DurationFilter::ALL {
-                    button {
-                        key: "{duration.label()}",
-                        class: if selected_duration() == Some(duration) { "group-filter duration-filter active" } else { "group-filter duration-filter" },
-                        aria_pressed: (selected_duration() == Some(duration)).to_string(),
-                        onclick: move |_| {
-                            selected_duration.set(if selected_duration() == Some(duration) {
-                                None
-                            } else {
-                                Some(duration)
-                            });
-                        },
-                        "{duration.label()}"
-                    }
-                }
-                span { class: "filter-divider", aria_hidden: "true" }
-                button {
-                    class: if selected_group() == "all" { "group-filter active" } else { "group-filter" },
-                    onclick: move |_| selected_group.set("all".into()),
-                    "All"
-                }
-                for group in groups {
-                    {
-                        let group_id = group.id.clone();
-                        let active = selected_group() == group.id;
-                        rsx! {
+                        app_state.syncing.set(false);
+                    });
+                },
+                main { class: "page feed-page",
+                    // Count and group filters share one row rather than stacking two
+                    // thin bands above the grid.
+                    nav {
+                        class: "group-filter-row",
+                        aria_label: "Subscription groups",
+                        for duration in DurationFilter::ALL {
                             button {
-                                class: if active { "group-filter active" } else { "group-filter" },
-                                key: "{group.id}",
-                                onclick: move |_| selected_group.set(group_id.clone()),
-                                "{group.name}"
+                                key: "{duration.label()}",
+                                class: if selected_duration() == Some(duration) { "group-filter duration-filter active" } else { "group-filter duration-filter" },
+                                aria_pressed: (selected_duration() == Some(duration)).to_string(),
+                                onclick: move |_| {
+                                    selected_duration
+                                        .set(
+                                            if selected_duration() == Some(duration) { None } else { Some(duration) },
+                                        );
+                                },
+                                "{duration.label()}"
+                            }
+                        }
+                        span { class: "filter-divider", aria_hidden: "true" }
+                        button {
+                            class: if selected_group() == "all" { "group-filter active" } else { "group-filter" },
+                            onclick: move |_| selected_group.set("all".into()),
+                            "All"
+                        }
+                        for group in groups {
+                            {
+                                let group_id = group.id.clone();
+                                let active = selected_group() == group.id;
+                                rsx! {
+                                    button {
+                                        class: if active { "group-filter active" } else { "group-filter" },
+                                        key: "{group.id}",
+                                        onclick: move |_| selected_group.set(group_id.clone()),
+                                        "{group.name}"
+                                    }
+                                }
+                            }
+                        }
+                        button {
+                            class: if selected_group() == "ungrouped" { "group-filter active" } else { "group-filter" },
+                            onclick: move |_| selected_group.set("ungrouped".into()),
+                            "Ungrouped"
+                        }
+                    }
+
+                    if without_duration > 0 {
+                        p { class: "feed-filter-note",
+                            "{without_duration} more "
+                            if without_duration == 1 {
+                                "video has"
+                            } else {
+                                "videos have"
+                            }
+                            " no length yet, so a duration filter cannot speak for them. Visible cards are being filled in now."
+                        }
+                    }
+
+                    VideoGrid {
+                        videos,
+                        empty_message: "Try another filter or refresh when you are back online.".to_string(),
+                    }
+
+                    if remaining > 0 {
+                        div { class: "load-more-row",
+                            Button {
+                                style: ButtonStyle::Neutral,
+                                onclick: move |_| visible_count += FEED_PAGE_SIZE,
+                                "Load {remaining.min(FEED_PAGE_SIZE)} more"
                             }
                         }
                     }
                 }
-                button {
-                    class: if selected_group() == "ungrouped" { "group-filter active" } else { "group-filter" },
-                    onclick: move |_| selected_group.set("ungrouped".into()),
-                    "Ungrouped"
-                }
             }
-
-                if without_duration > 0 {
-                    p { class: "feed-filter-note",
-                        "{without_duration} more "
-                        if without_duration == 1 { "video has" } else { "videos have" }
-                        " no length yet, so a duration filter cannot speak for them. Each refresh fills in a few more channels."
-                    }
-                }
-
-                VideoGrid {
-                    videos,
-                    empty_message: "Try another filter or refresh when you are back online.".to_string(),
-                }
-
-            if remaining > 0 {
-                div { class: "load-more-row",
-                    Button {
-                        style: ButtonStyle::Neutral,
-                        onclick: move |_| visible_count += FEED_PAGE_SIZE,
-                        "Load {remaining.min(FEED_PAGE_SIZE)} more"
-                    }
-                }
-            }
-        }
-        }
         }
     }
 }

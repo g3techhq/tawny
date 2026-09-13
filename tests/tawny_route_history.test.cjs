@@ -72,10 +72,15 @@ navigationListeners.navigate({
 assert.deepEqual(order, ["snapshot", "intercept"]);
 assert.equal(root.dataset.routeTransition, "cover-up");
 assert.equal(root.dataset.routeTransitionPlatform, "md");
+// CSS scopes the player's snapshot to transitions that involve the watch sheet.
+assert.equal(root.dataset.routeTransitionFrom, "/feed");
+assert.equal(root.dataset.routeTransitionTo, "/watch/abc");
 assert.equal(typeof intercepted.handler, "function");
 
 intercepted.handler().then(() => {
   assert.equal(root.dataset.routeTransition, undefined);
+  assert.equal(root.dataset.routeTransitionFrom, undefined);
+  assert.equal(root.dataset.routeTransitionTo, undefined);
 
   location.href = "https://example.test/settings";
   context.history.pushState({}, "", location.href);
@@ -94,7 +99,10 @@ intercepted.handler().then(() => {
   });
 
   assert.deepEqual(order, ["snapshot", "intercept"]);
-  assert.equal(root.dataset.routeTransition, "push-right");
+  // Settings is a sheet, so browser Back lowers it the way app Back does.
+  assert.equal(root.dataset.routeTransition, "uncover-down");
+  assert.equal(root.dataset.routeTransitionFrom, "/settings");
+  assert.equal(root.dataset.routeTransitionTo, "/");
   assert.equal(typeof backIntercepted.handler, "function");
   return backIntercepted.handler();
 });

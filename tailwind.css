@@ -53,7 +53,6 @@ textarea {
 .sheet-heading,
 .settings-hero,
 .setting-row,
-.player-channel-row,
 .playback-status-row,
 .feed-count,
 .resolver-pill,
@@ -396,20 +395,12 @@ textarea {
   margin-bottom: 0.85rem;
 }
 
-/* The counts line and the actions line. Two rows, two jobs: what is in here,
-   and how to start it. */
+/* One row: the two ways to start watching, then the cleanup that acts on the
+   same list. */
 .playlist-lead {
   display: grid;
   gap: 0.6rem;
   margin-bottom: 1rem;
-}
-
-.playlist-lead-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  min-height: 1.9rem;
 }
 
 .playlist-lead-actions {
@@ -428,13 +419,26 @@ textarea {
   flex: 0 0 auto;
 }
 
-.playlist-detail-count {
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
+/* Pushed to the trailing edge and kept quiet: tidying is not why anyone opened a
+   playlist, and it must never be what a thumb reaching for Shuffle lands on. */
+.playlist-lead-actions .playlist-remove-watched {
+  margin-inline-start: auto;
 }
 
-.playlist-detail-dot {
-  opacity: 0.6;
+/* On a phone the three labels do not fit side by side - iOS buttons least of
+   all - and a line of its own made cleanup a whole row of chrome. It keeps its
+   place on the trailing edge as an icon; the button still carries its name. */
+@container g3-app-shell (width < 30rem) {
+  .playlist-lead-actions .playlist-remove-watched-label {
+    display: none;
+  }
+}
+
+.playlist-header-count {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .playlist-card-actions {
@@ -601,6 +605,7 @@ textarea {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  -webkit-user-drag: none;
   transition: transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -806,14 +811,14 @@ textarea {
 }
 
 .channel-card-copy h3,
-.player-channel-row h3 {
+.player-channel-copy h3 {
   margin: 0;
   font-size: 0.96rem;
 }
 
 .channel-card-copy p,
 .channel-card-copy span,
-.player-channel-row p {
+.player-channel-copy p {
   display: block;
   margin: 0.16rem 0;
   color: var(--color-text-secondary);
@@ -1025,35 +1030,108 @@ textarea {
   background: linear-gradient(135deg, var(--tawny-amber-soft), var(--color-card));
 }
 
+/* The channel page's lead card: banner, then who the channel is, then what you
+   can do about it, each on its own row.
+
+   It used to be one three-column grid holding the avatar, the copy, the
+   Subscribe button *and* the feed filter. A subscribed channel added that
+   fourth child, which wrapped into the first column, and on a phone the copy
+   column shrank to a sliver the button then sat on top of. Rows cannot collide. */
 .channel-hero {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 1.15rem;
-  align-items: center;
-  margin: 0.4rem 0 2rem;
-  padding: clamp(1.15rem, 3vw, 2rem);
+  display: flex;
+  flex-direction: column;
+  margin: 0.4rem 0 1.5rem;
+  overflow: hidden;
   border: 1px solid var(--color-card-border);
-  border-radius: 24px;
+  border-radius: 20px;
   background:
-    radial-gradient(circle at 12% 20%, rgba(245, 165, 36, 0.2), transparent 18rem),
-    var(--color-card);
+    radial-gradient(circle at 0% 0%, rgba(245, 165, 36, 0.16), transparent 20rem), var(--color-card);
+}
+
+.channel-hero-banner {
+  aspect-ratio: 6 / 1;
+  background-color: var(--color-bg-secondary);
+  background-position: center;
+  background-size: cover;
+}
+
+.channel-hero-body {
+  display: grid;
+  gap: 1rem;
+  padding: clamp(0.95rem, 2.5vw, 1.6rem);
+}
+
+.channel-hero-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.9rem;
 }
 
 .channel-avatar-hero {
-  width: clamp(4.5rem, 10vw, 7rem);
-  height: clamp(4.5rem, 10vw, 7rem);
-  font-size: clamp(1.8rem, 5vw, 3rem);
+  width: clamp(3.75rem, 8vw, 5.5rem);
+  height: clamp(3.75rem, 8vw, 5.5rem);
+  font-size: clamp(1.5rem, 4vw, 2.4rem);
+}
+
+.channel-hero-copy {
+  min-width: 0;
 }
 
 .channel-hero-copy h1 {
-  margin: 0.2rem 0 0.35rem;
-  font-size: clamp(1.7rem, 4vw, 2.8rem);
-  letter-spacing: -0.04em;
+  margin: 0;
+  font-size: clamp(1.3rem, 3.2vw, 2.2rem);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
 }
 
-.channel-hero-copy p {
-  margin: 0;
+.channel-hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0.3rem 0 0;
   color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.channel-hero-meta span + span::before {
+  content: "·";
+  margin-inline: 0.4rem;
+  opacity: 0.6;
+}
+
+.channel-hero-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* Shared width on a phone, so Subscribe is a full thumb target whether or not
+   there is an About button beside it. */
+.channel-hero-actions > .g3-btn {
+  flex: 1 1 0;
+}
+
+.channel-hero .subscription-content-row {
+  margin-top: 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--color-card-border);
+}
+
+@container g3-app-shell (width >= 48rem) {
+  .channel-hero-body {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 1.5rem;
+  }
+
+  .channel-hero-actions > .g3-btn {
+    flex: 0 0 auto;
+    min-width: 8.5rem;
+  }
+
+  .channel-hero .subscription-content-row {
+    grid-column: 1 / -1;
+  }
 }
 
 .heading-actions {
@@ -1267,11 +1345,47 @@ textarea {
   backdrop-filter: blur(9px);
 }
 
-.player-details > h1 {
-  margin: 0.6rem 0 0.35rem;
+/* One rhythm down the watch page. Every block used to bring its own margin -
+   chips, actions, channel, description, comments and related each a different
+   one - so the gaps drifted. The column owns the spacing instead and its
+   children carry none. Cards are named separately because g3-ui's stylesheet
+   loads after this one and its card margin would otherwise win. */
+.player-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.player-details > *,
+.player-details > .g3-card {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.player-title-block {
+  padding-top: 0.6rem;
+}
+
+.player-title-block > h1 {
+  margin: 0 0 0.35rem;
   font-size: clamp(1.35rem, 3vw, 2.2rem);
   line-height: 1.16;
   letter-spacing: -0.035em;
+}
+
+.player-title-block > .video-stats {
+  margin: 0;
+}
+
+/* A heading belongs to the grid under it, so it sits closer to that grid than
+   to the comments above. */
+.player-related {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.player-related > .section-heading {
+  margin: 0;
 }
 
 .playback-status-row {
@@ -1287,15 +1401,6 @@ textarea {
 }
 
 .playback-refresh,
-.text-action {
-  border: 0;
-  background: transparent;
-  color: var(--color-focused);
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 .playback-refresh {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1316,20 +1421,15 @@ textarea {
 .video-engagement {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
-  margin: 0.8rem 0 0;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-.video-engagement span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.34rem;
-  padding: 0.38rem 0.58rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 999px;
-  background: var(--color-card);
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
+/* A g3 Badge centres a single label; these carry an icon beside the count. */
+.video-engagement .engagement-count {
+  gap: 0.3rem;
+  min-height: 2rem;
+  padding-inline: 0.65rem;
 }
 
 .speed-strip {
@@ -1377,7 +1477,6 @@ textarea {
 .player-actions {
   display: flex;
   gap: 0.55rem;
-  padding-bottom: 1rem;
   overflow-x: auto;
 }
 
@@ -1473,59 +1572,12 @@ textarea {
   line-height: 1.45;
 }
 
-/* The same colour the segment gets on the timeline, so the settings list and
-   the bar can be read against each other. */
-/* g3-ui gives a nested card a contrasting surface - see its .g3-card .g3-card
-   rule - but an inset List is not a card, so a `List { inset: true }` inside a
-   Card gets the elevation shadow and none of the tint, and reads as one flat
-   surface. Same treatment, same tokens; this belongs upstream in g3-ui beside
-   the rule it mirrors. */
-.g3-card .g3-list-inset {
-  background: color-mix(in srgb, var(--color-text) 7%, var(--color-card));
-}
-
-/* Laid out as blocks rather than list rows: the explanation has to wrap, and
-   a g3-ui Item clips both its label and its description to one line. */
-.sponsor-categories {
+/* SponsorBlock categories are cards so their descriptions can wrap without
+   inventing a special row treatment for each category. */
+.settings-card-stack {
   display: grid;
   gap: 0.55rem;
   margin-top: 0.85rem;
-}
-
-.sponsor-category {
-  display: grid;
-  gap: 0.4rem;
-  padding: 0.7rem 0.75rem;
-  border-radius: var(--tawny-radius, 0.6rem);
-  background: color-mix(in srgb, var(--color-text) 7%, var(--color-card));
-}
-
-.sponsor-category-heading {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.sponsor-category-heading strong {
-  font-size: 0.88rem;
-  line-height: 1.3;
-}
-
-.sponsor-category-description {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.45;
-  /* The point of the redesign: this wraps instead of ellipsising. */
-  white-space: normal;
-}
-
-.sponsor-category-swatch {
-  display: inline-block;
-  width: 0.85rem;
-  height: 0.85rem;
-  border-radius: 0.25rem;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .feed-filter-note {
@@ -1708,34 +1760,31 @@ textarea {
   padding-bottom: 2rem;
 }
 
-.player-channel-row {
+/* The channel and the description are g3 Cards; the card owns the surface and
+   padding, these only lay out what sits inside it. */
+.player-channel-card > .g3-card-body {
+  display: flex;
+  align-items: center;
   gap: 0.8rem;
-  margin: 0.2rem 0 1.7rem;
-  padding: 0.9rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 16px;
-  background: var(--color-card);
 }
 
-.player-channel-row > div:nth-child(2) {
+.player-channel-card .g3-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.player-channel-copy {
   min-width: 0;
   flex: 1;
 }
 
-.player-channel-row img.channel-avatar {
-  object-fit: cover;
+.description-card .g3-card-header {
+  margin-bottom: 0.6rem;
 }
 
-.detail-section {
-  margin: 0 0 1.4rem;
-  padding: 1rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 16px;
-  background: var(--color-card);
-}
-
-.detail-section .subsection-heading {
-  margin-bottom: 0.8rem;
+.description-card .description-toggle {
+  margin-top: 0.4rem;
 }
 
 .chapter-strip,
@@ -1841,45 +1890,34 @@ textarea {
   overflow: visible;
 }
 
-.text-action {
-  margin-top: 0.55rem;
-  padding: 0;
-  font-size: 0.76rem;
-}
-
 .comment-list {
   display: grid;
   gap: 0.7rem;
 }
 
-.comment-card {
+/* Each comment is a g3 Card, which owns the surface, padding and elevation for
+   the platform. Its margin is cleared because the list gap already spaces the
+   thread. */
+.comment-list > .comment-card {
+  margin-bottom: 0;
+}
+
+.comment-card > .g3-card-body {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.75rem;
-  padding: 0.85rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 13px;
-  background: var(--color-bg-secondary);
 }
 
+/* The card has no border to recolour, so the pinned accent is drawn inside it. */
 .comment-card.pinned {
-  border-color: color-mix(in srgb, var(--color-focused) 38%, var(--color-card-border));
+  outline: 1px solid color-mix(in srgb, var(--color-focused) 38%, var(--color-card-border));
+  outline-offset: -1px;
 }
 
-.comment-avatar {
-  display: grid;
-  width: 2.25rem;
-  height: 2.25rem;
-  place-items: center;
-  border-radius: 999px;
+.comment-card .g3-avatar img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-}
-
-.comment-avatar-fallback {
-  background: var(--tawny-amber-soft);
-  color: var(--color-focused);
-  font-size: 0.82rem;
-  font-weight: 800;
 }
 
 .comment-content {
@@ -1996,9 +2034,14 @@ textarea {
    than g3_ui's generic half-height cap, and the earlier bump to 64dvh still cut
    Share off the bottom. This sheet is a menu, so it should be as tall as it
    needs to be - the cap is only there to keep the page it came from in view and
-   to leave the drag handle reachable. */
-.g3-sheet-bottom.video-actions-sheet .g3-sheet-content {
-  max-height: min(86dvh, 46rem);
+   to leave the drag handle reachable.
+
+   Sizes go through g3-ui's `--g3-sheet-max-height`, set on the sheet's own
+   class. Overriding the cap with a selector had to out-rank g3-ui's rule, and
+   because its stylesheet loads after this one an equal-weight override silently
+   lost, leaving every sheet at min(50dvh, 26rem). */
+.video-actions-sheet {
+  --g3-sheet-max-height: min(86dvh, 46rem);
 }
 
 /* g3 paints the sheet panel and its list items with the same --color-card, so
@@ -2330,15 +2373,6 @@ textarea {
     margin-left: 3rem;
   }
 
-  .channel-hero {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .channel-hero > .g3-btn {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
   .library-heading .heading-actions {
     width: 100%;
     justify-content: flex-start;
@@ -2518,6 +2552,36 @@ textarea {
   left: 50%;
   gap: clamp(1rem, 5vw, 3rem);
   transform: translate(-50%, -50%);
+}
+
+/* Three fixed columns, so the play button sits on the stage's centre line
+   whether a run offers a previous step, a next one, both, or neither. Flexible
+   tracks share one fraction size even when a side is empty, which reserves the
+   missing arrow's width instead of letting play drift towards it.
+
+   That only holds when the grid is sized to its max-content. Positioned at
+   `left: 50%`, it shrinks to fit the half of the stage to its right, and the
+   mini stage is narrow enough that this falls below the content: the empty
+   side's track then keeps its zero base size and play slides over by an arrow.
+   Pinning the width to max-content keeps both side tracks equal at any size. */
+.g3-app-shell .player-controls-center {
+  display: grid;
+  width: max-content;
+  grid-template-columns: 1fr auto 1fr;
+}
+
+.player-controls-center > .player-step-previous {
+  grid-column: 1;
+  justify-self: end;
+}
+
+.player-controls-center > .player-play-button {
+  grid-column: 2;
+}
+
+.player-controls-center > .player-step-next {
+  grid-column: 3;
+  justify-self: start;
 }
 
 .player-control-button {
@@ -2721,7 +2785,6 @@ textarea {
 }
 
 .player-chapter-label {
-  max-width: 7.5rem;
   padding: 0;
   overflow: hidden;
   border: 0;
@@ -2732,7 +2795,6 @@ textarea {
   /* Must never wrap: a second line grows the control row and shoves the
      buttons below it off the video. */
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .player-chapter-label::before {
@@ -2744,22 +2806,16 @@ textarea {
   color: var(--color-focused);
 }
 
-.engagement-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.6rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 999px;
-  background: var(--color-card);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-size: 0.78rem;
+.player-chapter-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.engagement-chip:hover {
-  border-color: var(--color-focused);
-  color: var(--color-text);
+.player-chapter-chevron {
+  flex: 0 0 auto;
+  opacity: 0.72;
 }
 
 .chapter-sheet-list {
@@ -2796,13 +2852,22 @@ textarea {
    list. These raise the cap and let the list take whatever is left. */
 /* Doubled up on the sheet root because g3_ui's stylesheet loads after this
    one: at equal specificity its cap would win. */
-.g3-sheet-bottom.player-sheet .g3-sheet-content {
-  max-height: 74dvh;
+.player-sheet {
+  --g3-sheet-max-height: 74dvh;
 }
 
-.g3-sheet-bottom.comments-sheet .g3-sheet-content {
-  min-height: 70dvh;
-  max-height: 82dvh;
+/* A fixed height, not a range: a thread of three comments should not open as a
+   short sheet that then grows as more load. It reaches up to the bottom of the
+   video and stops there, so the video stays in view above the thread. Where
+   that edge is depends on the shell's width and the player's, so the player
+   measures it when the sheet opens; the fallback only covers the first frame. */
+.comments-sheet {
+  --g3-sheet-max-height: var(--tawny-comments-sheet-height, 60dvh);
+}
+
+.comments-sheet .g3-sheet-content {
+  height: var(--tawny-comments-sheet-height, 60dvh);
+  min-height: 0;
 }
 
 .comments-sheet .comment-list {
@@ -2810,19 +2875,6 @@ textarea {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-}
-
-/* The engagement chips are a separate control row from the actions below. */
-.video-engagement {
-  margin-bottom: 0.9rem;
-}
-
-.player-actions {
-  margin-top: 0.25rem;
-}
-
-.comments-open-button {
-  margin-top: 0.5rem;
 }
 
 .player-seek-preview {
@@ -3309,6 +3361,23 @@ textarea {
   overflow: visible;
 }
 
+/* The page holds still while comments are open, at every width. The comments
+   sheet has no backdrop, so the page behind stays live - and scrolling it moved
+   the video out from under a sheet sized to stop at the video's bottom edge.
+   The body scroll lock cannot do this: on the watch route the column above is
+   what scrolls. The class is set by the player while the sheet is up. */
+html.tawny-comments-open .g3-app-shell .g3-navbar.tawny-shell-cover {
+  overflow-y: hidden;
+}
+
+/* Queue, History and Settings are sheets over the page that launched them, and
+   the mini bar belongs to that page: the sheet slides up across it and back
+   down to reveal it. Hidden, not unmounted, so playback carries on underneath. */
+.tawny-shell-auxiliary .persistent-player.mini {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 @container g3-app-shell (min-width: 48rem) {
   /* The rail is permanent chrome, so it stays put while the column beside it
      scrolls - and must not be stretched to the height of a long page first.
@@ -3340,11 +3409,20 @@ textarea {
     padding-bottom: 0;
   }
 
-  /* History, Queue, and Settings are launched from header actions rather than
-     from a tab. With their unselected tab bar removed, the mini player owns
-     the bottom edge instead of leaving a blank navigation-sized gap. */
-  .tawny-shell-auxiliary .persistent-player.mini {
-    bottom: env(safe-area-inset-bottom);
+  /* A phone held upright keeps the video pinned while the details scroll
+     beneath it, the way YouTube does. The video's bottom edge then never moves,
+     which is what the comments sheet measures to stop at.
+
+     Desktop scrolls instead: a 1180px player pinned there would leave almost
+     nothing of the page. So does a phone on its side, where the landscape rules
+     already make the stage the full height of the screen. Below sheets (90) and
+     above the page it covers. */
+  @media (orientation: portrait) {
+    .tawny-shell-cover .persistent-player.expanded {
+      position: sticky;
+      z-index: 5;
+      top: 0;
+    }
   }
 }
 
@@ -3369,20 +3447,33 @@ textarea {
   overscroll-behavior: contain;
 }
 
-/* Sits after the clock, and truncates rather than pushing the buttons around
-   on a long chapter title. */
-.player-chapter-label:not([hidden]) {
-  display: inline-block;
-  margin-left: 0.5rem;
-  vertical-align: bottom;
-}
+/* The chapter gets all the space the transport buttons do not need, at every
+   width. Only the title truncates; the clock and the chevron keep their size.
 
-/* The row itself must not wrap either, or the label just moves the break. */
+   A flex row rather than an inline-block: the chevron is an SVG, which the
+   base styles make `display: block`, so inside an inline-block it dropped onto
+   a line of its own. The old narrow layout also capped the label at 7.5rem
+   while an empty spacer beside it took the free space, which is why titles cut
+   off with room to spare. */
 .player-time {
   display: flex;
   min-width: 0;
-  align-items: baseline;
+  flex: 1 1 auto;
+  align-items: center;
   white-space: nowrap;
+}
+
+.player-control-spacer {
+  flex: 0 0 0;
+}
+
+.player-chapter-label:not([hidden]) {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.16rem;
+  margin-left: 0.5rem;
 }
 
 .player-chapter-label:hover {
@@ -3445,8 +3536,15 @@ textarea {
    put it in the base snapshot: the sheet slid up empty and the video appeared
    afterwards. Naming it during cover transitions captures it as its own group
    and moves it on exactly the sheet's curve, so the two read as one surface. */
-html[data-route-transition="cover-up"] .persistent-player-stage,
-html[data-route-transition="uncover-down"] .persistent-player-stage {
+/* Only when the watch sheet is the one moving. Queue, History and Settings are
+   covers too, and naming the player for them lifted the mini bar into its own
+   top-most group, so it floated over a sheet that should have slid across it.
+   Unnamed, it stays in the base snapshot, under the sheet. `to` is empty on a
+   pop, which is why dismissing keys on `from`. */
+html[data-route-transition="cover-up"][data-route-transition-to^="/watch/"]
+.persistent-player-stage,
+html[data-route-transition="uncover-down"][data-route-transition-from^="/watch/"]
+  .persistent-player-stage {
   view-transition-name: player;
   contain: layout paint;
 }
@@ -3532,6 +3630,83 @@ html[data-route-transition="uncover-down"]::view-transition-old(player) {
   opacity: 1;
 }
 
+/* There is only something to morph from when the mini bar was on screen. Over
+   Queue, History and Settings it is hidden, Chrome captures no outgoing frame,
+   and the group has nothing to animate - the player was simply present at full
+   size while the sheet carrying it was still rising. With no pair, the image
+   rides the sheet's own slide instead.
+
+   The cover keyframes translate by a share of their own box, which is the whole
+   viewport for the sheet but only the video's height here, so these restate the
+   same travel in viewport units. */
+html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-new(
+  player
+):only-child {
+  animation: tawny-player-ios-rise var(--route-transition-cover-duration)
+    var(--route-transition-ios-ease) both !important;
+}
+
+html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-old(
+  player
+):only-child {
+  animation: tawny-player-ios-fall var(--route-transition-cover-duration)
+    var(--route-transition-ios-ease) both !important;
+}
+
+html[data-route-transition-platform="md"][data-route-transition="cover-up"]::view-transition-new(
+  player
+):only-child {
+  animation: tawny-player-md-rise var(--route-transition-cover-duration)
+    var(--route-transition-md-decelerate) both !important;
+}
+
+html[data-route-transition-platform="md"][data-route-transition="uncover-down"]::view-transition-old(
+  player
+):only-child {
+  animation: tawny-player-md-fall var(--route-transition-md-sheet-dismiss-duration)
+    var(--route-transition-md-accelerate) both !important;
+}
+
+@keyframes tawny-player-ios-rise {
+  from {
+    transform: translateY(100vh);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes tawny-player-ios-fall {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100vh);
+  }
+}
+
+@keyframes tawny-player-md-rise {
+  from {
+    transform: translateY(20vh);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes tawny-player-md-fall {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(20vh);
+    opacity: 0;
+  }
+}
+
 /* -- Chapter label and fullscreen state -- */
 
 /* The controls chain is pointer-events:none so the video underneath stays
@@ -3556,13 +3731,8 @@ html[data-route-transition="uncover-down"]::view-transition-old(player) {
 
 /* -- Channel description -- */
 
-.channel-description-button {
-  margin-top: 0.35rem;
-  padding-left: 0;
-}
-
-.g3-sheet-bottom.channel-description-sheet .g3-sheet-content {
-  max-height: 70dvh;
+.channel-description-sheet {
+  --g3-sheet-max-height: 70dvh;
 }
 
 .channel-description-sheet .channel-description {
@@ -3643,6 +3813,33 @@ html .route-transition-base {
 html[data-route-transition="cover-up"] .route-transition-base,
 html[data-route-transition="uncover-down"] .route-transition-base {
   view-transition-name: base;
+}
+
+/* The desktop rail is permanent chrome: a sheet rises beside it, never over it.
+   Left in the base snapshot it went through the base's own motion - scaled back
+   and dimmed on iOS - then snapped to full size when the snapshot was dropped.
+   Named, it is cut out of that snapshot and held still. On compact layouts the
+   bar is hidden under a cover, so there is nothing to lift out. */
+@container g3-app-shell (min-width: 48rem) {
+  html[data-route-transition="cover-up"] .tawny-shell > .g3-navbar-tab-bar,
+  html[data-route-transition="uncover-down"] .tawny-shell > .g3-navbar-tab-bar {
+    view-transition-name: rail;
+  }
+}
+
+html::view-transition-group(rail) {
+  z-index: 3;
+  animation: none !important;
+}
+
+html::view-transition-old(rail) {
+  animation: none !important;
+  opacity: 0;
+}
+
+html::view-transition-new(rail) {
+  animation: none !important;
+  opacity: 1;
 }
 
 /* -- Android/mobile polish pass -- */
@@ -3905,8 +4102,12 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
   color: var(--color-text-secondary);
 }
 
+/* Pinned to the foot of the card. A channel with no subscriber count yet has
+   one line less of copy, and the button used to ride up into that gap, so a
+   row of cards had its buttons at two heights. */
 .channel-subscribe-button {
   max-width: 100%;
+  margin-top: auto;
 }
 
 .settings-content {
@@ -3952,6 +4153,105 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
 
 .queue-count-label strong {
   color: var(--color-text);
+}
+
+/* The playlist being run is one entry, not a copy of its contents, so it reads
+   as a rule sitting above the loose videos rather than as another card among
+   them. */
+.queue-playlist-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.85rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--color-card-border);
+  border-radius: var(--tawny-radius);
+  background: var(--color-card-inset);
+}
+
+.queue-playlist-open {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.queue-playlist-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  background: var(--tawny-amber-soft);
+  color: var(--tawny-amber);
+}
+
+.queue-playlist-copy {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.queue-playlist-copy strong {
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-playlist-copy span {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-playlist-copy em {
+  color: var(--color-text);
+  font-style: normal;
+}
+
+.queue-playlist-order {
+  opacity: 0.85;
+}
+
+.queue-playlist-note {
+  margin: -0.55rem 0 1rem;
+  padding-inline: 0.2rem;
+  color: var(--color-text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+/* Back is reachable before a stream has resolved. The real control bar only
+   exists once there is a video element to attach to, and until then the
+   expanded player had no way out but waiting. */
+.player-stage-back {
+  position: absolute;
+  z-index: 5;
+  top: 0.45rem;
+  left: 0.65rem;
+}
+
+.persistent-player.mini .player-stage-back {
+  display: none;
+}
+
+/* The stage owns vertical drags while it is expanded, the same as the attached
+   controls do, so a swipe down minimizes rather than scrolling the page. */
+.persistent-player.expanded .player-stage-status {
+  touch-action: none;
 }
 
 .share-video-modal {
@@ -4129,26 +4429,12 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
   }
 
   .channel-hero {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 0.75rem;
     margin: 0.15rem 0 1rem;
-    padding: 0.85rem;
     border-radius: 16px;
   }
 
-  .channel-avatar-hero {
-    width: 3.7rem;
-    height: 3.7rem;
-  }
-
-  .channel-hero-copy h1 {
-    margin-block: 0.1rem;
-    font-size: 1.25rem;
-  }
-
-  .channel-hero > .g3-btn {
-    grid-column: auto;
-    width: auto;
+  .channel-hero-banner {
+    aspect-ratio: 4 / 1;
   }
 
   .playlist-grid {

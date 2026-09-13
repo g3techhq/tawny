@@ -555,11 +555,8 @@ pub fn SettingsPage() -> Element {
 /// video. The defaults mirror the browser extension, so someone who already uses
 /// it finds Tawny behaving the way they expect.
 ///
-/// The category rows are laid out here rather than with `Item`, which is built
-/// for a one-line summary: it sets `white-space: nowrap` and clips both its
-/// label and its description. That is right for "Autoplay - continue with the
-/// next video" and wrong for text a viewer has to read before choosing, because
-/// a truncated explanation cannot be recovered - there is nowhere to expand it.
+/// Categories are Cards rather than list rows: their explanations need to wrap,
+/// and a one-line Item would conceal the context needed to choose an action.
 #[component]
 fn SponsorBlockSettingsCard() -> Element {
     let mut app_state = use_context::<AppState>();
@@ -605,25 +602,24 @@ fn SponsorBlockSettingsCard() -> Element {
             }
 
             if enabled_value {
-                div { class: "sponsor-categories",
+                div { class: "settings-card-stack",
                     for category in SponsorCategory::ALL {
                         {
                             let options = action_options.clone();
                             let value = use_signal(|| sponsor.action_for(category).label().to_string());
                             rsx! {
-                                div { class: "sponsor-category", key: "{category.api_name()}",
-                                    div { class: "sponsor-category-heading",
-                                        // The same colour this category gets on
-                                        // the timeline, so the two can be read
-                                        // against each other.
+                                Card {
+                                    key: "{category.api_name()}",
+                                    title: category.label().to_string(),
+                                    right_slot: RightSlot::Element(rsx! {
+                                        // Matches the timeline colour without
+                                        // adding category-specific styling.
                                         span {
-                                            class: "sponsor-category-swatch",
-                                            style: "background: {category.color()};",
+                                            style: "display:inline-block;width:.85rem;height:.85rem;border-radius:.25rem;background:{category.color()};box-shadow:inset 0 0 0 1px rgba(0,0,0,.35);",
                                             aria_hidden: "true",
                                         }
-                                        strong { "{category.label()}" }
-                                    }
-                                    p { class: "sponsor-category-description", "{category.description()}" }
+                                    }),
+                                    p { class: "settings-card-copy", "{category.description()}" }
                                     Select {
                                         value,
                                         options,

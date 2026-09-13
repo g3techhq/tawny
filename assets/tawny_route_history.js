@@ -19,11 +19,17 @@
   const routeLayer = (route) => {
     const rawPath = routePath(route);
     const path = rawPath.replace(/\/+$/, "") || "/";
-    if (path.startsWith("/watch/")) return "cover";
+    // Queue, History and Settings are covers in `Route`, not pushed pages.
+    // Calling them pushed made browser Back slide them sideways.
     if (
+      path.startsWith("/watch/") ||
       path === "/queue" ||
       path === "/history" ||
-      path === "/settings" ||
+      path === "/settings"
+    ) {
+      return "cover";
+    }
+    if (
       path.startsWith("/channel/") ||
       (path.startsWith("/playlists/") && path !== "/playlists/")
     ) {
@@ -135,6 +141,10 @@
     const root = document.documentElement;
     root.dataset.routeTransition = animationFor(from, to, isBack);
     root.dataset.routeTransitionPlatform = transitionPlatform();
+    // The same route attributes g3-route-transitions publishes, so CSS scoped
+    // to the watch sheet behaves the same on browser Back as on app Back.
+    root.dataset.routeTransitionFrom = routePath(from);
+    root.dataset.routeTransitionTo = routePath(to);
     // The class granting the outgoing snapshot its view-transition-name must
     // be computed before the old state is captured.
     void root.offsetHeight;
@@ -142,6 +152,8 @@
     const clear = () => {
       delete root.dataset.routeTransition;
       delete root.dataset.routeTransitionPlatform;
+      delete root.dataset.routeTransitionFrom;
+      delete root.dataset.routeTransitionTo;
     };
     try {
       // Browser Back never calls pushState, so the scroll reset is attached to

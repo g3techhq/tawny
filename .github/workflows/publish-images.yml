@@ -24,25 +24,6 @@ on:
       - "package.json"
       - "rust-toolchain.toml"
       - "tailwind.css"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/publish-images.yml"
-      - ".dockerignore"
-      - "assets/**"
-      - "database/**"
-      - "deploy/**"
-      - "docker/**"
-      - "src/**"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "Dioxus.toml"
-      - "Dockerfile"
-      - "package-lock.json"
-      - "package.json"
-      - "rust-toolchain.toml"
-      - "tailwind.css"
   workflow_dispatch:
 
 concurrency:
@@ -80,7 +61,6 @@ jobs:
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -102,7 +82,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Scoped per image, unlike g3-ui's single-image cache: without it the

@@ -1,6 +1,6 @@
 use crate::models::{
     Account, ChannelDetails, ChannelMediaPage, CommentsPage, Credentials, FeedRefreshResult,
-    LibrarySnapshot, LibraryUserState, PlaybackSession, SearchResults, SponsorSegment,
+    LibrarySnapshot, LibraryUserState, PlaybackSession, SearchResults, SponsorSegment, Video,
     VideoDetails,
 };
 use dioxus::prelude::*;
@@ -149,6 +149,24 @@ pub async fn get_channel_media_page(
 pub async fn refresh_subscription_feed() -> Result<FeedRefreshResult> {
     Ok(state
         .refresh_feed(&owner.0)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?)
+}
+
+/// Resolve exact metadata for the cards currently on screen.
+///
+/// RSS has no runtime, so the feed, a playlist, and anything else built from
+/// cached rows all show videos whose length is unknown - and a duration filter
+/// cannot speak for those. Keeping this separate from the full feed refresh
+/// lets a page fill in what it is showing without reconciling any channels.
+#[post(
+    "/api/v1/videos/durations",
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    owner: crate::auth::Owner
+)]
+pub async fn hydrate_video_durations(video_ids: Vec<String>) -> Result<Vec<Video>> {
+    Ok(state
+        .hydrate_video_durations(&owner.0, video_ids)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }

@@ -1,14 +1,17 @@
 use crate::{
     app::Route,
-    models::{DurationFilter, PlaylistSort, Video},
+    models::{DurationFilter, PlaylistKind, PlaylistSort, Video},
     state::AppState,
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{CheckCheck, ListPlus, Play, Plus, Shuffle, Trash2};
 use g3_route_transitions::animated_navigate;
-use g3_ui::{Body, Button, ButtonSize, ButtonStyle, Card, Field, Modal, RightSlot, StatusColor};
+use g3_ui::{
+    Body, Button, ButtonSize, ButtonStyle, Card, Field, Modal, RightSlot, SegmentButton,
+    SegmentGroup, StatusColor,
+};
 
-use super::{PageHeader, VideoGrid};
+use super::{PageHeader, VideoGrid, duration_candidates, use_duration_hydration};
 
 /// Fisher-Yates with a generator of its own.
 ///
@@ -42,7 +45,12 @@ fn shuffled(mut ids: Vec<String>) -> Vec<String> {
     ids
 }
 
-/// Start a run of videos: the first one plays, the rest wait in the queue.
+/// Start a run of specific videos: the first one plays, the rest wait in the
+/// queue.
+///
+/// Used by Shuffle, whose order exists only for this sitting and so has to be
+/// written down. Playing a playlist in its own order goes through
+/// [`AppState::start_playlist_run`] instead, which queues the playlist itself.
 ///
 /// The playing video is deliberately left out of the queue. It is what the
 /// queue is *for* - the list of what comes next - and the player drops the
@@ -51,6 +59,9 @@ fn play_run(app_state: AppState, ids: Vec<String>, verb: &str) {
     let Some((first, rest)) = ids.split_first() else {
         return;
     };
+    // A shuffled order is not the playlist's order, so any playlist run in
+    // progress would fight it for what comes next.
+    app_state.clear_playlist_run();
     app_state.queue_run(rest);
     let count = ids.len();
     app_state.show_toast(
@@ -60,6 +71,23 @@ fn play_run(app_state: AppState, ids: Vec<String>, verb: &str) {
     let first = first.clone();
     spawn(async move {
         animated_navigate(Route::VideoDetail { id: first }).await;
+    });
+}
+
+/// Hand the playlist to the queue as a run, then open `video_id`.
+///
+/// The whole point of the marker: what comes next is decided when the current
+/// video ends, against the playlist as it is arranged then, so this does not have
+/// to know or freeze the order.
+fn play_from_playlist(app_state: AppState, playlist_id: &str, video_id: String, announce: bool) {
+    app_state.start_playlist_run(playlist_id);
+    if announce {
+        // Says that the *playlist* is now what plays next, which opening one
+        // video does not. Tapping a card is its own answer, so it stays quiet.
+        app_state.show_toast("Playing this playlist", StatusColor::Success);
+    }
+    spawn(async move {
+        animated_navigate(Route::VideoDetail { id: video_id }).await;
     });
 }
 
@@ -256,10 +284,21 @@ pub fn Playlists() -> Element {
 #[component]
 pub fn PlaylistDetail(id: String) -> Element {
     let app_state = use_context::<AppState>();
-    let mut only_unwatched = use_signal(|| false);
-    let mut selected_duration = use_signal(|| None::<DurationFilter>);
-    let mut sort = use_signal(|| PlaylistSort::Added);
-    let mut descending = use_signal(|| PlaylistSort::Added.default_descending());
+    // The arrangement lives in settings rather than in local signals, because a
+    // run resolved out of the queue has to be able to read it long after this
+    // page is gone. See `PlaylistView`.
+    let view = app_state.playlist_view(&id);
+    // The segmented control owns an index, so the persisted kind is mirrored into
+    // one. Settings hydrate from local storage after the first render, hence the
+    // effect rather than an initial value alone.
+    let mut kind_index = use_signal(|| view.kind.index());
+    let persisted_kind_id = id.clone();
+    use_effect(move || {
+        let persisted = app_state.playlist_view(&persisted_kind_id).kind.index();
+        if kind_index() != persisted {
+            kind_index.set(persisted);
+        }
+    });
 
     // Resolved through a borrow, and through a lookup rather than a scan per
     // entry: a playlist of fifty videos was walking the whole cache fifty times
@@ -288,6 +327,16 @@ pub fn PlaylistDetail(id: String) -> Element {
         (playlist, videos)
     });
 
+    // Ahead of the early return below, because a hook has to run on every
+    // render of this component, and ahead of the filters, because
+    // `duration_candidates` has to see the rows a duration chip discards.
+    //
+    // A playlist is not paged, so the window is the whole list: one visit works
+    // through it a batch at a time until every entry has a length. That is the
+    // point - a saved video is usually saved from the feed, where RSS gave it no
+    // runtime, and the refresh backfill only ever reaches followed channels.
+    use_duration_hydration(duration_candidates(&videos, videos.len()));
+
     let Some(playlist) = playlist else {
         // Still renders the bar: reaching a stale deep link with no way back was
         // a dead end.
@@ -303,72 +352,100 @@ pub fn PlaylistDetail(id: String) -> Element {
 
     let saved_count = playlist.video_ids.len();
     let watched_count = videos.iter().filter(|video| video.watched).count();
-    let unwatched_count = videos.len() - watched_count;
-    if only_unwatched() {
-        videos.retain(|video| !video.watched);
-    }
-    // Same trap as the feed: the subscription RSS carries no duration, so most
-    // cached rows store 0, and a duration chip is right to exclude them but
+    // Same trap as the feed: the subscription RSS carries no duration, so a
+    // saved row often stores 0, and a duration chip is right to exclude it but
     // cannot say so on its own. Counted before the filter runs, because after it
-    // they are gone.
-    let mut without_duration = 0usize;
-    if let Some(duration) = selected_duration() {
-        let settings = app_state.settings();
-        without_duration = videos
+    // they are gone - and past the kind filter, so a Shorts view does not claim
+    // to be missing the lengths of long-form uploads it was not showing anyway.
+    let without_duration = if view.duration.is_some() {
+        videos
             .iter()
-            .filter(|video| !video.is_live && video.duration_seconds == 0)
-            .count();
-        videos.retain(|video| duration.matches(video, &settings));
-    }
-    sort().apply(&mut videos, descending());
+            .filter(|video| {
+                view.kind.matches(video) && !video.is_live && video.duration_seconds == 0
+            })
+            .count()
+    } else {
+        0
+    };
+    // Exactly what a run walks, arranged the same way, so what is on screen and
+    // what plays next cannot disagree.
+    view.arrange(&mut videos, &app_state.settings());
+    videos.retain(|video| view.shows(video));
 
-    // The run is what the filters and the sort left, in the order shown. Playing
-    // a playlist you have just narrowed to "short and unwatched" should give you
-    // exactly that.
     let run: Vec<String> = videos.iter().map(|video| video.id.clone()).collect();
     let shuffle_run = run.clone();
-    // Asked of the filters, not of the count: a playlist can also be shorter
-    // than its own id list, when an entry is not in the local cache, and that is
-    // not the reader filtering anything.
-    let filtered = only_unwatched() || selected_duration().is_some();
-    let shown = videos.len();
+    let filtered = view.is_filtered();
     let clear_id = playlist.id.clone();
+    let play_all_id = playlist.id.clone();
+    let play_all_first = run.first().cloned();
+    let grid_playlist_id = playlist.id.clone();
+    let chip_view = view.clone();
+    let sort_view = view.clone();
+    let unwatched_view = view.clone();
+    let kind_view = view.clone();
+    let kind_id = playlist.id.clone();
+    let unwatched_id = playlist.id.clone();
+    let chip_id = playlist.id.clone();
+    let sort_id = playlist.id.clone();
 
     rsx! {
         PageHeader {
             title: playlist.name.clone(),
             back_to: Route::Playlists {},
-            global_actions: false,
+            end_slot: rsx! {
+                span { class: "playlist-header-count",
+                    if saved_count == 1 { "1 video" } else { "{saved_count} videos" }
+                }
+            },
+            // The same control the feed carries, in the same place, because it
+            // answers the same question: which kind of upload am I looking at.
+            toolbar: rsx! {
+                SegmentGroup {
+                    active: kind_index,
+                    on_change: move |index: usize| {
+                        let mut updated = kind_view.clone();
+                        updated.kind = PlaylistKind::from_index(index);
+                        app_state.set_playlist_view(&kind_id, updated);
+                    },
+                    for kind in PlaylistKind::ALL {
+                        SegmentButton { index: kind.index(), "{kind.label()}" }
+                    }
+                }
+            },
         }
         Body { padding: false,
             main { class: "page playlist-detail-page",
-                // Two lines rather than one row of four peers. The counts and
-                // the button that acts on them sit together and stay quiet;
-                // underneath, the two ways to start watching get the width.
-                // Everything here used to compete at one size and wrap on a
-                // phone, which read as four equally important decisions.
+                // One row of actions: the two ways to start watching, and the
+                // tidying that acts on the same list. Cleanup stays quiet, and on
+                // the trailing edge, so it is never the thing a thumb lands on.
                 header { class: "playlist-lead",
-                    div { class: "playlist-lead-meta",
-                        span { class: "playlist-detail-count",
-                            if filtered {
-                                "{shown} of {saved_count} videos"
-                            } else if saved_count == 1 {
-                                "1 video"
-                            } else {
-                                "{saved_count} videos"
-                            }
-                            if unwatched_count > 0 && unwatched_count < saved_count {
-                                span { class: "playlist-detail-dot", aria_hidden: "true", " · " }
-                                "{unwatched_count} unwatched"
-                            }
+                    div { class: "playlist-lead-actions",
+                        Button {
+                            style: ButtonStyle::Solid,
+                            class: "playlist-play-all".to_string(),
+                            disabled: run.is_empty(),
+                            start: rsx! { Play { size: 17, fill: "currentColor" } },
+                            onclick: move |_| {
+                                if let Some(first) = play_all_first.clone() {
+                                    play_from_playlist(app_state, &play_all_id, first, true);
+                                }
+                            },
+                            "Play all"
                         }
-                        // Next to the counts because that is what it changes,
-                        // and quiet because tidying is not why anyone opened a
-                        // playlist.
+                        Button {
+                            style: ButtonStyle::Neutral,
+                            disabled: shuffle_run.len() < 2,
+                            start: rsx! { Shuffle { size: 17 } },
+                            onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
+                            "Shuffle"
+                        }
                         if watched_count > 0 {
                             Button {
                                 style: ButtonStyle::Clear,
                                 size: ButtonSize::Sm,
+                                class: "playlist-remove-watched".to_string(),
+                                // The label is hidden on narrow screens.
+                                aria_label: "Remove watched".to_string(),
                                 start: rsx! { CheckCheck { size: 15 } },
                                 onclick: move |_| {
                                     let removed = app_state.remove_watched_from_playlist(&clear_id);
@@ -379,25 +456,8 @@ pub fn PlaylistDetail(id: String) -> Element {
                                         );
                                     }
                                 },
-                                "Remove watched"
+                                span { class: "playlist-remove-watched-label", "Remove watched" }
                             }
-                        }
-                    }
-                    div { class: "playlist-lead-actions",
-                        Button {
-                            style: ButtonStyle::Solid,
-                            class: "playlist-play-all".to_string(),
-                            disabled: run.is_empty(),
-                            start: rsx! { Play { size: 17, fill: "currentColor" } },
-                            onclick: move |_| play_run(app_state, run.clone(), "Playing"),
-                            "Play all"
-                        }
-                        Button {
-                            style: ButtonStyle::Neutral,
-                            disabled: shuffle_run.len() < 2,
-                            start: rsx! { Shuffle { size: 17 } },
-                            onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
-                            "Shuffle"
                         }
                     }
                 }
@@ -405,32 +465,43 @@ pub fn PlaylistDetail(id: String) -> Element {
                     nav { class: "group-filter-row", aria_label: "Playlist filters and order",
                         span { class: "group-filter-label", "Show" }
                         button {
-                            class: chip_class(only_unwatched()),
-                            aria_pressed: only_unwatched().to_string(),
-                            onclick: move |_| only_unwatched.toggle(),
+                            class: chip_class(unwatched_view.only_unwatched),
+                            aria_pressed: unwatched_view.only_unwatched.to_string(),
+                            onclick: move |_| {
+                                let mut updated = unwatched_view.clone();
+                                updated.only_unwatched = !updated.only_unwatched;
+                                app_state.set_playlist_view(&unwatched_id, updated);
+                            },
                             "Unwatched"
                         }
                         for duration in DurationFilter::ALL {
-                            button {
-                                key: "{duration.label()}",
-                                class: if selected_duration() == Some(duration) { "group-filter duration-filter active" } else { "group-filter duration-filter" },
-                                aria_pressed: (selected_duration() == Some(duration)).to_string(),
-                                onclick: move |_| {
-                                    selected_duration.set(if selected_duration() == Some(duration) {
-                                        None
-                                    } else {
-                                        Some(duration)
-                                    });
-                                },
-                                "{duration.label()}"
+                            {
+                                let active = chip_view.duration == Some(duration);
+                                let chip_view = chip_view.clone();
+                                let chip_id = chip_id.clone();
+                                rsx! {
+                                    button {
+                                        key: "{duration.label()}",
+                                        class: if active { "group-filter duration-filter active" } else { "group-filter duration-filter" },
+                                        aria_pressed: active.to_string(),
+                                        onclick: move |_| {
+                                            let mut updated = chip_view.clone();
+                                            updated.duration = if active { None } else { Some(duration) };
+                                            app_state.set_playlist_view(&chip_id, updated);
+                                        },
+                                        "{duration.label()}"
+                                    }
+                                }
                             }
                         }
                         span { class: "filter-divider", aria_hidden: "true" }
                         span { class: "group-filter-label", "Sort" }
                         for option in PlaylistSort::ALL {
                             {
-                                let active = sort() == option;
-                                let direction = if active { descending() } else { option.default_descending() };
+                                let active = sort_view.sort == option;
+                                let direction = if active { sort_view.descending } else { option.default_descending() };
+                                let sort_view = sort_view.clone();
+                                let sort_id = sort_id.clone();
                                 rsx! {
                                     button {
                                         key: "{option:?}",
@@ -438,12 +509,14 @@ pub fn PlaylistDetail(id: String) -> Element {
                                         aria_pressed: active.to_string(),
                                         title: if active { "Tap again to reverse" } else { "" },
                                         onclick: move |_| {
-                                            if sort() == option {
-                                                descending.toggle();
+                                            let mut updated = sort_view.clone();
+                                            if active {
+                                                updated.descending = !updated.descending;
                                             } else {
-                                                sort.set(option);
-                                                descending.set(option.default_descending());
+                                                updated.sort = option;
+                                                updated.descending = option.default_descending();
                                             }
+                                            app_state.set_playlist_view(&sort_id, updated);
                                         },
                                         "{option.label(direction)}"
                                     }
@@ -456,12 +529,12 @@ pub fn PlaylistDetail(id: String) -> Element {
                     p { class: "feed-filter-note",
                         "{without_duration} more "
                         if without_duration == 1 { "video has" } else { "videos have" }
-                        " no length yet, so a duration filter cannot speak for them. Each refresh fills in a few more channels."
+                        " no length yet, so a duration filter cannot speak for them. They are being filled in now."
                     }
                 }
                 VideoGrid {
                     videos,
-                    playlist_id: playlist.id.clone(),
+                    playlist_id: grid_playlist_id,
                     empty_message: if filtered {
                         "Nothing here matches those filters.".to_string()
                     } else {

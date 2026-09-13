@@ -11,9 +11,10 @@
 //! relaunching. That is a real constraint on the settings UI, not an
 //! implementation detail: see [`set_backend_url`].
 //!
-//! Each platform reads its own store directly - `localStorage` on web, a small
-//! JSON file under the user's config directory on desktop and mobile - because
-//! that is the only thing available this early.
+//! Each platform reads its own store directly - `localStorage` on web, the
+//! g3-native-plugins key-value store on Android, a small JSON file under the
+//! user's config directory on desktop and iOS - because that is the only thing
+//! available this early.
 
 #![cfg_attr(feature = "server", allow(dead_code))]
 
@@ -125,13 +126,38 @@ fn store(key: &str, value: &str) {
     }
 }
 
-/// Desktop and mobile keep the same two values in a small JSON file.
+/// Android keeps them in the platform key-value store.
+///
+/// Not the JSON file below: `dirs` finds the config directory through `$HOME`,
+/// which an Android app process does not have, so that file was never written
+/// and every launch looked like a first launch. The store is usable this early
+/// because tao sets up the Android context before it calls `main`.
+#[cfg(all(not(feature = "server"), target_os = "android"))]
+fn stored(key: &str) -> Option<String> {
+    match g3_native_plugins::KeyValueStore::new().get(key) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("tawny: could not read {key}: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(all(not(feature = "server"), target_os = "android"))]
+fn store(key: &str, value: &str) {
+    if let Err(error) = g3_native_plugins::KeyValueStore::new().set(key, value) {
+        eprintln!("tawny: could not save {key}: {error}");
+    }
+}
+
+/// Desktop and iOS keep the same two values in a small JSON file.
 ///
 /// Not the WebView's own localStorage: that is reachable only once the app is
 /// running, which is too late for the URL these values configure.
 #[cfg(all(
     not(feature = "server"),
     not(target_arch = "wasm32"),
+    not(target_os = "android"),
     any(feature = "desktop", feature = "mobile")
 ))]
 fn config_path() -> Option<std::path::PathBuf> {
@@ -143,6 +169,7 @@ fn config_path() -> Option<std::path::PathBuf> {
 #[cfg(all(
     not(feature = "server"),
     not(target_arch = "wasm32"),
+    not(target_os = "android"),
     any(feature = "desktop", feature = "mobile")
 ))]
 fn read_config() -> serde_json::Map<String, serde_json::Value> {
@@ -155,6 +182,7 @@ fn read_config() -> serde_json::Map<String, serde_json::Value> {
 #[cfg(all(
     not(feature = "server"),
     not(target_arch = "wasm32"),
+    not(target_os = "android"),
     any(feature = "desktop", feature = "mobile")
 ))]
 fn stored(key: &str) -> Option<String> {
@@ -167,6 +195,7 @@ fn stored(key: &str) -> Option<String> {
 #[cfg(all(
     not(feature = "server"),
     not(target_arch = "wasm32"),
+    not(target_os = "android"),
     any(feature = "desktop", feature = "mobile")
 ))]
 fn write_config(config: &serde_json::Map<String, serde_json::Value>) {
@@ -181,6 +210,7 @@ fn write_config(config: &serde_json::Map<String, serde_json::Value>) {
 #[cfg(all(
     not(feature = "server"),
     not(target_arch = "wasm32"),
+    not(target_os = "android"),
     any(feature = "desktop", feature = "mobile")
 ))]
 fn store(key: &str, value: &str) {

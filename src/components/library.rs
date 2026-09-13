@@ -5,7 +5,7 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{History, ListVideo, Play, Trash2, User};
+use dioxus_icons::lucide::{Check, History, ListVideo, Play, Trash2, User};
 use g3_route_transitions::{ROUTE_TRANSITION_COVER_CLASS, animated_navigate};
 use g3_ui::{
     Body, Button, ButtonSize, ButtonStyle, Refresher, SegmentButton, SegmentGroup, Sheet,
@@ -21,9 +21,24 @@ pub fn QueuePage() -> Element {
     let videos = library
         .queue
         .iter()
-        .filter_map(|id| library.videos.iter().find(|video| &video.id == id).cloned())
+        .filter_map(|entry| {
+            library
+                .videos
+                .iter()
+                .find(|video| &video.id == entry)
+                .cloned()
+        })
         .collect::<Vec<_>>();
-    let first_id = videos.first().map(|video| video.id.clone());
+    // The playlist being run is one entry in the queue, not a copy of its
+    // contents, so it gets a row of its own rather than fifty cards. Shown above
+    // the loose videos because that is where `start_playlist_run` puts it: pressing
+    // play on a playlist means now, not after last week's leftovers.
+    let running = app_state.playlist_run_status();
+    // What pressing play actually starts, resolved exactly the way autoplay
+    // resolves it: a playlist at the head of the queue plays its first shown
+    // entry, not the first loose video behind it.
+    let first_id = app_state.next_in_run("");
+    let is_empty = videos.is_empty() && running.is_none();
 
     rsx! {
         // One surface, one snapshot: the header rides up with the body it
@@ -33,7 +48,7 @@ pub fn QueuePage() -> Element {
             PageHeader { title: "Queue".to_string(), back_to: Route::Feed {} }
             Body { padding: false,
                 main { class: "page queue-page",
-                    if videos.is_empty() {
+                    if is_empty {
                         div { class: "empty-state",
                             div { class: "empty-icon", ListVideo { size: 25 } }
                             h3 { "Your queue is empty" }
@@ -64,6 +79,83 @@ pub fn QueuePage() -> Element {
                                         app_state.show_toast("Queue cleared", StatusColor::Neutral);
                                     },
                                     "Clear"
+                                }
+                            }
+                        }
+                        if let Some(run) = running {
+                            {
+                                let playlist_id = run.playlist_id.clone();
+                                let playlist_name = run.name.clone();
+                                let total = run.total;
+                                let remaining = run.remaining;
+                                let order_label = run.view.sort.label(run.view.descending);
+                                let filters = run.view.filter_labels();
+                                let filter_text = if filters.is_empty() {
+                                    "no filters".to_string()
+                                } else {
+                                    filters.join(", ")
+                                };
+                                let left_text = if remaining == 1 { "1 left".to_string() } else { format!("{remaining} left") };
+                                rsx! {
+                            div { class: "queue-playlist-row",
+                                button {
+                                    class: "queue-playlist-open",
+                                    onclick: {
+                                        let playlist_id = playlist_id.clone();
+                                        move |_| {
+                                            let id = playlist_id.clone();
+                                            spawn(async move { animated_navigate(Route::PlaylistDetail { id }).await; });
+                                        }
+                                    },
+                                    span { class: "queue-playlist-icon", ListVideo { size: 20 } }
+                                    // A playlist in the queue is a rule rather
+                                    // than a list: each time a video ends it
+                                    // looks at the playlist as its page is
+                                    // arranged *then*. So this says where the run
+                                    // is and which arrangement it is following.
+                                    span { class: "queue-playlist-copy",
+                                        strong { "{playlist_name}" }
+                                        if let (Some(position), Some(current)) = (run.position, run.current.as_ref()) {
+                                            span { class: "queue-playlist-now",
+                                                "Now playing {position} of {total}: "
+                                                em { "{current.title}" }
+                                            }
+                                        } else {
+                                            span { class: "queue-playlist-now",
+                                                "Not started · {remaining} of {total} to play"
+                                            }
+                                        }
+                                        // The count leads so an ellipsis on a
+                                        // long title never swallows it.
+                                        if let Some(next) = run.up_next.as_ref() {
+                                            span { class: "queue-playlist-next",
+                                                if run.position.is_some() { "{left_text} · Up next: " } else { "Starts with: " }
+                                                em { "{next.title}" }
+                                            }
+                                        } else if run.position.is_some() {
+                                            span { class: "queue-playlist-next", "Last video in this order" }
+                                        }
+                                        span { class: "queue-playlist-order", "Order: {order_label} · {filter_text}" }
+                                    }
+                                }
+                                Button {
+                                    style: ButtonStyle::Clear,
+                                    size: ButtonSize::Sm,
+                                    aria_label: "Stop playing this playlist".to_string(),
+                                    onclick: move |_| {
+                                        if app_state.clear_playlist_run() {
+                                            app_state.show_toast(
+                                                format!("Stopped playing {playlist_name}"),
+                                                StatusColor::Neutral,
+                                            );
+                                        }
+                                    },
+                                    Trash2 { size: 16 }
+                                }
+                            }
+                            p { class: "queue-playlist-note",
+                                "Follows the playlist page as it is now. Change the order or filters there and the next video is picked from the new arrangement, continuing after the one playing. If the playing video no longer matches the filters, the run starts again from the top."
+                            }
                                 }
                             }
                         }
@@ -359,60 +451,71 @@ pub fn ChannelDetail(id: String) -> Element {
                             });
                         },
                         main { class: "page",
-                        if let Some(banner_url) = banner_url {
-                            div {
-                                class: "channel-banner",
-                                style: "background-image: linear-gradient(180deg, transparent, var(--color-bg)), url('{banner_url}')",
-                            }
-                        }
+                        // Rows, not columns: see `.channel-hero` in the
+                        // stylesheet for what the old grid did to a long name.
                         section { class: "channel-hero",
-                            if let Some(avatar_url) = avatar_url {
-                                img { class: "channel-avatar channel-avatar-hero", src: "{avatar_url}", alt: "{channel.name}" }
-                            } else {
-                                div { class: "channel-avatar channel-avatar-hero channel-avatar-fallback", User { size: 30 } }
-                            }
-                            div { class: "channel-hero-copy",
-                                span { class: "section-kicker", "{channel.handle}" }
-                                h1 { "{channel.name}" }
-                                // The local cache count is an implementation
-                                // detail; it told the reader nothing about the
-                                // channel.
-                                if !channel.subscriber_count.trim().is_empty() {
-                                    p { "{channel.subscriber_count} subscribers" }
+                            if let Some(banner_url) = banner_url {
+                                div {
+                                    class: "channel-hero-banner",
+                                    style: "background-image: url('{banner_url}')",
                                 }
-                                if !channel.description.is_empty() {
+                            }
+                            div { class: "channel-hero-body",
+                                div { class: "channel-hero-identity",
+                                    if let Some(avatar_url) = avatar_url {
+                                        img { class: "channel-avatar channel-avatar-hero", src: "{avatar_url}", alt: "{channel.name}" }
+                                    } else {
+                                        div { class: "channel-avatar channel-avatar-hero channel-avatar-fallback", User { size: 30 } }
+                                    }
+                                    div { class: "channel-hero-copy",
+                                        h1 { "{channel.name}" }
+                                        // The local cache count is an implementation
+                                        // detail; it told the reader nothing about
+                                        // the channel.
+                                        p { class: "channel-hero-meta",
+                                            if !channel.handle.trim().is_empty() {
+                                                span { "{channel.handle}" }
+                                            }
+                                            if !channel.subscriber_count.trim().is_empty() {
+                                                span { "{channel.subscriber_count} subscribers" }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: "channel-hero-actions",
+                                    Button {
+                                        style: if is_subscribed { ButtonStyle::Neutral } else { ButtonStyle::Solid },
+                                        start: if is_subscribed { Some(rsx! { Check { size: 16 } }) } else { None },
+                                        onclick: move |_| {
+                                            if let Some(now_subscribed) = app_state.toggle_subscription(&channel_id) {
+                                                app_state.show_toast(
+                                                    if now_subscribed { "Subscribed" } else { "Unsubscribed" },
+                                                    StatusColor::Neutral,
+                                                );
+                                            }
+                                        },
+                                        if is_subscribed { "Subscribed" } else { "Subscribe" }
+                                    }
                                     // Behind a button: a long channel description
                                     // pushed the videos off the first screen.
-                                    Button {
-                                        style: ButtonStyle::Clear,
-                                        size: ButtonSize::Sm,
-                                        class: "channel-description-button",
-                                        onclick: move |_| description_open.set(true),
-                                        "Description"
+                                    if !channel.description.is_empty() {
+                                        Button {
+                                            style: ButtonStyle::Neutral,
+                                            onclick: move |_| description_open.set(true),
+                                            "About"
+                                        }
                                     }
                                 }
-                            }
-                            Button {
-                                style: if is_subscribed { ButtonStyle::Neutral } else { ButtonStyle::Solid },
-                                onclick: move |_| {
-                                    if let Some(now_subscribed) = app_state.toggle_subscription(&channel_id) {
-                                        app_state.show_toast(
-                                            if now_subscribed { "Subscribed" } else { "Unsubscribed" },
-                                            StatusColor::Neutral,
-                                        );
-                                    }
-                                },
-                                if is_subscribed { "Subscribed" } else { "Subscribe" }
-                            }
-                            // Only meaningful once subscribed: this narrows what
-                            // reaches the feed, it does not change the channel page.
-                            if is_subscribed {
-                                div { class: "subscription-content-row",
-                                    span { class: "subscription-content-label", "Feed shows" }
-                                    SegmentGroup { active: content_index, class: "subscription-content-segments".to_string(),
-                                        SegmentButton { index: 0, "Both" }
-                                        SegmentButton { index: 1, "Videos" }
-                                        SegmentButton { index: 2, "Shorts" }
+                                // Only meaningful once subscribed: this narrows what
+                                // reaches the feed, it does not change the channel page.
+                                if is_subscribed {
+                                    div { class: "subscription-content-row",
+                                        span { class: "subscription-content-label", "Feed shows" }
+                                        SegmentGroup { active: content_index, class: "subscription-content-segments".to_string(),
+                                            SegmentButton { index: 0, "Both" }
+                                            SegmentButton { index: 1, "Videos" }
+                                            SegmentButton { index: 2, "Shorts" }
+                                        }
                                     }
                                 }
                             }

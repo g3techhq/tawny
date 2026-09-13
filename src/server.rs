@@ -97,12 +97,27 @@ const FEED_RSS_CONCURRENCY: usize = 32;
 /// How many channels one refresh will ask for video lengths, at most.
 ///
 /// One call covers a channel's recent uploads, so this is the number of extra
-/// Innertube requests a pull-to-refresh can cost. Channels are picked by where
-/// the gaps are, so successive refreshes work through the backlog.
-const FEED_DURATION_BACKFILL_CHANNELS: usize = 6;
+/// Innertube requests a pull-to-refresh can cost. The subscription feed has no
+/// runtimes, so this covers enough of the recent backlog for duration filters
+/// to work before those videos are opened.
+const FEED_DURATION_BACKFILL_CHANNELS: usize = 24;
 /// How many rows to look at when deciding which channels those are.
 const FEED_DURATION_SCAN_ROWS: usize = 600;
+/// Exact player lookups are reserved for the cards a viewer can actually see.
+/// One page is 24 cards; the API cap allows a loaded second page in one call
+/// without turning the endpoint into an unbounded extractor proxy.
+const FEED_DURATION_VISIBLE_BATCH: usize = 24;
+/// Hard cap on one on-screen hydration request, from any page. Mirrored by the
+/// client's look-ahead so a duration filter can ask about a page's worth of
+/// cards plus the ones that will not land in the selected bucket.
+const DURATION_HYDRATION_LIMIT: usize = 48;
 const WEBSUB_RENEW_CONCURRENCY: usize = 12;
+/// Channel pages requested at once while backfilling avatars and subscriber
+/// counts. Each is a full channel extraction, so this stays well below the
+/// WebSub figure, which is a single small POST each.
+const CHANNEL_METADATA_CONCURRENCY: usize = 4;
+/// Channel pages one backfill pass may request.
+const CHANNEL_METADATA_BATCH: usize = 100;
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 fn reconciliation_limit(total: usize, has_accelerated_source: bool) -> usize {
@@ -1061,8 +1076,11 @@ impl AppServerState {
             return self.library_snapshot(owner).await;
         }
 
+        // Merged, not overwritten. The client's copy of a channel it imported is
+        // still the stub from the export file, and writing it over the row would
+        // blank the avatar and subscriber count the server has since fetched.
         for channel in &snapshot.channels {
-            self.upsert_channel(channel).await?;
+            self.upsert_discovered_channel(channel).await?;
         }
         for video in &snapshot.videos {
             self.upsert_video(video, video_sort_key(video)).await?;
@@ -1298,12 +1316,20 @@ impl AppServerState {
                         .collect::<Vec<_>>()
                         .await;
                 } else {
+                    let ids = newly_subscribed
+                        .iter()
+                        .map(|channel| channel.id.clone())
+                        .collect::<Vec<_>>();
                     let limit = reconciliation_limit(
                         newly_subscribed.len(),
                         self.websub_callback_url.is_some(),
                     );
                     let _ = self
                         .reconcile_channels_rss(newly_subscribed.into_iter().take(limit).collect())
+                        .await;
+                    // RSS carries no avatar or subscriber count, and a bulk
+                    // import is the one path that never reads a channel page.
+                    self.backfill_channel_metadata(Some(&ids), CHANNEL_METADATA_BATCH)
                         .await;
                 }
             };
@@ -1993,6 +2019,110 @@ impl AppServerState {
             .await?
             .check()?;
         Ok(())
+    }
+
+    /// Fill in the avatar and subscriber count of followed channels missing
+    /// either, and report how many rows gained something.
+    ///
+    /// An imported subscription arrives as a stub holding only an id and a name.
+    /// Following a few channels reads each channel page, which is where those
+    /// facts come from, but a bulk import is reconciled over RSS - which has
+    /// neither - so imported channels stayed faceless for good. `only` narrows a
+    /// pass to channels that just changed; `limit` caps the channel pages one
+    /// pass requests.
+    async fn backfill_channel_metadata(&self, only: Option<&[String]>, limit: usize) -> usize {
+        let rows: Vec<DbChannel> = match self
+            .db
+            .query("SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel WHERE subscribed = true")
+            .await
+            .and_then(|mut response| response.take(0))
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("could not list channels for a metadata backfill: {error}");
+                return 0;
+            }
+        };
+        let candidates = rows
+            .into_iter()
+            .map(Channel::from)
+            .filter(|channel| channel.id.starts_with("UC") && !channel.id.starts_with("UC-tawny"))
+            .filter(|channel| only.is_none_or(|ids| ids.contains(&channel.id)))
+            .filter(|channel| {
+                channel.avatar_url.is_none() || channel.subscriber_count.trim().is_empty()
+            })
+            .take(limit)
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return 0;
+        }
+
+        use futures_util::{StreamExt, stream};
+        stream::iter(candidates.into_iter().map(|channel| async move {
+            let query = self.youtube.query();
+            let page = match youtube_call(
+                query.channel_videos(&channel.id),
+                "extract channel metadata",
+            )
+            .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    eprintln!("metadata backfill for {} failed: {error:#}", channel.id);
+                    return false;
+                }
+            };
+            let discovered = rusty_channel_to_channel(&page, channel.subscribed);
+            match self.store_channel_metadata(&channel, &discovered).await {
+                Ok(changed) => changed,
+                Err(error) => {
+                    eprintln!("could not store metadata for {}: {error:#}", channel.id);
+                    false
+                }
+            }
+        }))
+        .buffer_unordered(CHANNEL_METADATA_CONCURRENCY)
+        .filter(|changed| std::future::ready(*changed))
+        .count()
+        .await
+    }
+
+    /// Write fetched channel facts onto an existing row without touching who
+    /// follows it.
+    ///
+    /// `channel.subscribed` is derived from every account's own rows, so a
+    /// metadata write must never carry it. Merged rather than replaced, so a
+    /// sparse response cannot blank what a richer one stored earlier.
+    async fn store_channel_metadata(
+        &self,
+        existing: &Channel,
+        discovered: &Channel,
+    ) -> Result<bool> {
+        let mut merged = existing.clone();
+        if !merged.merge_metadata_from(discovered) {
+            return Ok(false);
+        }
+        self.db
+            .query(
+                r#"UPDATE channel SET
+                    name = $name,
+                    handle = $handle,
+                    avatar_url = $avatar_url,
+                    subscriber_count = $subscriber_count,
+                    description = $description,
+                    banner_url = $banner_url
+                WHERE channel_id = $channel_id"#,
+            )
+            .bind(("channel_id", merged.id))
+            .bind(("name", merged.name))
+            .bind(("handle", merged.handle))
+            .bind(("avatar_url", merged.avatar_url))
+            .bind(("subscriber_count", merged.subscriber_count))
+            .bind(("description", merged.description))
+            .bind(("banner_url", merged.banner_url))
+            .await?
+            .check()?;
+        Ok(true)
     }
 
     async fn upsert_playlist(&self, owner: &str, playlist: &Playlist) -> Result<()> {
@@ -2694,6 +2824,164 @@ impl AppServerState {
         Ok(channels)
     }
 
+    /// Channel ids whose uploads are part of this viewer's feed. The poller has
+    /// no viewer, so its empty owner means every channel followed by anyone on
+    /// the instance.
+    async fn feed_channel_ids(&self, owner: &str) -> Result<Vec<String>> {
+        if !owner.is_empty() {
+            return Ok(self
+                .user_subscriptions(owner)
+                .await?
+                .into_iter()
+                .filter_map(|(channel_id, (subscribed, _))| subscribed.then_some(channel_id))
+                .collect());
+        }
+
+        #[derive(Debug, Deserialize, SurrealValue)]
+        struct Row {
+            channel_id: String,
+        }
+        let rows: Vec<Row> = self
+            .db
+            .query("SELECT channel_id FROM channel WHERE subscribed = true")
+            .await?
+            .take(0)?;
+        Ok(rows.into_iter().map(|row| row.channel_id).collect())
+    }
+
+    /// Every video this account has saved to a playlist.
+    ///
+    /// A saved video is this viewer's own reference to it, whatever channel it
+    /// came from, so it earns the same hydration a subscribed upload gets. A
+    /// playlist is the one place a reader assembles videos from channels they
+    /// do not follow, which is exactly where a channel-only allowlist left the
+    /// duration filters with nothing to filter.
+    async fn user_playlist_video_ids(&self, owner: &str) -> Result<HashSet<String>> {
+        if owner.is_empty() {
+            return Ok(HashSet::new());
+        }
+        #[derive(Debug, Deserialize, SurrealValue)]
+        struct Row {
+            video_ids: Vec<String>,
+        }
+        let rows: Vec<Row> = self
+            .db
+            .query("SELECT video_ids FROM playlist WHERE owner = type::record($owner)")
+            .bind(("owner", owner.to_string()))
+            .await?
+            .check()?
+            .take(0)?;
+        Ok(rows
+            .into_iter()
+            .flat_map(|row| row.video_ids.into_iter())
+            .collect())
+    }
+
+    /// Newest exact rows that still need a runtime, scoped to the calling
+    /// viewer rather than the server's entire shared catalog.
+    async fn feed_duration_candidates(&self, owner: &str, limit: usize) -> Result<Vec<Video>> {
+        let channel_ids = self.feed_channel_ids(owner).await?;
+        if channel_ids.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<DbVideo> = self
+            .db
+            .query(
+                "SELECT video_id, title, channel_id, channel_name, thumbnail_url, published_at, published_sort, duration_seconds, view_count, is_live, is_short, progress_seconds, watched, audio_only FROM video WHERE duration_seconds = 0 AND is_live = false AND channel_id IN $channel_ids ORDER BY published_sort DESC LIMIT $limit",
+            )
+            .bind(("channel_ids", channel_ids))
+            .bind(("limit", limit as i64))
+            .await?
+            .take(0)?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// Resolve each requested upload itself. Channel listings are efficient,
+    /// but they can omit Shorts and older rows; this exact path is what makes
+    /// progress deterministic for visible cards.
+    async fn resolve_video_durations(&self, videos: Vec<Video>) -> Result<Vec<Video>> {
+        use futures_util::{StreamExt, stream};
+
+        let enriched = stream::iter(
+            videos
+                .into_iter()
+                .map(|video| async move { self.enrich_video_player(video).await }),
+        )
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+        let mut resolved = Vec::new();
+        for video in enriched {
+            if video.duration_seconds == 0 && !video.is_live {
+                continue;
+            }
+            self.upsert_feed_video(&video, video_sort_key(&video))
+                .await?;
+            resolved.push(video);
+        }
+        Ok(resolved)
+    }
+
+    /// Metadata hydration for the cards a viewer is looking at, wherever they
+    /// are looking at them.
+    ///
+    /// Accepts only videos already in the catalog that this account has a claim
+    /// on - an upload from a channel it follows, or a video it saved to a
+    /// playlist - and caps the request before any extractor work begins, so the
+    /// endpoint cannot be driven as a general-purpose extractor proxy.
+    pub async fn hydrate_video_durations(
+        &self,
+        owner: &str,
+        video_ids: Vec<String>,
+    ) -> Result<Vec<Video>> {
+        let (allowed_channels, allowed_videos) = tokio::try_join!(
+            async {
+                Ok::<_, anyhow::Error>(
+                    self.feed_channel_ids(owner)
+                        .await?
+                        .into_iter()
+                        .collect::<HashSet<_>>(),
+                )
+            },
+            self.user_playlist_video_ids(owner),
+        )?;
+        if allowed_channels.is_empty() && allowed_videos.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut seen = HashSet::new();
+        let video_ids = video_ids
+            .into_iter()
+            .filter(|video_id| seen.insert(video_id.clone()))
+            .take(DURATION_HYDRATION_LIMIT)
+            .collect::<Vec<_>>();
+        if video_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<DbVideo> = self
+            .db
+            .query(
+                "SELECT video_id, title, channel_id, channel_name, thumbnail_url, published_at, published_sort, duration_seconds, view_count, is_live, is_short, progress_seconds, watched, audio_only FROM video WHERE video_id IN $video_ids",
+            )
+            .bind(("video_ids", video_ids))
+            .await?
+            .take(0)?;
+        let mut resolved = Vec::new();
+        let mut missing = Vec::new();
+        for video in rows.into_iter().map(Video::from) {
+            if !allowed_channels.contains(&video.channel_id) && !allowed_videos.contains(&video.id)
+            {
+                continue;
+            }
+            if video.duration_seconds > 0 || video.is_live {
+                resolved.push(video);
+            } else {
+                missing.push(video);
+            }
+        }
+        resolved.extend(self.resolve_video_durations(missing).await?);
+        Ok(resolved)
+    }
+
     /// Write lengths a listing reported onto rows that still have none.
     ///
     /// Guarded on `duration_seconds = 0` in the statement rather than in Rust:
@@ -2732,7 +3020,7 @@ impl AppServerState {
     /// Best effort throughout. A refresh that cannot reach the extractor still
     /// returns the feed it did reconcile; the lengths are simply filled in on a
     /// later refresh.
-    async fn backfill_durations(&self) -> usize {
+    async fn backfill_durations(&self, owner: &str) -> usize {
         use futures_util::{StreamExt, stream};
 
         let Ok(channels) = self
@@ -2748,7 +3036,7 @@ impl AppServerState {
             )
             .await
         }))
-        .buffer_unordered(4)
+        .buffer_unordered(8)
         .collect::<Vec<_>>()
         .await;
 
@@ -2772,6 +3060,16 @@ impl AppServerState {
                 })
                 .collect::<Vec<_>>();
             filled += self.apply_video_durations(&rows).await.unwrap_or(0);
+        }
+        // A listing can leave exactly the same unknown Shorts/older uploads at
+        // the top forever. Resolve the newest visible page directly so every
+        // successful refresh advances the feed even when that happens.
+        if let Ok(candidates) = self
+            .feed_duration_candidates(owner, FEED_DURATION_VISIBLE_BATCH)
+            .await
+            && let Ok(resolved) = self.resolve_video_durations(candidates).await
+        {
+            filled += resolved.len();
         }
         filled
     }
@@ -2941,7 +3239,7 @@ impl AppServerState {
         }
         // After reconciliation, so it sees the videos this refresh just
         // imported, and before the snapshot, so their lengths travel with them.
-        self.backfill_durations().await;
+        self.backfill_durations(owner).await;
         let refreshed_channels = covered_channels.len();
         let failed_channels = total_channels.saturating_sub(refreshed_channels);
         Ok(FeedRefreshResult {
@@ -4709,6 +5007,12 @@ pub fn spawn_subscription_poller(state: AppServerState) {
         let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
         loop {
             interval.tick().await;
+            // Also catches channels imported before the import path learned to
+            // do this, a batch per tick so a large library does not arrive at
+            // YouTube as one burst.
+            state
+                .backfill_channel_metadata(None, CHANNEL_METADATA_BATCH)
+                .await;
             if let Err(error) = state.poll_subscriptions_once().await {
                 eprintln!("subscription poll failed: {error:#}");
             }
@@ -4718,7 +5022,7 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{Playlist, SubscriptionGroup};
+    use crate::models::{Playlist, SubscriptionGroup, playlist_queue_entry, queued_playlist_id};
 
     use super::DbVideo;
     use super::{
@@ -5020,6 +5324,121 @@ mod tests {
         let channels = state.channels_missing_durations(6).await.unwrap();
         assert!(channels.contains(&"UC-unmeasured-channel".to_string()));
         assert!(!channels.contains(&"UC-measured-channel".to_string()));
+    }
+
+    #[tokio::test]
+    async fn visible_duration_hydration_is_scoped_to_the_viewers_feed() {
+        let state = AppServerState::initialize().await.unwrap();
+        let owner = test_owner(&state).await;
+        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
+        let video = snapshot
+            .videos
+            .iter()
+            .find(|video| video.duration_seconds > 0)
+            .cloned()
+            .expect("seeded catalog has a measured video");
+        snapshot
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == video.channel_id)
+            .expect("video channel is cached")
+            .subscribed = true;
+        snapshot.cache_revision += 1;
+        state.sync_library(&owner, snapshot).await.unwrap();
+
+        let resolved = state
+            .hydrate_video_durations(
+                &owner,
+                vec![video.id.clone(), video.id.clone(), "not-cached".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved.len(), 1, "duplicates and unknown ids are ignored");
+        assert_eq!(resolved[0].id, video.id);
+        assert!(resolved[0].duration_seconds > 0);
+
+        let other_owner = test_owner(&state).await;
+        assert!(
+            state
+                .hydrate_video_durations(&other_owner, vec![video.id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "a video outside the viewer's subscriptions is not hydrated"
+        );
+    }
+
+    /// A playlist is where a reader collects videos from channels they do not
+    /// follow, so a subscription-only allowlist left exactly those rows without
+    /// a length - and a duration filter silently drops an unknown length.
+    #[tokio::test]
+    async fn a_saved_video_is_hydrated_without_following_its_channel() {
+        let state = AppServerState::initialize().await.unwrap();
+        let owner = test_owner(&state).await;
+        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
+        let video = snapshot
+            .videos
+            .iter()
+            .find(|video| video.duration_seconds > 0)
+            .cloned()
+            .expect("seeded catalog has a measured video");
+        for channel in &mut snapshot.channels {
+            channel.subscribed = false;
+        }
+        snapshot.playlists.push(Playlist {
+            id: "saved-from-elsewhere".into(),
+            name: "Saved".into(),
+            video_ids: vec![video.id.clone()],
+        });
+        snapshot.cache_revision += 1;
+        state.sync_library(&owner, snapshot).await.unwrap();
+
+        let resolved = state
+            .hydrate_video_durations(&owner, vec![video.id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(resolved.len(), 1, "a saved video is hydrated on its own");
+        assert_eq!(resolved[0].id, video.id);
+
+        assert!(
+            state
+                .hydrate_video_durations(&test_owner(&state).await, vec![video.id])
+                .await
+                .unwrap()
+                .is_empty(),
+            "another account's playlist grants nothing"
+        );
+    }
+
+    /// The queue carries one marker entry standing in for a playlist run, so the
+    /// server has to store an entry that is not a video id. Nothing here resolves
+    /// queue entries against the catalog, and this is what keeps it that way.
+    #[tokio::test]
+    async fn a_queued_playlist_run_survives_a_round_trip() {
+        let state = AppServerState::initialize().await.unwrap();
+        let owner = test_owner(&state).await;
+        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
+        let video_id = snapshot.videos[0].id.clone();
+        snapshot.playlists.push(Playlist {
+            id: "watch-later".into(),
+            name: "Watch later".into(),
+            video_ids: vec![video_id.clone()],
+        });
+        snapshot.queue = vec![playlist_queue_entry("watch-later"), video_id.clone()];
+        snapshot.cache_revision += 1;
+
+        let synced = state.sync_library(&owner, snapshot).await.unwrap();
+        assert_eq!(
+            synced.queue,
+            vec![playlist_queue_entry("watch-later"), video_id],
+            "the run marker keeps its place among the queued videos"
+        );
+        let reread = state.library_snapshot(&owner).await.unwrap();
+        assert_eq!(
+            queued_playlist_id(&reread.queue[0]),
+            Some("watch-later"),
+            "and reads back as the run it was"
+        );
     }
 
     #[tokio::test]

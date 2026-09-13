@@ -1,4 +1,5 @@
 mod account;
+mod durations;
 mod explore;
 mod feed;
 mod library;
@@ -11,6 +12,7 @@ mod subscriptions;
 mod video_card;
 
 pub use account::{AccountGate, AccountSettings, BackendSettings};
+pub use durations::{DURATION_LOOKAHEAD, duration_candidates, use_duration_hydration};
 pub use explore::Explore;
 pub use feed::Feed;
 pub use library::{ChannelDetail, HistoryPage, QueuePage};

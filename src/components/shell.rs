@@ -28,10 +28,11 @@ fn section_label(route: &Route) -> &'static str {
 #[component]
 fn NativeBackCoordinator() -> Element {
     let app_state = use_context::<AppState>();
-    let overlay_open = (app_state.playlist_picker_open)()
-        || (app_state.video_actions_open)()
-        || (app_state.share_open)()
-        || (app_state.chapters_sheet_open)();
+    // Every open g3 sheet counts, including the ones a page keeps in a local
+    // signal - comments, captions, audio, a channel's description. Listing app
+    // state by hand missed those, so Back at a history-less root fell through
+    // to Android and closed the app instead of the sheet. Share is a modal.
+    let overlay_open = g3_ui::open_sheet_count() > 0 || (app_state.share_open)();
     use_native_back_navigation_with_interception::<Route>(overlay_open);
 
     #[cfg(target_os = "android")]
@@ -64,10 +65,15 @@ fn NativeBackCoordinator() -> Element {
                     return;
                 }
 
-                const sheet = document.querySelector('.g3-sheet-backdrop-open');
-                if (sheet) {
+                // The topmost open sheet, whatever its backdrop. The comments
+                // sheet has no scrim to click, so every g3 sheet carries a
+                // hidden dismiss control and Back uses that instead.
+                const dismiss = [
+                    ...document.querySelectorAll('.g3-sheet.g3-sheet-open [data-g3-sheet-dismiss]'),
+                ].pop();
+                if (dismiss) {
                     event.preventDefault();
-                    sheet.click();
+                    dismiss.click();
                     return;
                 }
 
@@ -124,18 +130,17 @@ pub fn PageHeader(
     back_to: Option<Route>,
     /// Optional segmented control rendered under the bar.
     toolbar: Option<Element>,
-    /// Set false on a page that is somewhere the viewer went on purpose and is
-    /// working inside. Queue, History and Settings are app-wide errands, and
-    /// offering them from the top of a playlist puts three ways to leave next
-    /// to the name of the thing that was opened.
-    global_actions: Option<bool>,
+    /// Page-specific content aligned with the header's trailing controls.
+    /// Detail pages use this for quiet context that belongs beside the title,
+    /// not in the content body's first row.
+    end_slot: Option<Element>,
 ) -> Element {
     let route: Route = use_route();
     let app_state = use_context::<AppState>();
     // All three are one group of peers presented over the page that launched
     // them. Once any of them is up, the group has done its job - offering it
     // again from inside itself is just chrome the sheet has to carry.
-    let show_global_actions = global_actions.unwrap_or(true) && !is_auxiliary_route(&route);
+    let show_global_actions = !is_auxiliary_route(&route);
 
     let start_button = match back_to {
         Some(home) => rsx! {
@@ -170,6 +175,9 @@ pub fn PageHeader(
             start_button,
             end_button: rsx! {
                 div { class: "header-actions",
+                    if let Some(end_slot) = end_slot {
+                        {end_slot}
+                    }
                     if show_global_actions {
                         Button {
                             style: ButtonStyle::Clear,

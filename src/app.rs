@@ -60,7 +60,11 @@ pub enum Route {
         // A new item in an active run replaces the current watch entry.  Back
         // then dismisses the player to the page beneath it instead of walking
         // back through every video autoplay (or the queue controls) visited.
-        #[transition(cover, replace)]
+        // Opening a video from Queue or History hands that sheet off to this
+        // one: it rises like any video and takes the header sheet's place in
+        // history, so minimizing lands on the page beneath both instead of
+        // reopening the list the video was picked from.
+        #[transition(cover, replace, replaces = (QueuePage, HistoryPage))]
         #[route("/watch/:id")]
         VideoDetail { id: String },
         #[transition(pushed)]
@@ -95,7 +99,28 @@ fn tawny_theme(appearance: Appearance) -> Theme {
             danger: "#ff6b6b".into(),
             color_scheme: "dark".into(),
         },
-        Appearance::Light => Theme::default_light().with_focused("#c96e12"),
+        Appearance::Light => Theme {
+            // Tawny in daylight: warm parchment and weathered-sage layers,
+            // not a white system theme with an orange accent. Keep every
+            // elevation visibly distinct, as the g3 playground themes do.
+            focused: "#a9530b".into(),
+            label_primary: "#342a21".into(),
+            label_secondary: "#725f4d".into(),
+            card_border: "#bea27f".into(),
+            bg: "#d8c5a8".into(),
+            bg_secondary: "#cbb595".into(),
+            card: "#eadcc5".into(),
+            card_inset: "#ddc9aa".into(),
+            surface: "#e3d2b8".into(),
+            control: "#d4bea0".into(),
+            text: "#342a21".into(),
+            text_secondary: "#725f4d".into(),
+            shadow: "rgba(70, 45, 25, 0.24)".into(),
+            success: "#178451".into(),
+            warning: "#a9530b".into(),
+            danger: "#c93b45".into(),
+            color_scheme: "light".into(),
+        },
     }
 }
 
@@ -138,7 +163,11 @@ fn ThemedApp() -> Element {
         PlatformStyle::Ios => Some(ComponentMode::Ios),
         PlatformStyle::Material => Some(ComponentMode::Md),
     };
-    use_effect(move || match settings.platform_style {
+    // Read from the signal, not the `settings` copy above. Settings hydrate from
+    // local storage after the first render, and an effect that reads no signal
+    // runs exactly once: it applied the default and never saw the saved style,
+    // so the components switched to iOS while every transition stayed Material.
+    use_effect(move || match app_state.settings.read().platform_style {
         PlatformStyle::Auto => init_auto_platform(),
         PlatformStyle::Ios => set_platform(TransitionPlatform::Ios),
         PlatformStyle::Material => set_platform(TransitionPlatform::Md),
@@ -147,10 +176,12 @@ fn ThemedApp() -> Element {
     // View-transition snapshots are painted on the document element, outside
     // the wrapper that carries the theme variables, so the stylesheet's
     // `--color-bg` lookup missed and fell back to near-white. Mirroring the
-    // real background onto the root keeps transitions dark.
-    let background = tawny_theme(appearance).bg.clone();
+    // real background onto the root keeps transitions on the theme's colour.
     use_effect(move || {
-        let background = background.clone();
+        // From the signal for the same reason as the platform above: a copy
+        // taken at render time pinned the root to the default dark background,
+        // so light mode kept a dark page wherever the root showed through.
+        let background = tawny_theme(app_state.settings.read().appearance).bg.clone();
         spawn(async move {
             let script = format!(
                 "document.documentElement.style.setProperty('--route-transition-bg', {background:?});\
@@ -284,6 +315,17 @@ mod transition_tests {
 
         assert_eq!(root.transition_to(&player), NavigationAnimation::CoverUp);
         assert_eq!(player.transition_back(), NavigationAnimation::UncoverDown);
+    }
+
+    #[test]
+    fn opening_a_video_from_a_header_sheet_replaces_that_sheet() {
+        let watch = Route::VideoDetail { id: "video".into() };
+        for sheet in [Route::QueuePage {}, Route::HistoryPage {}] {
+            assert_eq!(sheet.transition_to(&watch), NavigationAnimation::CoverUp);
+            assert!(sheet.replaces_history(&watch));
+        }
+        assert!(!Route::Feed {}.replaces_history(&watch));
+        assert_eq!(watch.transition_back(), NavigationAnimation::UncoverDown);
     }
 
     #[test]

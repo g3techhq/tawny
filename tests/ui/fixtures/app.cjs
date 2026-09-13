@@ -1,15 +1,27 @@
 const { test: base, expect } = require("@playwright/test");
 
 const test = base.extend({
-  appPage: async ({ page }, use, testInfo) => {
+  appPage: async ({ page, baseURL }, use, testInfo) => {
     const pageErrors = [];
     const consoleErrors = [];
+
+    // The browser client intentionally makes a first launch choose its server
+    // before it can use the library. Seed the same local server Playwright is
+    // exercising before any document code runs, so interaction specs test the
+    // app rather than the setup gate. The first-launch flow has its own spec.
+    await page.addInitScript((serverUrl) => {
+      window.localStorage.setItem("tawny.backend-url", serverUrl);
+    }, baseURL);
 
     page.on("pageerror", (error) => pageErrors.push(error.stack || error.message));
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
-    await page.emulateMedia({ reducedMotion: "reduce" });
+    // Keep the normal motion setting. The shared g3 route/modal components
+    // resolve state changes from their transition lifecycle, so forcing
+    // reduced motion can leave an interaction waiting for an event that no
+    // longer fires. Accessibility coverage for reduced motion belongs in a
+    // component-level test with an explicit completion assertion.
 
     await use(page);
 
@@ -24,8 +36,18 @@ const test = base.extend({
 });
 
 async function openApp(page, path = "/") {
+  // The full-stack route is server-rendered first, then the browser restores
+  // its guest session and library. A visible shell alone is not proof that
+  // Dioxus has attached event handlers, so wait for the bootstrap request
+  // rather than racing a click against hydration.
+  const libraryLoaded = page.waitForResponse(
+    (response) =>
+      response.status() === 200 &&
+      /\/api\/v1\/library(?:\?|$)/.test(new URL(response.url()).pathname),
+  );
   await page.goto(path, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".g3-app-shell")).toBeVisible();
+  await libraryLoaded;
 }
 
 async function expectNoHorizontalScroll(page) {

@@ -106,6 +106,7 @@
     let hideTimer = null;
     let feedbackTimer = null;
     let scrubbing = false;
+    let timelineHovering = false;
     let resumeAfterScrub = false;
     let animationFrame = null;
     let chosenHeight = null;
@@ -175,7 +176,7 @@
       // it has to re-arm this, or the bar stays for the rest of the video.
       if (optionsMenu && !optionsMenu.hidden) return;
       hideTimer = setTimeout(() => {
-        if (!scrubbing && (optionsMenu?.hidden ?? true)) {
+        if (!scrubbing && !timelineHovering && (optionsMenu?.hidden ?? true)) {
           controls.classList.remove("controls-visible");
           root.classList.remove("player-controls-visible");
         }
@@ -207,7 +208,8 @@
       const chapter = chapterAt(position);
       const title = chapter?.title || "";
       chapterLabel.hidden = !title;
-      if (chapterLabel.textContent !== title) chapterLabel.textContent = title;
+      const chapterTitle = chapterLabel.querySelector("[data-player-chapter-title]");
+      if (chapterTitle && chapterTitle.textContent !== title) chapterTitle.textContent = title;
     }
 
     function updateTimeline() {
@@ -504,9 +506,11 @@
       renderTimeline();
     }
 
-    function showSeekFeedback(direction) {
+    function showSeekFeedback(direction, seconds = 10) {
       const feedback = direction < 0 ? feedbackLeft : feedbackRight;
       if (!feedback) return;
+      const label = feedback.querySelector("span");
+      if (label) label.textContent = `${seconds} seconds`;
       feedback.classList.remove("show-feedback");
       void feedback.offsetWidth;
       feedback.classList.add("show-feedback");
@@ -514,12 +518,26 @@
       feedbackTimer = setTimeout(() => feedback.classList.remove("show-feedback"), 650);
     }
 
-    function seekBy(amount) {
+    function seekBy(amount, feedbackSeconds = Math.abs(amount)) {
       const length = Number.isFinite(video.duration) ? video.duration : Infinity;
       video.currentTime = Math.max(0, Math.min(length, video.currentTime + amount));
-      showSeekFeedback(amount < 0 ? -1 : 1);
+      showSeekFeedback(amount < 0 ? -1 : 1, feedbackSeconds);
       updateTimeline();
       showControls(false);
+    }
+
+    function runSurfaceClickSequenceAction(clientX, clickCount = 2) {
+      const bounds = video.getBoundingClientRect();
+      if (!bounds.width) return;
+      const position = (clientX - bounds.left) / bounds.width;
+      const cumulativeSeconds = Math.max(10, (clickCount - 1) * 10);
+      if (position < 0.35) {
+        seekBy(-10, cumulativeSeconds);
+      } else if (position > 0.65) {
+        seekBy(10, cumulativeSeconds);
+      } else if (clickCount === 2 && matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        Promise.resolve(toggleFullscreen(root)).catch(() => {});
+      }
     }
 
     function setSpeed(speed) {
@@ -687,6 +705,18 @@
         showScrubPreview(position);
       };
 
+      // Hovering must be informational only: unlike a scrub it must neither
+      // move the thumb nor replace the displayed playback time. The same
+      // preview renderer supplies a storyboard frame when the server has one,
+      // with the video's thumbnail as a useful fallback.
+      const previewAt = (clientX) => {
+        const bounds = progress.getBoundingClientRect();
+        if (!bounds.width) return;
+        const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+        const length = Number.isFinite(video.duration) ? video.duration : 0;
+        showScrubPreview(ratio * length);
+      };
+
       const beginScrub = () => {
         if (scrubbing) return;
         scrubbing = true;
@@ -717,7 +747,23 @@
         positionScrubAt(event.clientX);
       });
       listen(progress, "pointermove", (event) => {
-        if (scrubbing) positionScrubAt(event.clientX);
+        if (scrubbing) {
+          positionScrubAt(event.clientX);
+        } else if (event.pointerType === "mouse") {
+          previewAt(event.clientX);
+        }
+      });
+      listen(progress, "pointerenter", (event) => {
+        if (event.pointerType !== "mouse") return;
+        timelineHovering = true;
+        previewAt(event.clientX);
+        showControls(false);
+      });
+      listen(progress, "pointerleave", (event) => {
+        if (event.pointerType !== "mouse" || scrubbing) return;
+        timelineHovering = false;
+        hideScrubPreview();
+        showControls(false, CONTROLS_LEAVE_HIDE_MS);
       });
       listen(progress, "input", () => {
         // Android WebView can hand a range drag directly to the native range
@@ -768,15 +814,55 @@
         swallowNextClick = false;
         return;
       }
-      runAction("toggle");
-      showControls(false);
+      // Pointer releases are the primary signal. click.detail remains the
+      // fallback for engines that omit pointer events, and naturally carries
+      // triple/quadruple click counts for cumulative edge seeking.
+      if (event.detail >= 2) {
+        lastClickSequenceActionAt = Date.now();
+        handleSurfaceClickSequenceAction(event.clientX, event.detail);
+        return;
+      }
+      if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
+      surfaceClickCommitted = false;
+      surfaceClickTimer = setTimeout(() => {
+        surfaceClickTimer = null;
+        surfaceClickCommitted = true;
+        runAction("toggle");
+        showControls(false);
+      }, 280);
     });
 
     // Vertical swipes: up enters fullscreen, down leaves it, and a downward
     // swipe outside fullscreen shrinks the player to the mini bar.
     let gestureStart = null;
     let swallowNextClick = false;
+    let surfaceClickTimer = null;
+    let surfaceClickCommitted = false;
+    let surfacePressSequence = null;
+    let lastPointerTapAt = 0;
+    let lastClickSequenceActionAt = 0;
     const SWIPE_DISTANCE = 55;
+    const DOUBLE_PRESS_MS = 500;
+    const TAP_SLOP = 14;
+
+    const surfaceZoneAt = (clientX) => {
+      const bounds = video.getBoundingClientRect();
+      if (!bounds.width) return "center";
+      const position = (clientX - bounds.left) / bounds.width;
+      if (position < 0.35) return "left";
+      if (position > 0.65) return "right";
+      return "center";
+    };
+
+    const handleSurfaceClickSequenceAction = (clientX, clickCount) => {
+      if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
+      surfaceClickTimer = null;
+      // If a slow main thread allowed the first tap to toggle already, undo
+      // that toggle before applying the double-tap action.
+      if (surfaceClickCommitted) runAction("toggle");
+      surfaceClickCommitted = false;
+      runSurfaceClickSequenceAction(clientX, clickCount);
+    };
 
     const trackGesture = (event) => {
       if (!gestureStart) return;
@@ -843,6 +929,25 @@
       try {
         root.releasePointerCapture(event.pointerId);
       } catch (_) {}
+      const isTap = elapsed <= 800 && Math.abs(dx) <= TAP_SLOP && Math.abs(dy) <= TAP_SLOP;
+      if (isTap) {
+        const now = Date.now();
+        const zone = surfaceZoneAt(event.clientX);
+        if (
+          surfacePressSequence &&
+          now - surfacePressSequence.at <= DOUBLE_PRESS_MS &&
+          surfacePressSequence.zone === zone
+        ) {
+          surfacePressSequence.count += 1;
+          surfacePressSequence.at = now;
+          swallowNextClick = true;
+          handleSurfaceClickSequenceAction(event.clientX, surfacePressSequence.count);
+        } else {
+          surfacePressSequence = { at: now, zone, count: 1 };
+        }
+        lastPointerTapAt = now;
+        return;
+      }
       // Deliberate, mostly-vertical, and quick enough to be a flick.
       if (elapsed > 800 || Math.abs(dy) < SWIPE_DISTANCE || Math.abs(dy) <= Math.abs(dx)) {
         return;
@@ -866,27 +971,22 @@
       gestureStart = null;
       resetGestureVisuals();
     });
-    // Also on the root rather than the video, for the pointer-capture reason
-    // above. A double click is two clicks, so playback has already toggled
-    // twice and is back where it started - nothing to undo here.
+    // Native dblclick is an additional fallback. Ignore the synthesized event
+    // when its pointerup or click(detail=2) already handled the same presses.
     listen(root, "dblclick", (event) => {
       if (isPlayerChrome(event.target)) return;
-      // Double tap near an edge skips, the way every video player does it. The
-      // middle is the only part that is unambiguously "the picture", so that is
-      // where fullscreen lives - and only with a mouse, since on touch
-      // fullscreen belongs to the upward swipe.
-      const bounds = video.getBoundingClientRect();
-      const position = (event.clientX - bounds.left) / bounds.width;
-      if (position < 0.35) {
-        seekBy(-10);
-      } else if (position > 0.65) {
-        seekBy(10);
-      } else if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
-        Promise.resolve(toggleFullscreen(root)).catch(() => {});
-      }
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastPointerTapAt < 250 || now - lastClickSequenceActionAt < 250) return;
+      lastClickSequenceActionAt = now;
+      handleSurfaceClickSequenceAction(event.clientX, 2);
     });
     listen(root, "pointermove", () => showControls(false));
-    listen(root, "pointerleave", () => showControls(false, CONTROLS_LEAVE_HIDE_MS));
+    listen(root, "pointerleave", () => {
+      timelineHovering = false;
+      hideScrubPreview();
+      showControls(false, CONTROLS_LEAVE_HIDE_MS);
+    });
     listen(root, "keydown", (event) => {
       if (event.target instanceof HTMLInputElement) return;
       const key = event.key.toLowerCase();
@@ -1011,6 +1111,7 @@
         if (animationFrame) cancelAnimationFrame(animationFrame);
         if (hideTimer) clearTimeout(hideTimer);
         if (feedbackTimer) clearTimeout(feedbackTimer);
+        if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
         if (playbackRecoveryTimer) clearTimeout(playbackRecoveryTimer);
         if (pipTransitionTimer) clearTimeout(pipTransitionTimer);
       },

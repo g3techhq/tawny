@@ -10,12 +10,15 @@ use crate::{
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    Captions, Check, ChevronLeft, ChevronRight, Clock, Heart, Languages, ListVideo, Maximize2,
-    MessageSquare, Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw, Settings2,
-    Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, User, Volume2, VolumeX, X,
+    Captions, Check, ChevronLeft, ChevronRight, Clock, EyeOff, Heart, Languages, ListVideo,
+    Maximize2, MessageSquare, Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw,
+    Settings2, Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, Volume2, VolumeX, X,
 };
 use g3_route_transitions::{animated_go_back, animated_navigate};
-use g3_ui::{Badge, Body, Button, ButtonSize, ButtonStyle, Sheet, StatusColor};
+use g3_ui::{
+    Avatar, AvatarSize, Badge, Body, Button, ButtonSize, ButtonStyle, Card, Chip, RightSlot, Sheet,
+    SheetBackdrop, StatusColor,
+};
 
 use super::VideoGrid;
 
@@ -576,6 +579,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         }
     });
 
+    // Where a drag on the placeholder stage began. The JS controller handles
+    // swipes once a video element exists; before that this is the only thing
+    // listening.
+    let mut stage_swipe_start = use_signal(|| None::<(f64, f64)>);
+
     let Some(video) = active_video else {
         return rsx! {};
     };
@@ -688,13 +696,23 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let autoplay_enabled = app_state.settings().autoplay_for(is_short);
     let autoplay_video_id = video.id.clone();
     let mut autoplay_settings = app_state.settings;
-    // A run is anything with somewhere to go: a queue ahead, a video stepped
-    // back from, or both. Outside one there is nothing for the pair to do, and
-    // a permanently dead control either side of play is worse than no control.
-    let has_next_queued =
-        app_state.with_library(|library| library.queue.iter().any(|id| id != &video.id));
-    let can_step_back = app_state.can_step_back_in_run();
-    let in_a_run = has_next_queued || can_step_back;
+    // A run is anything with somewhere to go: a queue ahead, a playlist being
+    // run, a video stepped back from, or any combination. Each direction is
+    // independently rendered below, so an unavailable side is absent rather than
+    // a permanent disabled button.
+    //
+    // Asked of the run rather than of the queue's length: a queue holding only a
+    // spent playlist marker has nothing left to play, and offering a Next that
+    // does nothing is worse than not offering one.
+    let has_next_queued = app_state.has_next_in_run(&video.id);
+    let can_step_back = app_state.can_step_back_in_run(&video.id);
+    // Naming the playlist is the only thing that tells a viewer these arrows
+    // walk the list they pressed play on rather than a queue they hand-built.
+    let run_name = app_state
+        .running_playlist_name()
+        .unwrap_or_else(|| "queue".to_string());
+    let next_label = format!("Next in {run_name}");
+    let previous_label = format!("Previous in {run_name}");
     let step_forward_id = video.id.clone();
     let step_back_id = video.id.clone();
     let playback_title = video.title.clone();
@@ -872,13 +890,12 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                         // seeking, and there is no gesture for it. The pair only
                         // appears when there is a run to move through.
                         div { class: "player-controls-center",
-                            if in_a_run {
+                            if can_step_back {
                                 button {
                                     r#type: "button",
-                                    class: "player-control-button player-step-button",
-                                    aria_label: "Previous in queue",
-                                    title: "Previous in queue",
-                                    disabled: !can_step_back,
+                                    class: "player-control-button player-step-button player-step-previous",
+                                    aria_label: "{previous_label}",
+                                    title: "{previous_label}",
                                     onclick: move |_| {
                                         let current = step_back_id.clone();
                                         spawn(async move {
@@ -900,13 +917,12 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 span { class: "player-play-icon", Play { size: 38, fill: "currentColor" } }
                                 span { class: "player-pause-icon", Pause { size: 38, fill: "currentColor" } }
                             }
-                            if in_a_run {
+                            if has_next_queued {
                                 button {
                                     r#type: "button",
-                                    class: "player-control-button player-step-button",
-                                    aria_label: "Next in queue",
-                                    title: "Next in queue",
-                                    disabled: !has_next_queued,
+                                    class: "player-control-button player-step-button player-step-next",
+                                    aria_label: "{next_label}",
+                                    title: "{next_label}",
                                     onclick: move |_| {
                                         let current = step_forward_id.clone();
                                         spawn(async move {
@@ -971,13 +987,15 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     span { "data-player-duration": "", "0:00" }
                                     // Current chapter, to the right of the clock; tapping it
                                     // opens the chapter list rather than making the user scrub.
-                                    button {
-                                        r#type: "button",
-                                        class: "player-chapter-label",
-                                        "data-player-chapter-label": "",
-                                        "data-player-action": "chapters",
-                                        hidden: true,
-                                    }
+                                button {
+                                    r#type: "button",
+                                    class: "player-chapter-label",
+                                    "data-player-chapter-label": "",
+                                    "data-player-action": "chapters",
+                                    hidden: true,
+                                    span { class: "player-chapter-title", "data-player-chapter-title": "" }
+                                    ChevronRight { class: "player-chapter-chevron", size: 15 }
+                                }
                                 }
                                 span { class: "player-control-spacer" }
                                 button {
@@ -1086,7 +1104,25 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                 } else if resolving {
                     // The spinner already says "loading"; naming the mechanism
                     // only reads as something going wrong.
-                    div { class: "player-stage-status",
+                    div {
+                        class: "player-stage-status",
+                        onpointerdown: move |event: PointerEvent| {
+                            if expanded {
+                                let point = event.client_coordinates();
+                                stage_swipe_start.set(Some((point.x, point.y)));
+                            }
+                        },
+                        onpointerup: move |event: PointerEvent| {
+                            let Some((x, y)) = stage_swipe_start() else { return };
+                            stage_swipe_start.set(None);
+                            let point = event.client_coordinates();
+                            let (dx, dy) = (point.x - x, point.y - y);
+                            // Same threshold as the attached controller's flick.
+                            if dy > 55.0 && dy.abs() > dx.abs() {
+                                spawn(async move { animated_go_back(Route::Feed {}).await; });
+                            }
+                        },
+                        onpointercancel: move |_| stage_swipe_start.set(None),
                         div { class: "loading-orbit" }
                     }
                 } else {
@@ -1117,6 +1153,19 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 "Use YouTube embed"
                             }
                         }
+                    }
+                }
+                // The attached control bar carries its own Back, but it only
+                // exists once a stream has resolved. Until then, and when
+                // resolving failed, this is the way out.
+                if expanded && !direct_stream && !use_embed() {
+                    button {
+                        r#type: "button",
+                        class: "player-control-button player-stage-back",
+                        aria_label: "Back",
+                        title: "Back",
+                        onclick: move |_| { spawn(async move { animated_go_back(Route::Feed {}).await; }); },
+                        ChevronLeft { size: 26 }
                     }
                 }
             }
@@ -1282,6 +1331,64 @@ fn source_is_transportable(source: &PlaybackSource) -> bool {
     }
 }
 
+/// Sizes the comments sheet so it reaches up to the bottom of the video and
+/// stops there.
+///
+/// Where that edge sits depends on the shell's width, the player's own cap, and
+/// how far the page is scrolled, none of which a stylesheet can see. So it is
+/// measured when the sheet opens, again a frame later once the sheet has laid
+/// out, and on every resize while it is up. `offsetHeight` rather than a
+/// bounding box, because the sheet is mid-transform while it opens.
+const COMMENTS_SHEET_FIT_JS: &str = r#"
+const key = Symbol.for('tawny.comments-sheet-fit');
+window[key]?.dispose?.();
+const fit = () => {
+    const sheet = document.querySelector('.comments-sheet');
+    const content = sheet?.querySelector('.g3-sheet-content');
+    const player = document.querySelector('#tawny-player');
+    if (!sheet || !content || !player) return;
+    const viewport = window.visualViewport?.height ?? window.innerHeight;
+    const playerBottom = Math.min(viewport, Math.max(0, player.getBoundingClientRect().bottom));
+    // A wide shell floats the sheet above the bottom edge; a phone does not.
+    const gap = parseFloat(getComputedStyle(sheet).bottom) || 0;
+    // The handle and anything else the sheet wraps around its content.
+    const chrome = sheet.offsetHeight - content.offsetHeight;
+    const style = getComputedStyle(content);
+    const padding = style.boxSizing === 'border-box'
+        ? 0
+        : parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    // Up to the video, but never less than half the screen. On a phone the
+    // video leaves most of the height free; a wide window shows a 1180px player
+    // that can leave a strip too short to read a single comment in, and there
+    // the sheet covers the bottom of the video instead.
+    const fitted = viewport - gap - chrome - playerBottom - padding;
+    const floor = viewport * 0.5 - gap - chrome - padding;
+    const height = Math.floor(Math.max(fitted, floor));
+    document.documentElement.style.setProperty('--tawny-comments-sheet-height', `${height}px`);
+};
+// Holds the page still underneath, so the video cannot scroll away from the
+// edge the sheet was sized to. See `html.tawny-comments-open` in the stylesheet.
+document.documentElement.classList.add('tawny-comments-open');
+fit();
+requestAnimationFrame(fit);
+window.addEventListener('resize', fit);
+window.visualViewport?.addEventListener('resize', fit);
+window[key] = {
+    dispose() {
+        window.removeEventListener('resize', fit);
+        window.visualViewport?.removeEventListener('resize', fit);
+    },
+};
+"#;
+
+/// Stops re-fitting once the sheet closes and lets the page scroll again. The
+/// measured height is left in place so the closing animation does not change
+/// size under it.
+const COMMENTS_SHEET_UNFIT_JS: &str = r#"
+window[Symbol.for('tawny.comments-sheet-fit')]?.dispose?.();
+document.documentElement.classList.remove('tawny-comments-open');
+"#;
+
 /// Splits the route param off from the page so that changing it builds a new
 /// page rather than re-rendering the old one.
 ///
@@ -1315,6 +1422,19 @@ fn VideoDetailInner(id: String) -> Element {
     let audio_tracks = app_state.active_audio_tracks;
     let selected_audio = app_state.selected_audio_track;
     let mut comments_open = use_signal(|| false);
+    use_effect(move || {
+        let _ = document::eval(if comments_open() {
+            COMMENTS_SHEET_FIT_JS
+        } else {
+            COMMENTS_SHEET_UNFIT_JS
+        });
+    });
+    // Leaving the video with comments still open - Back, autoplay, a related
+    // video - unmounts this page without the effect above ever seeing the sheet
+    // close, and the next page would inherit a column that cannot scroll.
+    use_drop(|| {
+        let _ = document::eval(COMMENTS_SHEET_UNFIT_JS);
+    });
     // Everything this route can put off until the sheet has landed - see
     // AFTER_ROUTE_TRANSITION_JS.
     //
@@ -1372,7 +1492,9 @@ fn VideoDetailInner(id: String) -> Element {
     let mut comments_initialized = use_signal(|| false);
     let mut comments_loading = use_signal(|| false);
     let mut details_cached = use_signal(|| false);
-    let mut history_recorded = use_signal(|| false);
+    // Keyed by video rather than a flag: this page is the only place history is
+    // recorded, so it must still record when it is reused for another video.
+    let mut history_recorded_for = use_signal(|| None::<String>);
     let route_video_id = id.clone();
     use_effect(move || {
         let _ = &route_video_id;
@@ -1490,9 +1612,9 @@ fn VideoDetailInner(id: String) -> Element {
                 details.chapters,
                 details.preview_frames,
             );
-            if !history_recorded() {
+            if history_recorded_for.peek().as_deref() != Some(video.id.as_str()) {
                 app_state.record_history(&video.id);
-                history_recorded.set(true);
+                history_recorded_for.set(Some(video.id.clone()));
             }
         }
     });
@@ -1538,6 +1660,16 @@ fn VideoDetailInner(id: String) -> Element {
         details.related_videos.clone()
     };
     let watched_id = video.id.clone();
+    // Read from the library, not the details: the remote copy is fetched once
+    // and never learns that the button below just changed it.
+    let is_watched = cached_video
+        .as_ref()
+        .map_or(video.watched, |cached| cached.watched);
+    let watched_icon = if is_watched {
+        rsx! { EyeOff { size: 17 } }
+    } else {
+        rsx! { Check { size: 17 } }
+    };
     let playlist_video = video.clone();
     let share_video = video.clone();
     let channel_id = video.channel_id.clone();
@@ -1569,43 +1701,52 @@ fn VideoDetailInner(id: String) -> Element {
         Body { padding: false,
         main { class: "player-content player-detail-content route-transition-cover",
                     section { class: "player-details page",
-                        h1 { "{video.title}" }
-                        p { class: "video-stats", "{video.stats_label()}" }
+                        // Title and stats are one unit: the page's section gap
+                        // belongs between blocks, not between a title and its
+                        // own byline.
+                        header { class: "player-title-block",
+                            h1 { "{video.title}" }
+                            p { class: "video-stats", "{video.stats_label()}" }
+                        }
 
                         // Captions and chapters are chips that open their own
                         // sheet, so the page is not padded out with two panels
-                        // that are mostly idle.
+                        // that are mostly idle. The counts are not actions, so
+                        // they are badges rather than chips that do nothing.
                         if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() || audio_tracks().len() > 1 {
                             div { class: "video-engagement",
                                 if details.like_count > 0 {
-                                    span { ThumbsUp { size: 15 } "{compact_number(details.like_count)}" }
+                                    Badge { color: StatusColor::Neutral, class: "engagement-count",
+                                        ThumbsUp { size: 14 }
+                                        "{compact_number(details.like_count)}"
+                                    }
                                 }
                                 if details.dislike_count > 0 {
-                                    span { ThumbsDown { size: 15 } "{compact_number(details.dislike_count)}" }
+                                    Badge { color: StatusColor::Neutral, class: "engagement-count",
+                                        ThumbsDown { size: 14 }
+                                        "{compact_number(details.dislike_count)}"
+                                    }
                                 }
                                 if !caption_tracks.is_empty() {
-                                    button {
-                                        class: "engagement-chip",
+                                    Chip {
+                                        start: rsx! { Captions { size: 15 } },
                                         onclick: move |_| captions_open.set(true),
-                                        Captions { size: 15 }
                                         "{caption_tracks.len()} captions"
                                     }
                                 }
                                 // Only a dubbed upload offers a choice here, and only
                                 // then is the chip worth a slot in this row.
                                 if audio_tracks().len() > 1 {
-                                    button {
-                                        class: "engagement-chip",
+                                    Chip {
+                                        start: rsx! { Languages { size: 15 } },
                                         onclick: move |_| audio_open.set(true),
-                                        Languages { size: 15 }
                                         "{audio_track_label(&audio_tracks(), &selected_audio())}"
                                     }
                                 }
                                 if !chapters.is_empty() {
-                                    button {
-                                        class: "engagement-chip",
+                                    Chip {
+                                        start: rsx! { ListVideo { size: 15 } },
                                         onclick: move |_| chapters_open.set(true),
-                                        ListVideo { size: 15 }
                                         "{chapters.len()} chapters"
                                     }
                                 }
@@ -1616,12 +1757,15 @@ fn VideoDetailInner(id: String) -> Element {
                             Button {
                                 style: ButtonStyle::Neutral,
                                 size: ButtonSize::Sm,
-                                start: rsx! { Check { size: 17 } },
+                                start: watched_icon,
                                 onclick: move |_| {
-                                    app_state.mark_watched(&watched_id, true);
-                                    app_state.show_toast("Marked as watched", StatusColor::Success);
+                                    app_state.mark_watched(&watched_id, !is_watched);
+                                    app_state.show_toast(
+                                        if is_watched { "Marked as unwatched" } else { "Marked as watched" },
+                                        StatusColor::Success,
+                                    );
                                 },
-                                "Watched"
+                                if is_watched { "Unwatched" } else { "Watched" }
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
@@ -1642,6 +1786,7 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                             Button {
                                 style: ButtonStyle::Neutral,
+                                size: ButtonSize::Sm,
                                 start: rsx! { PictureInPicture { size: 17 } },
                                 onclick: move |_| toggle_picture_in_picture(),
                                 "PiP"
@@ -1649,17 +1794,16 @@ fn VideoDetailInner(id: String) -> Element {
                         }
 
                         if let Some(channel) = channel {
-                            article {
-                                class: "player-channel-row",
-                                role: "button",
-                                tabindex: "0",
+                            Card {
+                                class: "player-channel-card",
                                 onclick: move |_| { { let v = open_channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
-                                if let Some(avatar_url) = channel.avatar_url {
-                                    img { class: "channel-avatar channel-avatar-medium", src: "{avatar_url}", alt: "" }
-                                } else {
-                                    div { class: "channel-avatar channel-avatar-medium channel-avatar-fallback", User { size: 20 } }
+                                Avatar {
+                                    src: channel.avatar_url.clone(),
+                                    alt: channel.name.clone(),
+                                    fallback: channel.name.chars().next().map(|initial| initial.to_uppercase().to_string()),
+                                    size: AvatarSize::Lg,
                                 }
-                                div {
+                                div { class: "player-channel-copy",
                                     h3 { "{channel.name}" }
                                     if !channel.subscriber_count.trim().is_empty() {
                                         p { "{channel.subscriber_count} subscribers" }
@@ -1678,14 +1822,15 @@ fn VideoDetailInner(id: String) -> Element {
                         }
 
                         if !details.description.is_empty() {
-                            section { class: "detail-section description-panel",
-                                div { class: "subsection-heading",
-                                    h3 { "Description" }
-                                    if !details_remote_available { span { "Cached" } }
-                                }
+                            Card {
+                                class: "description-card",
+                                title: "Description".to_string(),
+                                right_slot: if details_remote_available { None } else { Some(RightSlot::Text("Cached".to_string())) },
                                 p { class: "{description_class}", "{details.description}" }
-                                button {
-                                    class: "text-action",
+                                Button {
+                                    style: ButtonStyle::Clear,
+                                    size: ButtonSize::Sm,
+                                    class: "description-toggle",
                                     onclick: move |_| description_expanded.toggle(),
                                     if description_expanded() { "Show less" } else { "Show more" }
                                 }
@@ -1706,14 +1851,17 @@ fn VideoDetailInner(id: String) -> Element {
                             }
                         }
 
-                        div { class: "section-heading compact",
-                            div {
-                                span { class: "section-kicker", "UP NEXT" }
-                                h2 { if details.remote_available { "Related videos" } else { "From your library" } }
+                        // Heading and grid are one block, held closer together
+                        // than the sections above them.
+                        section { class: "player-related",
+                            div { class: "section-heading compact",
+                                div {
+                                    h2 { if details.remote_available { "Related videos" } else { "From your library" } }
+                                }
                             }
-                        }
-                        if transition_settled() {
-                            VideoGrid { videos: related }
+                            if transition_settled() {
+                                VideoGrid { videos: related }
+                            }
                         }
                     }
         }
@@ -1765,7 +1913,12 @@ fn VideoDetailInner(id: String) -> Element {
         // No heading and no running count: the button that opened this already
         // said "Comments", so the sheet is just the list. Load-more lives at the
         // end of the scrolled list rather than pinned above it.
-        Sheet { is_open: comments_open, class: "player-sheet comments-sheet",
+        // No backdrop: the video above stays untinted and usable while the
+        // thread is open, and dragging the handle down is how it closes.
+        Sheet {
+            is_open: comments_open,
+            backdrop: SheetBackdrop::None,
+            class: "player-sheet comments-sheet",
             // Same as the chapter list, and the heaviest of the two: twenty
             // cards, each with an avatar, built while the player is trying to
             // grow.
@@ -1871,13 +2024,14 @@ fn CaptionPicker(tracks: Vec<CaptionTrack>, mut selected: Signal<Option<usize>>)
 
 #[component]
 fn CommentCard(comment: VideoComment) -> Element {
-    let initial = comment.author.chars().next().unwrap_or('T');
+    let initial = comment.author.chars().next().unwrap_or('T').to_string();
     rsx! {
-        article { class: if comment.pinned { "comment-card pinned" } else { "comment-card" },
-            if let Some(avatar_url) = comment.author_avatar_url {
-                img { class: "comment-avatar", src: "{avatar_url}", alt: "", loading: "lazy" }
-            } else {
-                div { class: "comment-avatar comment-avatar-fallback", "{initial}" }
+        Card { class: if comment.pinned { "comment-card pinned" } else { "comment-card" },
+            Avatar {
+                src: comment.author_avatar_url.clone(),
+                alt: comment.author.clone(),
+                fallback: initial,
+                size: AvatarSize::Md,
             }
             div { class: "comment-content",
                 div { class: "comment-heading",

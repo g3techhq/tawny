@@ -261,11 +261,17 @@ pub fn AppOverlays() -> Element {
                 }
             }
         }
-        Toast {
-            open: app_state.toast_open,
-            message,
-            color,
-            duration_ms: 2800,
+        // A one-element keyed list deliberately remounts Toast for every
+        // notice. Merely changing its message leaves its CSS timer at the old
+        // position, which makes repeated swipes look like they failed.
+        for revision in [(app_state.toast_revision)()] {
+            Toast {
+                key: "{revision}",
+                open: app_state.toast_open,
+                message: message.clone(),
+                color,
+                duration_ms: 2800,
+            }
         }
     }
 }

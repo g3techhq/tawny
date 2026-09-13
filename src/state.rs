@@ -4,9 +4,9 @@ use crate::{
     cache::use_persistent_signal,
     models::{
         AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, HistoryEntry,
-        LibrarySnapshot, LibraryUserState, Playlist, SearchResults, SponsorSegment,
+        LibrarySnapshot, LibraryUserState, Playlist, PlaylistView, SearchResults, SponsorSegment,
         SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
-        VideoPreviewFrames,
+        VideoPreviewFrames, playlist_queue_entry, queued_playlist_id,
     },
     session::use_session_provider,
 };
@@ -17,12 +17,32 @@ use g3_ui::StatusColor;
 /// duration often enough that an exact match would rarely fire.
 const PROGRESS_WATCHED_TAIL_SECONDS: u64 = 15;
 
+/// A snapshot of the playlist run, resolved the same way autoplay resolves it.
+pub struct PlaylistRunStatus {
+    pub playlist_id: String,
+    pub name: String,
+    /// The arrangement the run is walking right now. A run reads the playlist's
+    /// live view each time it advances, so this is also what it will use next.
+    pub view: PlaylistView,
+    /// Entries in the arranged order, watched filter aside.
+    pub total: usize,
+    /// 1-based position of the playing video, when the run contains it.
+    pub position: Option<usize>,
+    pub current: Option<Video>,
+    /// Entries still to play after the current one.
+    pub remaining: usize,
+    pub up_next: Option<Video>,
+}
+
 #[derive(Clone, Copy)]
 pub struct AppState {
     pub library: Signal<LibrarySnapshot>,
     pub settings: Signal<AppSettings>,
     pub toast_open: Signal<bool>,
     pub toast: Signal<(String, StatusColor)>,
+    /// A new notice must remount the transient banner, even if the prior one is
+    /// still open, so its visible countdown starts over with its new message.
+    pub toast_revision: Signal<u64>,
     pub playlist_picker_video: Signal<Option<Video>>,
     pub playlist_picker_open: Signal<bool>,
     pub video_actions_video: Signal<Option<Video>>,
@@ -226,6 +246,7 @@ impl AppState {
 
     pub fn show_toast(mut self, message: impl Into<String>, color: StatusColor) {
         self.toast.set((message.into(), color));
+        self.toast_revision.with_mut(|revision| *revision += 1);
         self.toast_open.set(true);
     }
 
@@ -270,6 +291,12 @@ impl AppState {
             .iter()
             .position(|playlist| playlist.id == playlist_id)?;
         let removed = library.playlists.remove(index);
+        // A marker for a deleted playlist would resolve to nothing and be swept
+        // up on the next advance anyway, but leaving it there means the queue
+        // page lists a playlist that no longer exists.
+        library
+            .queue
+            .retain(|entry| queued_playlist_id(entry) != Some(playlist_id));
         library.cache_revision += 1;
         drop(library);
         let mut settings = self.settings.write();
@@ -279,6 +306,7 @@ impl AppState {
         if settings.swipe_left_playlist_id == playlist_id {
             settings.swipe_left_playlist_id = "deep-dives".into();
         }
+        settings.playlist_views.remove(playlist_id);
         drop(settings);
         self.sync_in_background();
         Some(removed.name)
@@ -628,6 +656,30 @@ impl AppState {
         }
     }
 
+    /// Merge server-resolved feed metadata without disturbing local playback
+    /// progress. Duration, live state, and Shorts classification are catalog
+    /// facts; watched/audio state belongs to this viewer.
+    pub fn cache_feed_metadata(mut self, discovered_videos: Vec<Video>) {
+        let mut library = self.library.write();
+        for discovered in discovered_videos {
+            let Some(video) = library
+                .videos
+                .iter_mut()
+                .find(|video| video.id == discovered.id)
+            else {
+                library.videos.push(discovered);
+                continue;
+            };
+            let progress_seconds = video.progress_seconds;
+            let watched = video.watched;
+            let audio_only = video.audio_only;
+            *video = discovered;
+            video.progress_seconds = progress_seconds;
+            video.watched = watched;
+            video.audio_only = audio_only;
+        }
+    }
+
     pub fn cache_channel_details(mut self, details: &ChannelDetails) {
         let mut library = self.library.write();
         if let Some(channel) = library
@@ -770,40 +822,224 @@ impl AppState {
         }
     }
 
-    /// Take the next queued video, skipping the one that just finished, and
+    /// How this playlist is currently arranged, defaults included.
+    pub fn playlist_view(self, playlist_id: &str) -> PlaylistView {
+        self.settings
+            .read()
+            .playlist_views
+            .get(playlist_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Remember how a playlist is arranged, so a run resolved later walks the
+    /// list the viewer was actually looking at.
+    ///
+    /// A view holding nothing but defaults is removed rather than stored: the map
+    /// is keyed by playlist id and would otherwise accumulate an entry for every
+    /// playlist ever opened.
+    pub fn set_playlist_view(mut self, playlist_id: &str, view: PlaylistView) {
+        let mut settings = self.settings.write();
+        if view == PlaylistView::default() {
+            settings.playlist_views.remove(playlist_id);
+        } else {
+            settings
+                .playlist_views
+                .insert(playlist_id.to_string(), view);
+        }
+    }
+
+    /// A playlist's videos in the order its page is showing them, with the
+    /// watched filter *not* applied - see [`PlaylistView::arrange`].
+    pub fn playlist_run_order(self, playlist_id: &str) -> Vec<Video> {
+        let settings = self.settings();
+        let view = self.playlist_view(playlist_id);
+        let mut videos = self.with_library(|library| {
+            let Some(playlist) = library
+                .playlists
+                .iter()
+                .find(|playlist| playlist.id == playlist_id)
+            else {
+                return Vec::new();
+            };
+            let by_id = library
+                .videos
+                .iter()
+                .map(|video| (video.id.as_str(), video))
+                .collect::<std::collections::HashMap<_, _>>();
+            playlist
+                .video_ids
+                .iter()
+                .filter_map(|id| by_id.get(id.as_str()).map(|video| (*video).clone()))
+                .collect::<Vec<Video>>()
+        });
+        view.arrange(&mut videos, &settings);
+        videos
+    }
+
+    /// The entry a playlist run plays after `current_video_id`.
+    ///
+    /// Position is found in the arranged order, which still contains the current
+    /// video even once it counts as watched; the watched filter is applied only to
+    /// the candidates ahead of it. See [`PlaylistView::next_after`].
+    fn next_in_playlist_run(self, playlist_id: &str, current_video_id: &str) -> Option<String> {
+        self.playlist_view(playlist_id)
+            .next_after(&self.playlist_run_order(playlist_id), current_video_id)
+    }
+
+    /// The entry a playlist run plays before `current_video_id`.
+    fn previous_in_playlist_run(self, playlist_id: &str, current_video_id: &str) -> Option<String> {
+        self.playlist_view(playlist_id)
+            .previous_before(&self.playlist_run_order(playlist_id), current_video_id)
+    }
+
+    /// What the run would hand over next, plus the playlist markers it walked
+    /// past on the way.
+    ///
+    /// Resolved in queue order, so a video queued by hand still plays before a
+    /// playlist sitting behind it. A marker the run has reached the end of - or
+    /// one whose playlist has been deleted - resolves to nothing and is reported
+    /// as spent so the caller can drop it.
+    fn resolve_next_in_run(self, finished_video_id: &str) -> (Option<String>, Vec<String>) {
+        let queue = self.with_library(|library| library.queue.clone());
+        let mut spent_markers = Vec::new();
+        for entry in queue {
+            match queued_playlist_id(&entry) {
+                Some(playlist_id) => {
+                    match self.next_in_playlist_run(playlist_id, finished_video_id) {
+                        Some(video_id) => return (Some(video_id), spent_markers),
+                        None => spent_markers.push(entry),
+                    }
+                }
+                None if entry != finished_video_id => return (Some(entry), spent_markers),
+                None => {}
+            }
+        }
+        (None, spent_markers)
+    }
+
+    /// What the run would play after `current_video_id`, without consuming it.
+    ///
+    /// Pass an empty id to ask what the run starts with.
+    pub fn next_in_run(self, current_video_id: &str) -> Option<String> {
+        self.resolve_next_in_run(current_video_id).0
+    }
+
+    /// Whether there is anywhere forward to go from this video.
+    pub fn has_next_in_run(self, current_video_id: &str) -> bool {
+        self.next_in_run(current_video_id).is_some()
+    }
+
+    /// Take the next video in the run, skipping the one that just finished, and
     /// remember the one being left so [`Self::step_back_in_run`] can return to it.
     ///
-    /// Removing the next video as it is handed over is what stops autoplay
-    /// looping: a video that stays queued would be chosen again the moment it
-    /// ends.
+    /// Removing the video as it is handed over is what stops autoplay looping: an
+    /// entry that stays queued would be chosen again the moment it ends. A
+    /// playlist marker is the exception - it is the run, not a place in it, so it
+    /// stays until the playlist is spent.
     pub fn take_next_queued(mut self, finished_video_id: &str) -> Option<String> {
+        let (next, spent_markers) = self.resolve_next_in_run(finished_video_id);
+        let video_id = next?;
         let mut library = self.library.write();
-        let position = library
-            .queue
-            .iter()
-            .position(|id| id != finished_video_id)?;
-        let next = library.queue.remove(position);
-        // The finished video is done either way, whether or not it was queued.
-        library.queue.retain(|id| id != finished_video_id);
+        // The finished video is done either way, whether or not it was queued,
+        // and the one taken never stays behind as a duplicate further down. A
+        // playlist marker is neither, so a run keeps its place in the queue.
+        library.queue.retain(|entry| {
+            entry != finished_video_id && entry != &video_id && !spent_markers.contains(entry)
+        });
         library.cache_revision += 1;
         drop(library);
         self.push_back_stack(finished_video_id);
         self.sync_in_background();
-        Some(next)
+        Some(video_id)
     }
 
     /// Whether there is a video to go back to without leaving the run.
-    pub fn can_step_back_in_run(self) -> bool {
-        !(self.run_back_stack)().is_empty()
+    ///
+    /// Either somewhere this run has already been, or - on the first video of a
+    /// playlist run, where the stack is still empty - the entry before it in the
+    /// playlist's own order.
+    pub fn can_step_back_in_run(self, current_video_id: &str) -> bool {
+        if !(self.run_back_stack)().is_empty() {
+            return true;
+        }
+        self.queued_playlist_run()
+            .and_then(|playlist_id| self.previous_in_playlist_run(&playlist_id, current_video_id))
+            .is_some()
     }
 
-    /// Return to the video this run last advanced away from.
+    /// The playlist the queue is running, as (id, name), when it still exists.
+    pub fn running_playlist(self) -> Option<(String, String)> {
+        let playlist_id = self.queued_playlist_run()?;
+        self.with_library(|library| {
+            library
+                .playlists
+                .iter()
+                .find(|playlist| playlist.id == playlist_id)
+                .map(|playlist| (playlist.id.clone(), playlist.name.clone()))
+        })
+    }
+
+    /// Where the playlist run stands, for the queue page to explain it.
+    ///
+    /// Positions count the arranged order *without* the watched filter, so the
+    /// number does not jump back to 1 every time finishing a video hides it.
+    /// `remaining` is what the run will actually still play.
+    pub fn playlist_run_status(self) -> Option<PlaylistRunStatus> {
+        let (playlist_id, name) = self.running_playlist()?;
+        let view = self.playlist_view(&playlist_id);
+        let order = self.playlist_run_order(&playlist_id);
+        let current_id = self
+            .active_video()
+            .map(|video| video.id)
+            .unwrap_or_default();
+        let index = order.iter().position(|video| video.id == current_id);
+        let ahead = index.map_or(&order[..], |index| &order[index + 1..]);
+        let remaining = ahead.iter().filter(|video| view.shows(video)).count();
+        let up_next = view
+            .next_after(&order, &current_id)
+            .and_then(|id| order.iter().find(|video| video.id == id).cloned());
+        Some(PlaylistRunStatus {
+            playlist_id,
+            name,
+            total: order.len(),
+            position: index.map(|index| index + 1),
+            current: index.map(|index| order[index].clone()),
+            remaining,
+            up_next,
+            view,
+        })
+    }
+
+    /// The name of the playlist the queue is running, for controls that would
+    /// otherwise only be able to say "queue".
+    pub fn running_playlist_name(self) -> Option<String> {
+        self.running_playlist().map(|(_, name)| name)
+    }
+
+    /// The playlist the queue is currently running, if any.
+    fn queued_playlist_run(self) -> Option<String> {
+        self.with_library(|library| {
+            library
+                .queue
+                .iter()
+                .find_map(|entry| queued_playlist_id(entry).map(str::to_string))
+        })
+    }
+
+    /// Return to the video this run last advanced away from, or to the previous
+    /// entry of the playlist being run when there is no history yet.
     ///
     /// The video being left goes back to the front of the queue, so the run is
     /// exactly where it was: pressing next again plays it, rather than skipping
-    /// whatever the viewer stepped back past.
+    /// whatever the viewer stepped back past. A playlist run needs no such
+    /// bookmark - it finds its place from whatever is playing - so stepping back
+    /// into one leaves the queue alone.
     pub fn step_back_in_run(mut self, current_video_id: &str) -> Option<String> {
-        let previous = self.run_back_stack.write().pop()?;
+        let Some(previous) = self.run_back_stack.write().pop() else {
+            let playlist_id = self.queued_playlist_run()?;
+            return self.previous_in_playlist_run(&playlist_id, current_video_id);
+        };
         if previous == current_video_id {
             return None;
         }
@@ -814,6 +1050,40 @@ impl AppState {
         drop(library);
         self.sync_in_background();
         Some(previous)
+    }
+
+    /// Hand the queue a playlist to run, replacing any playlist already running.
+    ///
+    /// Goes to the front: pressing play on a playlist is a request to watch it
+    /// now, not after whatever was queued by hand last week. Only one playlist
+    /// runs at a time, because two markers would interleave in an order neither
+    /// playlist's page could show.
+    pub fn start_playlist_run(mut self, playlist_id: &str) {
+        let marker = playlist_queue_entry(playlist_id);
+        let mut library = self.library.write();
+        library
+            .queue
+            .retain(|entry| queued_playlist_id(entry).is_none());
+        library.queue.insert(0, marker);
+        library.cache_revision += 1;
+        drop(library);
+        self.sync_in_background();
+    }
+
+    /// Stop running a playlist, leaving anything queued by hand in place.
+    pub fn clear_playlist_run(mut self) -> bool {
+        let mut library = self.library.write();
+        let before = library.queue.len();
+        library
+            .queue
+            .retain(|entry| queued_playlist_id(entry).is_none());
+        if library.queue.len() == before {
+            return false;
+        }
+        library.cache_revision += 1;
+        drop(library);
+        self.sync_in_background();
+        true
     }
 
     fn push_back_stack(mut self, video_id: &str) {
@@ -983,6 +1253,7 @@ pub fn AppStateProvider(children: Element) -> Element {
         settings,
         toast_open: Signal::new(false),
         toast: Signal::new((String::new(), StatusColor::Neutral)),
+        toast_revision: Signal::new(0),
         playlist_picker_video: Signal::new(None),
         playlist_picker_open: Signal::new(false),
         video_actions_video: Signal::new(None),
