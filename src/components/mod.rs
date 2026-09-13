@@ -1,3 +1,5 @@
+mod account;
+mod durations;
 mod explore;
 mod feed;
 mod library;
@@ -9,6 +11,8 @@ mod shell;
 mod subscriptions;
 mod video_card;
 
+pub use account::{AccountGate, AccountSettings, BackendSettings};
+pub use durations::{DURATION_LOOKAHEAD, duration_candidates, use_duration_hydration};
 pub use explore::Explore;
 pub use feed::Feed;
 pub use library::{ChannelDetail, HistoryPage, QueuePage};
@@ -16,6 +20,6 @@ pub use overlays::AppOverlays;
 pub use player::{PersistentPlayer, VideoDetail};
 pub use playlists::{PlaylistDetail, Playlists};
 pub use settings::SettingsPage;
-pub use shell::AppShell;
+pub use shell::{AppShell, PageHeader};
 pub use subscriptions::Subscriptions;
 pub use video_card::VideoGrid;

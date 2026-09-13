@@ -12,7 +12,9 @@
     const minutes = Math.floor(value / 60) % 60;
     const hours = Math.floor(value / 3600);
     const tail = `${minutes}:${String(seconds).padStart(2, "0")}`;
-    return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}` : tail;
+    return hours > 0
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      : tail;
   }
 
   function fullscreenElement() {
@@ -23,7 +25,9 @@
     if (fullscreenElement()) {
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       if (screen.orientation && typeof screen.orientation.unlock === "function") {
-        try { screen.orientation.unlock(); } catch (_) {}
+        try {
+          screen.orientation.unlock();
+        } catch (_) {}
       }
       root.querySelector("[data-player-native-orientation-unlock]")?.click();
       return exit ? exit.call(document) : undefined;
@@ -43,12 +47,11 @@
     const horizontal = media && media.videoWidth > media.videoHeight;
     const autoLandscape = root.dataset.autoLandscape !== "false";
     const request =
-      root.requestFullscreen ||
-      root.webkitRequestFullscreen ||
-      root.webkitRequestFullScreen;
+      root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
     const started = request
       ? Promise.resolve(request.call(root, { navigationUI: "hide" })).catch(() =>
-          Promise.resolve(request.call(root)).catch(() => Promise.reject()))
+          Promise.resolve(request.call(root)).catch(() => Promise.reject()),
+        )
       : Promise.reject();
     return started
       .then(() => {
@@ -62,7 +65,9 @@
       })
       .catch(() => {
         if (media && typeof media.webkitEnterFullscreen === "function") {
-          try { media.webkitEnterFullscreen(); } catch (_) {}
+          try {
+            media.webkitEnterFullscreen();
+          } catch (_) {}
         }
       });
   }
@@ -79,7 +84,8 @@
     const abort = new AbortController();
     const signal = abort.signal;
     const progress = controls.querySelector("[data-player-progress]");
-    const chapterMarkers = controls.querySelector("[data-player-chapter-markers]");
+    const sponsorNotice = controls.querySelector("[data-player-sponsor-notice]");
+    let sponsorNoticeTimer = null;
     const chapterLabel = controls.querySelector("[data-player-chapter-label]");
     const seekPreview = controls.querySelector("[data-player-seek-preview]");
     const previewImage = controls.querySelector("[data-player-preview-image]");
@@ -100,6 +106,7 @@
     let hideTimer = null;
     let feedbackTimer = null;
     let scrubbing = false;
+    let timelineHovering = false;
     let resumeAfterScrub = false;
     let animationFrame = null;
     let chosenHeight = null;
@@ -107,6 +114,13 @@
     let selectedCaption = null;
     let captionsEnabled = false;
     let chapters = [];
+    let sponsorSegments = [];
+    let sponsorNotify = true;
+    let autoplayEnabled = false;
+    // Segments already acted on, by UUID. Without this, seeking back into a
+    // skipped sponsor would bounce the playhead straight out again and there
+    // would be no way to watch one deliberately.
+    const sponsorHandled = new Set();
     let previewFrames = null;
     let playbackIntent = !video.paused && !video.ended;
     let playbackRecoveryTimer = null;
@@ -145,19 +159,28 @@
       }, delay);
     }
 
-    function showControls(permanent) {
+    // Long enough to read the bar and reach for a control, short enough that the
+    // picture is not left with furniture on it.
+    const CONTROLS_HIDE_MS = 2000;
+    // The pointer has left the player entirely, so there is nothing left to
+    // aim at and no reason to wait the full dwell.
+    const CONTROLS_LEAVE_HIDE_MS = 450;
+
+    function showControls(permanent, delay) {
       controls.classList.add("controls-visible");
       root.classList.add("player-controls-visible");
       if (hideTimer) clearTimeout(hideTimer);
-      if (!permanent && !video.paused && optionsMenu && !optionsMenu.hidden) return;
-      if (!permanent && !video.paused) {
-        hideTimer = setTimeout(() => {
-          if (!scrubbing && (optionsMenu?.hidden ?? true)) {
-            controls.classList.remove("controls-visible");
-            root.classList.remove("player-controls-visible");
-          }
-        }, 2800);
-      }
+      hideTimer = null;
+      if (permanent || video.paused) return;
+      // An open menu holds the controls up - but only while it is open. Closing
+      // it has to re-arm this, or the bar stays for the rest of the video.
+      if (optionsMenu && !optionsMenu.hidden) return;
+      hideTimer = setTimeout(() => {
+        if (!scrubbing && !timelineHovering && (optionsMenu?.hidden ?? true)) {
+          controls.classList.remove("controls-visible");
+          root.classList.remove("player-controls-visible");
+        }
+      }, delay ?? CONTROLS_HIDE_MS);
     }
 
     function scheduleHide() {
@@ -185,7 +208,8 @@
       const chapter = chapterAt(position);
       const title = chapter?.title || "";
       chapterLabel.hidden = !title;
-      if (chapterLabel.textContent !== title) chapterLabel.textContent = title;
+      const chapterTitle = chapterLabel.querySelector("[data-player-chapter-title]");
+      if (chapterTitle && chapterTitle.textContent !== title) chapterTitle.textContent = title;
     }
 
     function updateTimeline() {
@@ -196,9 +220,7 @@
       // The markers are appended imperatively into an element the framework
       // owns, so any re-render of that subtree silently drops them. Rebuilding
       // when they have gone missing is what keeps them on screen.
-      if (chapterMarkers && chapters.length > 1 && length > 0 && !chapterMarkers.firstChild) {
-        renderChapters();
-      }
+      applySponsorSegments();
       if (duration) duration.textContent = formatTime(length);
       if (!progress || scrubbing) return;
       const played = length > 0 ? Math.min(100, (position / length) * 100) : 0;
@@ -207,6 +229,7 @@
       progress.style.setProperty("--player-progress", `${played}%`);
       progress.style.setProperty("--player-buffered", `${Math.max(played, buffered)}%`);
       progress.setAttribute("aria-valuetext", `${formatTime(position)} of ${formatTime(length)}`);
+      renderTimeline();
     }
 
     function effectivePlaybackRate() {
@@ -240,19 +263,20 @@
       captionsButton?.classList.toggle("selected", selected >= 0);
       captionsButton?.toggleAttribute("disabled", tracks.length === 0);
       if (captionsButton) {
-        captionsButton.title = selected >= 0 ? `Captions: ${tracks[selected].label || "On"}` : "Captions off";
+        captionsButton.title =
+          selected >= 0 ? `Captions: ${tracks[selected].label || "On"}` : "Captions off";
       }
     }
 
     function applyCaptionState() {
       const tracks = Array.from(video.textTracks || []);
-      const validSelection = Number.isInteger(selectedCaption)
-        && selectedCaption >= 0
-        && selectedCaption < tracks.length;
+      const validSelection =
+        Number.isInteger(selectedCaption) &&
+        selectedCaption >= 0 &&
+        selectedCaption < tracks.length;
       tracks.forEach((track, index) => {
-        track.mode = captionsEnabled && validSelection && index === selectedCaption
-          ? "showing"
-          : "disabled";
+        track.mode =
+          captionsEnabled && validSelection && index === selectedCaption ? "showing" : "disabled";
       });
       updateCaptions();
     }
@@ -266,18 +290,141 @@
       return active;
     }
 
-    function renderChapters() {
-      if (!chapterMarkers) return;
-      chapterMarkers.replaceChildren();
+    /// Width of the gaps punched through the bar, in pixels.
+    const TIMELINE_GAP_PX = 3;
+
+    /**
+     * Paint the whole timeline as one gradient on the range track.
+     *
+     * Everything - played, buffered, sponsor colours, and the gaps at chapter
+     * and segment boundaries - is a single `linear-gradient`, rather than
+     * elements layered over the input. Layering was the obvious approach and it
+     * cannot work: the range thumb lives inside the input, so any overlay drawn
+     * above the track to colour a segment also covers the thumb.
+     *
+     * The gaps are `transparent`, not a background-coloured tick, so what shows
+     * through is genuinely whatever is behind the bar.
+     */
+    function renderTimeline() {
+      if (!progress) return;
       const length = Number.isFinite(video.duration) ? video.duration : 0;
-      if (length <= 0 || chapters.length < 2) return;
-      for (const chapter of chapters.slice(1)) {
-        const marker = document.createElement("span");
-        marker.className = "player-chapter-marker";
-        marker.style.left = `${Math.min(100, (Number(chapter.start_seconds) / length) * 100)}%`;
-        marker.title = chapter.title || formatTime(Number(chapter.start_seconds));
-        chapterMarkers.appendChild(marker);
+      if (length <= 0) {
+        progress.style.removeProperty("--player-track-image");
+        return;
       }
+
+      const width = progress.getBoundingClientRect().width || 0;
+      // Below a pixel or two the gaps would be wider than the segments between
+      // them, which reads as a dashed line rather than a divided one.
+      const gap = width > 0 ? Math.min(1.5, (TIMELINE_GAP_PX / width) * 100) : 0;
+      const played = clampPercent((currentPosition() / length) * 100);
+      const buffered = Math.max(played, clampPercent((bufferedEnd() / length) * 100));
+
+      // Spans are applied in order, each overriding what came before, so the
+      // list reads as layers: base, buffered, played, segment colours, gaps.
+      const spans = [
+        [0, 100, "rgba(255, 255, 255, 0.25)"],
+        [0, buffered, "rgba(255, 255, 255, 0.5)"],
+        [0, played, "var(--color-focused)"],
+      ];
+
+      for (const segment of sponsorSegments) {
+        const start = clampPercent((Number(segment.start_seconds) / length) * 100);
+        const end = clampPercent((Number(segment.end_seconds) / length) * 100);
+        const color = segment.color || "#00d400";
+        // A point segment has no width of its own; give it one so it is
+        // visible at all.
+        const width_ = Math.max(end - start, gap * 2);
+        spans.push([start, Math.min(100, start + width_), color]);
+      }
+
+      // Gaps last: they cut through the colours above, including a segment's.
+      if (gap > 0) {
+        for (const chapter of chapters.slice(1)) {
+          const at = clampPercent((Number(chapter.start_seconds) / length) * 100);
+          spans.push([at - gap / 2, at + gap / 2, "transparent"]);
+        }
+        for (const segment of sponsorSegments) {
+          const start = clampPercent((Number(segment.start_seconds) / length) * 100);
+          const end = clampPercent((Number(segment.end_seconds) / length) * 100);
+          spans.push([start - gap / 2, start + gap / 2, "transparent"]);
+          spans.push([end - gap / 2, end + gap / 2, "transparent"]);
+        }
+      }
+
+      progress.style.setProperty("--player-track-image", gradientFrom(spans));
+    }
+
+    function clampPercent(value) {
+      if (!Number.isFinite(value)) return 0;
+      return Math.min(100, Math.max(0, value));
+    }
+
+    function currentPosition() {
+      return Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    }
+
+    /**
+     * Flatten overlapping spans into a hard-stop gradient.
+     *
+     * Every span boundary becomes a breakpoint; each resulting slice takes the
+     * colour of the last span covering it. Emitting the spans directly would
+     * not work - a gradient has no notion of one stop painting over another.
+     */
+    function gradientFrom(spans) {
+      const edges = new Set([0, 100]);
+      for (const [start, end] of spans) {
+        edges.add(clampPercent(start));
+        edges.add(clampPercent(end));
+      }
+      const points = [...edges].sort((a, b) => a - b);
+
+      const stops = [];
+      for (let index = 0; index < points.length - 1; index++) {
+        const from = points[index];
+        const to = points[index + 1];
+        if (to - from <= 0) continue;
+        const middle = (from + to) / 2;
+        let color = "transparent";
+        for (const [start, end, value] of spans) {
+          if (middle >= start && middle < end) color = value;
+        }
+        stops.push(`${color} ${from.toFixed(3)}% ${to.toFixed(3)}%`);
+      }
+      return `linear-gradient(to right, ${stops.join(", ")})`;
+    }
+
+    /**
+     * Act on any segment the playhead has entered.
+     *
+     * Only `skip` segments move the playhead, and only once each: a viewer who
+     * seeks back into one is doing it on purpose.
+     */
+    function applySponsorSegments() {
+      if (!sponsorSegments.length || scrubbing) return;
+      const position = currentPosition();
+      for (const segment of sponsorSegments) {
+        if (segment.action !== "skip" || sponsorHandled.has(segment.uuid)) continue;
+        const start = Number(segment.start_seconds);
+        const end = Number(segment.end_seconds);
+        if (!(position >= start && position < end)) continue;
+        sponsorHandled.add(segment.uuid);
+        // Never past the end: a segment that runs to the last frame would
+        // otherwise end the video rather than skip within it.
+        const target = Math.min(end, (video.duration || end) - 0.05);
+        if (target > position) video.currentTime = target;
+        if (sponsorNotify && segment.message) announce(segment.message);
+        break;
+      }
+    }
+
+    /** A brief line under the controls, so a jump does not look like a fault. */
+    function announce(message) {
+      if (!sponsorNotice) return;
+      sponsorNotice.textContent = message;
+      sponsorNotice.classList.add("is-visible");
+      if (sponsorNoticeTimer) clearTimeout(sponsorNoticeTimer);
+      sponsorNoticeTimer = setTimeout(() => sponsorNotice.classList.remove("is-visible"), 2600);
     }
 
     function previewFrame(position) {
@@ -341,15 +488,29 @@
         .slice()
         .sort((left, right) => Number(left.start_seconds) - Number(right.start_seconds));
       previewFrames = next.previewFrames || null;
+      const nextSegments = (next.sponsorSegments || [])
+        .slice()
+        .sort((left, right) => Number(left.start_seconds) - Number(right.start_seconds));
+      // A different set of segments is a different video, or the viewer changing
+      // what they want skipped; either way the "already skipped" memory is stale.
+      const changed =
+        nextSegments.length !== sponsorSegments.length ||
+        nextSegments.some((segment, index) => segment.uuid !== sponsorSegments[index]?.uuid);
+      if (changed) sponsorHandled.clear();
+      sponsorSegments = nextSegments;
+      sponsorNotify = next.sponsorNotify !== false;
+      autoplayEnabled = Boolean(next.autoplay);
       applyCaptionState();
       requestAnimationFrame(applyCaptionState);
       setTimeout(applyCaptionState, 100);
-      renderChapters();
+      renderTimeline();
     }
 
-    function showSeekFeedback(direction) {
+    function showSeekFeedback(direction, seconds = 10) {
       const feedback = direction < 0 ? feedbackLeft : feedbackRight;
       if (!feedback) return;
+      const label = feedback.querySelector("span");
+      if (label) label.textContent = `${seconds} seconds`;
       feedback.classList.remove("show-feedback");
       void feedback.offsetWidth;
       feedback.classList.add("show-feedback");
@@ -357,12 +518,26 @@
       feedbackTimer = setTimeout(() => feedback.classList.remove("show-feedback"), 650);
     }
 
-    function seekBy(amount) {
+    function seekBy(amount, feedbackSeconds = Math.abs(amount)) {
       const length = Number.isFinite(video.duration) ? video.duration : Infinity;
       video.currentTime = Math.max(0, Math.min(length, video.currentTime + amount));
-      showSeekFeedback(amount < 0 ? -1 : 1);
+      showSeekFeedback(amount < 0 ? -1 : 1, feedbackSeconds);
       updateTimeline();
       showControls(false);
+    }
+
+    function runSurfaceClickSequenceAction(clientX, clickCount = 2) {
+      const bounds = video.getBoundingClientRect();
+      if (!bounds.width) return;
+      const position = (clientX - bounds.left) / bounds.width;
+      const cumulativeSeconds = Math.max(10, (clickCount - 1) * 10);
+      if (position < 0.35) {
+        seekBy(-10, cumulativeSeconds);
+      } else if (position > 0.65) {
+        seekBy(10, cumulativeSeconds);
+      } else if (clickCount === 2 && matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        Promise.resolve(toggleFullscreen(root)).catch(() => {});
+      }
     }
 
     function setSpeed(speed) {
@@ -391,6 +566,8 @@
       if (!optionsMenu || optionsMenu.hidden) return;
       optionsMenu.hidden = true;
       controls.classList.remove("options-open");
+      // The menu was what kept the bar up; hand the dwell back to the timer.
+      showControls(false);
     }
 
     function refreshQualities() {
@@ -399,8 +576,9 @@
       if (!state) return;
       chosenHeight = state.auto ? null : state.selectedHeight;
       qualityOptions.replaceChildren();
-      const choices = [{ value: null, label: state.activeHeight ? `Auto · ${state.activeHeight}p` : "Auto" }]
-        .concat(state.heights.map((height) => ({ value: height, label: `${height}p` })));
+      const choices = [
+        { value: null, label: state.activeHeight ? `Auto · ${state.activeHeight}p` : "Auto" },
+      ].concat(state.heights.map((height) => ({ value: height, label: `${height}p` })));
       for (const choice of choices) {
         const button = document.createElement("button");
         button.type = "button";
@@ -459,7 +637,7 @@
         case "settings":
           toggleOptions();
           break;
-        case "pip":
+        case "pip": {
           let pipChanged = false;
           try {
             if (document.pictureInPictureElement) {
@@ -483,6 +661,7 @@
             root.querySelector(selector)?.click();
           }
           break;
+        }
         case "fullscreen":
           await Promise.resolve(toggleFullscreen(root)).catch(() => {});
           break;
@@ -526,6 +705,18 @@
         showScrubPreview(position);
       };
 
+      // Hovering must be informational only: unlike a scrub it must neither
+      // move the thumb nor replace the displayed playback time. The same
+      // preview renderer supplies a storyboard frame when the server has one,
+      // with the video's thumbnail as a useful fallback.
+      const previewAt = (clientX) => {
+        const bounds = progress.getBoundingClientRect();
+        if (!bounds.width) return;
+        const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+        const length = Number.isFinite(video.duration) ? video.duration : 0;
+        showScrubPreview(ratio * length);
+      };
+
       const beginScrub = () => {
         if (scrubbing) return;
         scrubbing = true;
@@ -550,11 +741,29 @@
 
       listen(progress, "pointerdown", (event) => {
         beginScrub();
-        try { progress.setPointerCapture(event.pointerId); } catch (_) {}
+        try {
+          progress.setPointerCapture(event.pointerId);
+        } catch (_) {}
         positionScrubAt(event.clientX);
       });
       listen(progress, "pointermove", (event) => {
-        if (scrubbing) positionScrubAt(event.clientX);
+        if (scrubbing) {
+          positionScrubAt(event.clientX);
+        } else if (event.pointerType === "mouse") {
+          previewAt(event.clientX);
+        }
+      });
+      listen(progress, "pointerenter", (event) => {
+        if (event.pointerType !== "mouse") return;
+        timelineHovering = true;
+        previewAt(event.clientX);
+        showControls(false);
+      });
+      listen(progress, "pointerleave", (event) => {
+        if (event.pointerType !== "mouse" || scrubbing) return;
+        timelineHovering = false;
+        hideScrubPreview();
+        showControls(false, CONTROLS_LEAVE_HIDE_MS);
       });
       listen(progress, "input", () => {
         // Android WebView can hand a range drag directly to the native range
@@ -581,21 +790,79 @@
 
     // Tapping anywhere on the video toggles playback — unless the pointer just
     // travelled far enough to be a swipe, in which case the gesture owns it.
-    listen(video, "click", () => {
+    //
+    // Bound on the player root, not the video. A mouse gesture takes pointer
+    // capture on the root at pointerdown, and capture retargets the click that
+    // follows to the capture element — so a listener on the video never heard
+    // a desktop click at all, and only touch (which captures lazily) worked.
+    // Anything clickable inside the player owns its own click. Listing only the
+    // data-attribute controls missed the buttons that carry a Dioxus handler
+    // instead - Back, and the hidden bridges that `runAction` clicks - so their
+    // clicks bubbled to the root and toggled playback on the way out.
+    const isPlayerChrome = (target) =>
+      !!(target instanceof Element) &&
+      !!target.closest(
+        "button, a, input, select, [role='button'], [data-player-action], [data-player-progress], .player-options-menu",
+      );
+
+    listen(root, "click", (event) => {
+      // The controls own their own clicks, including the options menu, which
+      // must not be torn down by the press that is choosing from it.
+      if (isPlayerChrome(event.target)) return;
       closeOptions();
       if (swallowNextClick) {
         swallowNextClick = false;
         return;
       }
-      runAction("toggle");
-      showControls(false);
+      // Pointer releases are the primary signal. click.detail remains the
+      // fallback for engines that omit pointer events, and naturally carries
+      // triple/quadruple click counts for cumulative edge seeking.
+      if (event.detail >= 2) {
+        lastClickSequenceActionAt = Date.now();
+        handleSurfaceClickSequenceAction(event.clientX, event.detail);
+        return;
+      }
+      if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
+      surfaceClickCommitted = false;
+      surfaceClickTimer = setTimeout(() => {
+        surfaceClickTimer = null;
+        surfaceClickCommitted = true;
+        runAction("toggle");
+        showControls(false);
+      }, 280);
     });
 
     // Vertical swipes: up enters fullscreen, down leaves it, and a downward
     // swipe outside fullscreen shrinks the player to the mini bar.
     let gestureStart = null;
     let swallowNextClick = false;
+    let surfaceClickTimer = null;
+    let surfaceClickCommitted = false;
+    let surfacePressSequence = null;
+    let lastPointerTapAt = 0;
+    let lastClickSequenceActionAt = 0;
     const SWIPE_DISTANCE = 55;
+    const DOUBLE_PRESS_MS = 500;
+    const TAP_SLOP = 14;
+
+    const surfaceZoneAt = (clientX) => {
+      const bounds = video.getBoundingClientRect();
+      if (!bounds.width) return "center";
+      const position = (clientX - bounds.left) / bounds.width;
+      if (position < 0.35) return "left";
+      if (position > 0.65) return "right";
+      return "center";
+    };
+
+    const handleSurfaceClickSequenceAction = (clientX, clickCount) => {
+      if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
+      surfaceClickTimer = null;
+      // If a slow main thread allowed the first tap to toggle already, undo
+      // that toggle before applying the double-tap action.
+      if (surfaceClickCommitted) runAction("toggle");
+      surfaceClickCommitted = false;
+      runSurfaceClickSequenceAction(clientX, clickCount);
+    };
 
     const trackGesture = (event) => {
       if (!gestureStart) return;
@@ -626,7 +893,12 @@
 
     listen(root, "pointerdown", (event) => {
       swallowNextClick = false;
-      if (event.target.closest("[data-player-action], [data-player-progress], .player-options-menu")) {
+      // Capture retargets the later click to `root`. Every interactive piece
+      // of chrome must opt out here, not only controls implemented by the JS
+      // action dispatcher. In particular the Rust-owned autoplay switch used
+      // to be captured as a surface tap, so one press toggled autoplay and
+      // play/pause at the same time.
+      if (isPlayerChrome(event.target)) {
         gestureStart = null;
         return;
       }
@@ -657,6 +929,25 @@
       try {
         root.releasePointerCapture(event.pointerId);
       } catch (_) {}
+      const isTap = elapsed <= 800 && Math.abs(dx) <= TAP_SLOP && Math.abs(dy) <= TAP_SLOP;
+      if (isTap) {
+        const now = Date.now();
+        const zone = surfaceZoneAt(event.clientX);
+        if (
+          surfacePressSequence &&
+          now - surfacePressSequence.at <= DOUBLE_PRESS_MS &&
+          surfacePressSequence.zone === zone
+        ) {
+          surfacePressSequence.count += 1;
+          surfacePressSequence.at = now;
+          swallowNextClick = true;
+          handleSurfaceClickSequenceAction(event.clientX, surfacePressSequence.count);
+        } else {
+          surfacePressSequence = { at: now, zone, count: 1 };
+        }
+        lastPointerTapAt = now;
+        return;
+      }
       // Deliberate, mostly-vertical, and quick enough to be a flick.
       if (elapsed > 800 || Math.abs(dy) < SWIPE_DISTANCE || Math.abs(dy) <= Math.abs(dx)) {
         return;
@@ -680,15 +971,22 @@
       gestureStart = null;
       resetGestureVisuals();
     });
-    listen(video, "dblclick", (event) => {
-      const bounds = video.getBoundingClientRect();
-      const position = (event.clientX - bounds.left) / bounds.width;
-      if (position < 0.4) seekBy(-10);
-      else if (position > 0.6) seekBy(10);
-      else Promise.resolve(toggleFullscreen(root)).catch(() => {});
+    // Native dblclick is an additional fallback. Ignore the synthesized event
+    // when its pointerup or click(detail=2) already handled the same presses.
+    listen(root, "dblclick", (event) => {
+      if (isPlayerChrome(event.target)) return;
+      event.preventDefault();
+      const now = Date.now();
+      if (now - lastPointerTapAt < 250 || now - lastClickSequenceActionAt < 250) return;
+      lastClickSequenceActionAt = now;
+      handleSurfaceClickSequenceAction(event.clientX, 2);
     });
     listen(root, "pointermove", () => showControls(false));
-    listen(root, "pointerleave", scheduleHide);
+    listen(root, "pointerleave", () => {
+      timelineHovering = false;
+      hideScrubPreview();
+      showControls(false, CONTROLS_LEAVE_HIDE_MS);
+    });
     listen(root, "keydown", (event) => {
       if (event.target instanceof HTMLInputElement) return;
       const key = event.key.toLowerCase();
@@ -736,6 +1034,11 @@
       setPlaybackIntent(false);
       updatePlaybackState();
       root.querySelector("[data-player-native-playback-stop]")?.click();
+      // Advancing is Rust's decision: it owns the queue and the setting. This
+      // only reports that the video finished.
+      if (autoplayEnabled) {
+        controls.querySelector("[data-player-autoplay-next]")?.click();
+      }
     });
     listen(window, "tawnynativepiprequest", beginPipTransition);
     listen(window, "tawnynativepictureinpicturechange", () => {
@@ -754,7 +1057,8 @@
       recoverIntendedPlayback(0);
     });
     listen(video, "durationchange", updateTimeline);
-    listen(video, "durationchange", renderChapters);
+    listen(video, "durationchange", renderTimeline);
+    listen(window, "resize", renderTimeline);
     listen(video, "progress", updateTimeline);
     listen(video, "ratechange", updateSpeed);
     listen(video, "volumechange", updateMuted);
@@ -775,7 +1079,10 @@
       if (!fullscreen) root.querySelector("[data-player-native-orientation-unlock]")?.click();
       root.classList.toggle("is-fullscreen", fullscreen);
       controls.classList.toggle("is-fullscreen", fullscreen);
-      fullscreenButton?.setAttribute("aria-label", fullscreen ? "Exit fullscreen" : "Enter fullscreen");
+      fullscreenButton?.setAttribute(
+        "aria-label",
+        fullscreen ? "Exit fullscreen" : "Enter fullscreen",
+      );
       fullscreenButton?.setAttribute("title", fullscreen ? "Exit fullscreen" : "Fullscreen");
       showControls(false);
     };
@@ -804,6 +1111,7 @@
         if (animationFrame) cancelAnimationFrame(animationFrame);
         if (hideTimer) clearTimeout(hideTimer);
         if (feedbackTimer) clearTimeout(feedbackTimer);
+        if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
         if (playbackRecoveryTimer) clearTimeout(playbackRecoveryTimer);
         if (pipTransitionTimer) clearTimeout(pipTransitionTimer);
       },

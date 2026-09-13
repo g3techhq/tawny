@@ -1,7 +1,7 @@
 use crate::{app::Route, models::Video, state::AppState};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, Trash2, User};
-use dx_route_transitions::animated_navigate;
+use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Badge, Button, ButtonStyle, StatusColor, SwipeAction, SwipeBehavior, SwipeItem, SwipeSide,
     SwipeState,
@@ -30,9 +30,10 @@ pub fn VideoGrid(
                     {
                         let video_id = video.id.clone();
                         let playlist_id = playlist_id.clone();
+                        let card_playlist_id = playlist_id.clone();
                         rsx! {
                             div { class: "video-grid-cell", key: "{video.id}",
-                                VideoCard { video }
+                                VideoCard { video, playlist_id: card_playlist_id }
                                 // Sits on the thumbnail rather than below the
                                 // card so it does not add a row of chrome to
                                 // every tile in a playlist.
@@ -59,9 +60,26 @@ pub fn VideoGrid(
     }
 }
 
+/// How far a press may travel before its release stops counting as a click.
+const CLICK_SLOP_PX: f64 = 10.0;
+
 #[component]
-pub fn VideoCard(video: Video) -> Element {
+pub fn VideoCard(
+    video: Video,
+    /// Set when this card is one entry of a playlist. Opening it then hands the
+    /// playlist to the queue as a run, so autoplay and the player's arrows walk
+    /// the playlist rather than stopping at this one video.
+    playlist_id: Option<String>,
+) -> Element {
     let mut app_state = use_context::<AppState>();
+    let mut press_origin = use_signal(|| None::<(f64, f64)>);
+    // Cloned per handler because each one is an independent `'static` closure.
+    let keyboard_run_id = playlist_id.clone();
+    let open_run_id = playlist_id.clone();
+    let meta_run_id = playlist_id.clone();
+    // Mouse layouts expose explicit actions over the thumbnail. The shared
+    // swipe component rejects mouse gestures synchronously while preserving
+    // touch/pen swipes on mobile and hybrid devices.
     let start_playlist_name = app_state.swipe_action_label(true);
     let end_playlist_name = app_state.swipe_action_label(false);
     let button_start_name = start_playlist_name.clone();
@@ -77,12 +95,13 @@ pub fn VideoCard(video: Video) -> Element {
     let avatar_channel_id = video.channel_id.clone();
     let watched_video_id = video.id.clone();
     let menu_video = video.clone();
-    let channel_avatar_url = app_state
-        .library()
-        .channels
-        .into_iter()
-        .find(|channel| channel.id == video.channel_id)
-        .and_then(|channel| channel.avatar_url);
+    let channel_avatar_url = app_state.with_library(|library| {
+        library
+            .channels
+            .iter()
+            .find(|channel| channel.id == video.channel_id)
+            .and_then(|channel| channel.avatar_url.clone())
+    });
     let keyboard_video = video.clone();
     let open_video = video.clone();
     let meta_open_video = video.clone();
@@ -92,6 +111,7 @@ pub fn VideoCard(video: Video) -> Element {
         SwipeItem {
             class: "video-swipe-row",
             behavior: SwipeBehavior::Activate,
+            mouse_swipe_enabled: false,
             start_actions: rsx! {
                 SwipeAction {
                     side: SwipeSide::Start,
@@ -123,15 +143,37 @@ pub fn VideoCard(video: Video) -> Element {
                 onkeydown: move |event| {
                     if event.key() == Key::Enter {
                         app_state.play(keyboard_video.clone());
-                        app_state.record_history(&keyboard_open_id);
+                        if let Some(playlist_id) = &keyboard_run_id {
+                            app_state.start_playlist_run(playlist_id);
+                        }
                         { let v = keyboard_open_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                     }
                 },
                 div {
                     class: "thumbnail-shell",
-                    onclick: move |_| {
+                    onpointerdown: move |event: PointerEvent| {
+                        let point = event.client_coordinates();
+                        press_origin.set(Some((point.x, point.y)));
+                    },
+                    onclick: move |event: MouseEvent| {
+                        // With native image dragging off, releasing a mouse
+                        // drag over the same card still produces a click. A
+                        // press that travelled was a drag, not a request to
+                        // open the video.
+                        let point = event.client_coordinates();
+                        if let Some((x, y)) = press_origin.take() {
+                            if (point.x - x).hypot(point.y - y) > CLICK_SLOP_PX {
+                                return;
+                            }
+                        }
+                        // History is recorded by the watch page, not here. On the
+                        // History page, recording moves this card to the top,
+                        // which rebuilds it and cancels the navigation spawned
+                        // from its scope below - the click did nothing.
                         app_state.play(open_video.clone());
-                        app_state.record_history(&open_id);
+                        if let Some(playlist_id) = &open_run_id {
+                            app_state.start_playlist_run(playlist_id);
+                        }
                         { let v = open_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                     },
                     img {
@@ -139,6 +181,10 @@ pub fn VideoCard(video: Video) -> Element {
                         src: "{video.thumbnail_url}",
                         alt: "Thumbnail for {video.title}",
                         loading: "lazy",
+                        // `draggable` is an enumerated HTML attribute, not a
+                        // presence-only boolean: omitting false leaves images
+                        // natively draggable in desktop browsers.
+                        draggable: "false",
                     }
                     div { class: "thumbnail-vignette" }
                     // Pointer equivalents of the swipe gestures. A swipe is
@@ -203,7 +249,9 @@ pub fn VideoCard(video: Video) -> Element {
                         class: "video-copy",
                         onclick: move |_| {
                             app_state.play(meta_open_video.clone());
-                            app_state.record_history(&meta_open_id);
+                            if let Some(playlist_id) = &meta_run_id {
+                                app_state.start_playlist_run(playlist_id);
+                            }
                             { let v = meta_open_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); };
                         },
                         h2 { "{video.title}" }

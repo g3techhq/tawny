@@ -1,0 +1,134 @@
+name: tawny
+
+# Pull-only deployment, for Portainer or any `docker compose up -d` host.
+#
+# Mirrors g3-ui/deploy/compose.yaml: `latest` images, `pull_policy: always` so a
+# stack redeploy actually picks up a new build, and container names so the
+# Portainer UI is readable.
+#
+# The difference from compose.yaml is that nothing is built here: both images
+# come from GHCR, published by .github/workflows/publish-images.yml. A host
+# running this needs no Rust toolchain, no Node, and no copy of the source.
+#
+# Only Tawny itself publishes a port. SurrealDB, the PO-token provider and the
+# extractor sidecar talk to it over the compose network and have no reason to be
+# reachable from outside it - the development compose file exposes them on
+# 127.0.0.1 so a host `dx serve` can reach them, which is not a deployment need.
+
+services:
+  surrealdb-init:
+    image: busybox:1.37
+    user: "0:0"
+    command: ["chown", "-R", "65532:65532", "/data"]
+    volumes:
+      - surrealdb-data:/data
+    restart: "no"
+
+  surrealdb:
+    image: surrealdb/surrealdb:v${SURREALDB_VERSION:-3.2.4}
+    container_name: tawny-surrealdb
+    mem_limit: ${SURREALDB_MEMORY_LIMIT:-2g}
+    command:
+      - start
+      - --log
+      - info
+      - --user
+      - ${SURREALDB_USER:-root}
+      # No default, deliberately. A deployed database with the password "root"
+      # is worse than a stack that refuses to start with a readable message.
+      - --pass
+      - ${SURREALDB_PASSWORD:?set SURREALDB_PASSWORD to something private}
+      - surrealkv:///data/surrealkv
+    working_dir: /data
+    volumes:
+      - surrealdb-data:/data
+    depends_on:
+      surrealdb-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/surreal", "isready", "--endpoint", "http://127.0.0.1:8000"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+    restart: unless-stopped
+
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:${POT_PROVIDER_VERSION:-1.3.1}
+    container_name: tawny-pot-provider
+    init: true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4416/ping').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 4s
+      start_period: 10s
+      retries: 6
+    restart: unless-stopped
+
+  extractor:
+    image: ghcr.io/g3techhq/tawny-extractor:${TAWNY_IMAGE_TAG:-latest}
+    container_name: tawny-extractor
+    pull_policy: always
+    environment:
+      PO_TOKEN_PROVIDER_URL: http://pot-provider:4416
+      MAX_CONCURRENT_EXTRACTIONS: ${YTDLP_CONCURRENCY:-2}
+    init: true
+    depends_on:
+      pot-provider:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
+      interval: 10s
+      timeout: 4s
+      start_period: 10s
+      retries: 6
+    restart: unless-stopped
+
+  tawny:
+    image: ghcr.io/g3techhq/tawny:${TAWNY_IMAGE_TAG:-latest}
+    container_name: tawny
+    pull_policy: always
+    init: true
+    environment:
+      SURREALDB_HOST: ws://surrealdb:8000
+      SURREALDB_NAMESPACE: ${SURREALDB_NAMESPACE:-tawny}
+      SURREALDB_NAME: ${SURREALDB_NAME:-main}
+      SURREALDB_USER: ${SURREALDB_USER:-root}
+      SURREALDB_PASSWORD: ${SURREALDB_PASSWORD:?set SURREALDB_PASSWORD to something private}
+      TAWNY_DATA_DIR: /data
+      TAWNY_YTDLP_SERVICE_URL: http://extractor:8080
+      # The origin browsers will actually reach this instance on. It is what
+      # proxy URLs and WebSub lease callbacks are built from, so a wrong value
+      # shows up as broken playback rather than as a configuration error.
+      TAWNY_PUBLIC_URL: ${TAWNY_PUBLIC_URL:?set TAWNY_PUBLIC_URL to the origin this is served on}
+      TAWNY_WEBSUB_CALLBACK_URL: ${TAWNY_WEBSUB_CALLBACK_URL:-}
+      # Optional. Left empty, Tawny generates one and keeps it under
+      # TAWNY_DATA_DIR, which is fine as long as that volume survives.
+      TAWNY_WEBSUB_SECRET: ${TAWNY_WEBSUB_SECRET:-}
+    ports:
+      - "${TAWNY_PORT:-8080}:8080"
+    volumes:
+      - tawny-data:/data
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+      extractor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 4s
+      start_period: 15s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  surrealdb-data:
+  tawny-data:

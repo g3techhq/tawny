@@ -1,6 +1,6 @@
 # Tawny
 
-Tawny is a calm, local-first YouTube client built with Dioxus and `g3_ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
+Tawny is a calm, local-first YouTube client built with Dioxus and `g3-ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
 
 Tawny is designed as a self-hosted replacement for a LibreTube plus Piped deployment. The Dioxus backend performs search, feeds, channels, video details, comments, captions, and stream orchestration directly against YouTube; its deployment-local yt-dlp and PO-token sidecars are included in this repository, and no public Piped instance is contacted.
 
@@ -19,7 +19,7 @@ This repository currently contains a working local-first vertical slice:
 - direct YouTube video details, comments, captions, chapters, recommendations, and expiring playback sources;
 - cached descriptions, chapter jumps, captions, comments, and related videos;
 - same-origin ranged media/caption proxying, HLS/DASH manifest rewriting, adaptive quality, buffered seeking, and session retry;
-- responsive mobile, web, and desktop navigation using `g3_ui`;
+- responsive mobile, web, and desktop navigation using `g3-ui`;
 - server-side playback resolution for SABR, HLS, DASH, progressive streams, and per-video PO tokens.
 
 The seeded library is intentional: it keeps the first launch useful while the real library hydrates. Library actions update the device cache immediately and then write the newer revision to SurrealDB; if another client already has a newer revision, its server snapshot wins.
@@ -34,7 +34,7 @@ dx serve
 
 The default Compose project starts only Tawny's server dependencies:
 
-- SurrealDB with a persistent named volume, published on `127.0.0.1:8001`;
+- SurrealDB 3.2 with a persistent SurrealKV named volume, published on `127.0.0.1:8001`;
 - a pinned bgutil PO-token provider, published on `127.0.0.1:4416`;
 - a pinned yt-dlp sidecar with its plugin and Node challenge runtime, published on `127.0.0.1:8090`.
 
@@ -50,7 +50,7 @@ That command builds and runs Tawny plus the same three dependencies. The product
 
 The pinned Shaka Player package supplies the cross-platform DASH/HLS Media Source transport. Dioxus packages its compiled browser runtime as a local app asset; playback never depends on a third-party CDN.
 
-Tawny defaults to an embedded, persistent SurrealDB RocksDB database in the platform data directory. Set `TAWNY_DATA_DIR` to override that location, `SURREALDB_HOST=mem://` for disposable development data, or the `SURREALDB_*` variables for a separate database deployment.
+Tawny's server connects to the SurrealDB endpoint in `SURREALDB_HOST`. The checked-in Compose stack supplies a persistent SurrealDB container for development and production, while server tests use an in-memory database. `TAWNY_DATA_DIR` controls Tawny's extractor cache and other app-owned server data.
 
 No Piped instance — public or self-hosted — is required or contacted. Tawny extracts public YouTube search results, channel tabs, RSS feeds, video metadata, comments, captions, and player data directly. Search coalesces concurrent requests and caches identical query/filter pairs for five minutes. Results are normalized and deduplicated in SurrealDB. Video details use a two-hour server cache with stale fallback; ephemeral stream URLs and PO tokens are never persisted.
 
@@ -99,7 +99,7 @@ Stream URLs come from the Compose-managed yt-dlp service and are matched to the 
 
 ### PO-token provider setup
 
-There is no separate host installation step. `docker compose up -d --build` starts the provider and yt-dlp service together, and the yt-dlp health check verifies both the installed plugin and the provider's `/ping` endpoint. Development Tawny uses `TAWNY_YTDLP_SERVICE_URL=http://127.0.0.1:8090`; production Compose replaces that with the internal `http://yt-dlp:8080` address. `TAWNY_YTDLP_BIN` and `TAWNY_PO_TOKEN_PROVIDER_URL` remain supported only as a legacy non-Compose fallback.
+There is no separate host installation step. `docker compose up -d --build` starts the provider and the extractor service together, and the extractor health check verifies both the installed plugin and the provider's `/ping` endpoint. Development Tawny uses `TAWNY_YTDLP_SERVICE_URL=http://127.0.0.1:8090`; production Compose replaces that with the internal `http://extractor:8080` address. `TAWNY_YTDLP_BIN` and `TAWNY_PO_TOKEN_PROVIDER_URL` remain supported only as a legacy non-Compose fallback.
 
 The privacy-enhanced YouTube embed is never substituted automatically. If every direct source fails, the player reports the transport's actual error and offers a retry; switching to the embed is an explicit user action.
 

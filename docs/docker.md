@@ -62,16 +62,28 @@ docker compose --profile production ps
 The Tawny image is multi-stage: Node installs the pinned browser transport,
 Rust/Dioxus builds the full-stack web release, and only the release output and
 runtime libraries enter the final image. The source tree's sibling development
-crate patches are replaced by the committed snapshots under `vendor/`, so a
-standalone clone can build without repositories elsewhere on the machine.
+crate patches live in `.cargo/config.toml`, which `.dockerignore` keeps out of
+the image, so `g3-ui`, `g3-route-transitions` and `g3-native-plugins` resolve
+from crates.io there and a standalone clone builds without repositories
+elsewhere on the machine.
 
 Place a TLS reverse proxy in front of port 8080. `TAWNY_PUBLIC_URL` must be the
 public HTTPS origin for proxy URLs and WebSub lease callbacks. If the explicit
 callback variable is omitted, Tawny derives it from a non-loopback public URL.
 
+## Deploying from GHCR
+
+The compose file above builds from source, which a home lab has no reason to do.
+`.github/workflows/publish-images.yml` builds the two images a deployment needs
+and pushes them to GHCR, following the same shape as g3-ui's playground image
+workflow. `deploy/compose.yaml` pulls them and builds nothing.
+
+See [deploy/README.md](../deploy/README.md) for the Portainer stack, the
+environment variables it requires, and the one-time package visibility step.
+
 ## State, updates, and backups
 
-`tawny_surrealdb-data` contains the SurrealDB RocksDB files and
+`tawny_surrealdb-data` contains the SurrealDB SurrealKV files and
 `tawny_tawny-data` contains extractor caches and the generated WebSub secret.
 Compose does not delete either volume during ordinary stop, restart, or image
 updates. Do not use `docker compose down -v` unless the library should be
@@ -87,8 +99,7 @@ docker compose --profile production build tawny
 docker compose --profile production up -d
 ```
 
-SurrealDB defaults to a 2 GB container memory ceiling so RocksDB does not size
-its block cache against all memory assigned to Docker Desktop. Override
+SurrealDB defaults to a 2 GB container memory ceiling. Override
 `SURREALDB_MEMORY_LIMIT` for a larger server after measuring the workload.
 
 For a consistent backup, stop the stack and archive both named volumes with a

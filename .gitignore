@@ -1,10 +1,14 @@
 /target
 /dist
 /node_modules
-/assets/tailwind.css
 /.tawny-cache
 /.tawny-data
 /.codex
+/.cargo/config.toml
 .env
 /rustypipe_reports
+/playwright-report
+/test-results
+__pycache__/
+*.pyc
 dx*.log

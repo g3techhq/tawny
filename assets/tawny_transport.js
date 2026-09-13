@@ -23,9 +23,7 @@
     if (!detail) return null;
     const data = Array.isArray(detail.data) ? detail.data : [];
     const uri = data.find((value) => typeof value === "string" && value.includes("/"));
-    const status = data.find(
-      (value) => Number.isInteger(value) && value >= 100 && value < 600,
-    );
+    const status = data.find((value) => Number.isInteger(value) && value >= 100 && value < 600);
     return {
       code: detail.code,
       category: detail.category,
@@ -67,10 +65,10 @@
   function playbackServerBase(options) {
     const configured = String(options?.serverUrl || "").replace(/\/+$/, "");
     const location = window.location;
-    const assetHosted = location && (
-      location.hostname === "dioxus.index.html"
-      || !["http:", "https:"].includes(location.protocol)
-    );
+    const assetHosted =
+      location &&
+      (location.hostname === "dioxus.index.html" ||
+        !["http:", "https:"].includes(location.protocol));
     if (assetHosted && configured) return configured;
     if (location && ["http:", "https:"].includes(location.protocol)) {
       return location.origin;
@@ -108,7 +106,8 @@
       ...session,
       primary: normalizePlaybackSource(session.primary, options),
       alternatives: (session.alternatives || []).map((source) =>
-        normalizePlaybackSource(source, options)),
+        normalizePlaybackSource(source, options),
+      ),
     };
   }
 
@@ -130,9 +129,7 @@
   }
 
   function attribute(name, value) {
-    return value === null || value === undefined || value === ""
-      ? ""
-      : ` ${name}="${xml(value)}"`;
+    return value === null || value === undefined || value === "" ? "" : ` ${name}="${xml(value)}"`;
   }
 
   function representation(track, id) {
@@ -158,10 +155,7 @@
 
   function codecFamily(track) {
     const type = splitMime(track.mime_type);
-    return (type.codecs.split(",", 1)[0] || "unknown")
-      .trim()
-      .toLowerCase()
-      .split(".", 1)[0];
+    return (type.codecs.split(",", 1)[0] || "unknown").trim().toLowerCase().split(".", 1)[0];
   }
 
   function adaptationKey(track) {
@@ -205,14 +199,18 @@
     });
   }
 
-  function generatedDash(source) {
+  // `audioOnly` drops the video AdaptationSets entirely rather than just hiding
+  // the picture, so an audio-only session actually stops fetching video segments.
+  function generatedDash(source, audioOnly) {
     const tracks = source.tracks || [];
-    const videos = tracks.filter((track) => track.kind === "Video");
-    const audios = compatibleAudioTracks(
-      tracks.filter((track) => track.kind === "Audio"),
-    );
-    if (!videos.length || !audios.length) {
-      throw new Error("Adaptive playback needs both video and audio tracks");
+    const videos = audioOnly ? [] : tracks.filter((track) => track.kind === "Video");
+    const audios = compatibleAudioTracks(tracks.filter((track) => track.kind === "Audio"));
+    if (!audios.length || (!audioOnly && !videos.length)) {
+      throw new Error(
+        audioOnly
+          ? "Audio-only playback needs an audio track"
+          : "Adaptive playback needs both video and audio tracks",
+      );
     }
 
     const durationMs = tracks.reduce(
@@ -252,9 +250,7 @@
           `<AdaptationSet id="a${groupIndex}" contentType="audio" segmentAlignment="true"`,
           attribute("lang", language === "und" ? null : language),
           ">",
-          isDefault
-            ? '<Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>'
-            : "",
+          isDefault ? '<Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>' : "",
           reps,
           "</AdaptationSet>",
         ].join("");
@@ -311,7 +307,7 @@
     }
   }
 
-  function configureShaka(player) {
+  function configureShaka(player, preferredAudioLanguage) {
     const retry = {
       maxAttempts: 4,
       baseDelay: 500,
@@ -324,9 +320,7 @@
     const applePlatform = /Macintosh|iPhone|iPad|iPod/i.test(
       (window.navigator && window.navigator.userAgent) || "",
     );
-    const androidPlatform = /Android/i.test(
-      (window.navigator && window.navigator.userAgent) || "",
-    );
+    const androidPlatform = /Android/i.test((window.navigator && window.navigator.userAgent) || "");
     player.configure({
       manifest: { retryParameters: retry },
       // Shaka filters the manifest to one codec family before ABR starts.
@@ -339,9 +333,13 @@
       // AVC/AAC is the most consistently hardware-decoded pair across
       // Android System WebView versions, so prefer it there before the more
       // device-dependent WebM and AV1 representations.
-      preferredAudioCodecs: applePlatform || androidPlatform
-        ? ["mp4a", "opus"]
-        : ["opus", "mp4a"],
+      preferredAudioCodecs: applePlatform || androidPlatform ? ["mp4a", "opus"] : ["opus", "mp4a"],
+      // Dubbed uploads ship a dozen or more audio languages and the manifest
+      // order is not a preference - without this Shaka simply takes the first
+      // one, which is how an English video ended up playing in Italian. Shaka
+      // falls back to the first track when the viewer speaks none of them, so
+      // this can only improve the guess. The chip stays the way to override it.
+      preferredAudioLanguage: preferredAudioLanguage || "en",
       streaming: {
         retryParameters: retry,
         bufferingGoal: 40,
@@ -396,13 +394,15 @@
     }
   }
 
-  async function loadShaka(video, source, runtime, kind, startTime) {
+  async function loadShaka(video, source, runtime, kind, startTime, options) {
     if (!window.shaka || !window.shaka.Player.isBrowserSupported()) {
       throw new Error("Media Source playback is unavailable");
     }
     const player = new window.shaka.Player();
     runtime.player = player;
-    configureShaka(player);
+    const audioOnly = Boolean(options?.audioOnly);
+    const preferredAudioLanguage = String(options?.preferredAudioLanguage || "en").trim() || "en";
+    configureShaka(player, preferredAudioLanguage);
     const pendingRanges = new Map();
     const networking = player.getNetworkingEngine();
     networking.registerRequestFilter((_requestType, request) => {
@@ -422,12 +422,8 @@
       // Initialization, index, and media requests for one representation share
       // a URI and run concurrently. Pair by the server's Content-Range rather
       // than completion order, which is intentionally nondeterministic.
-      const matchingIndex = servedRange && queue
-        ? queue.indexOf(servedRange)
-        : -1;
-      const range = matchingIndex >= 0
-        ? queue.splice(matchingIndex, 1)[0]
-        : queue?.shift();
+      const matchingIndex = servedRange && queue ? queue.indexOf(servedRange) : -1;
+      const range = matchingIndex >= 0 ? queue.splice(matchingIndex, 1)[0] : queue?.shift();
       if (!range) return;
       if (!queue.length) pendingRanges.delete(uri);
       const match = /^bytes=(\d+)-(\d+)$/.exec(range);
@@ -441,16 +437,19 @@
         try {
           path = new URL(uri).pathname;
         } catch (_) {}
-        console.warn("Tawny range mismatch", JSON.stringify({
-          path,
-          start,
-          end,
-          expected,
-          received,
-          status: response.status ?? null,
-          contentRange,
-          contentLength: response.headers?.["content-length"] || null,
-        }));
+        console.warn(
+          "Tawny range mismatch",
+          JSON.stringify({
+            path,
+            start,
+            end,
+            expected,
+            received,
+            status: response.status ?? null,
+            contentRange,
+            contentLength: response.headers?.["content-length"] || null,
+          }),
+        );
       }
     });
     await player.attach(video);
@@ -458,7 +457,7 @@
     let uri = source.url;
     let mime = source.mime_type || undefined;
     if (kind === "generated-dash") {
-      const manifest = generatedDash(source);
+      const manifest = generatedDash(source, Boolean(audioOnly));
       runtime.objectUrl = URL.createObjectURL(
         new Blob([manifest], { type: "application/dash+xml" }),
       );
@@ -514,7 +513,7 @@
       return loadNative(video, source, runtime, startTime);
     }
     if (kind === "dash" || kind === "hls" || kind === "generated-dash") {
-      return loadShaka(video, source, runtime, kind, startTime);
+      return loadShaka(video, source, runtime, kind, startTime, options);
     }
     if (kind === "sabr") {
       return window.TawnySabrAdapter.load(video, source, runtime, {
@@ -690,7 +689,12 @@
     }
     const variants = runtime.player
       .getVariantTracks()
-      .filter((track) => track.height && track.allowedByApplication !== false && track.allowedByKeySystem !== false);
+      .filter(
+        (track) =>
+          track.height &&
+          track.allowedByApplication !== false &&
+          track.allowedByKeySystem !== false,
+      );
     const active = variants.find((track) => track.active);
     const resolution = (track) =>
       track.width && track.height ? Math.min(track.width, track.height) : track.height;
@@ -703,6 +707,69 @@
       activeHeight: active ? resolution(active) : null,
       heights,
     };
+  }
+
+  // Some uploads carry dubbed audio in several languages, and YouTube picks
+  // one for you - not always the original, and not always one you speak. Shaka
+  // already models these as separate audio languages on the variants; this just
+  // reads them out and lets the player pick.
+  function audioTrackState(video) {
+    const runtime = runtimes.get(video);
+    if (!runtime?.player || typeof runtime.player.getVariantTracks !== "function") {
+      return null;
+    }
+    const variants = runtime.player
+      .getVariantTracks()
+      .filter(
+        (track) => track.allowedByApplication !== false && track.allowedByKeySystem !== false,
+      );
+    const active = variants.find((track) => track.active);
+    const seen = new Map();
+    for (const track of variants) {
+      const language = track.language || "und";
+      if (seen.has(language)) continue;
+      seen.set(language, {
+        language,
+        label: track.label || languageLabel(language),
+        roles: track.audioRoles || [],
+      });
+    }
+    return {
+      active: active ? active.language || "und" : null,
+      tracks: Array.from(seen.values()),
+    };
+  }
+
+  // `Intl.DisplayNames` knows the endonyms; the raw tag is a poor label but a
+  // truthful fallback when it does not recognise one.
+  const languageNames = (() => {
+    try {
+      return new Intl.DisplayNames(undefined, { type: "language" });
+    } catch (_) {
+      return null;
+    }
+  })();
+
+  function languageLabel(language) {
+    if (!language || language === "und") return "Default";
+    try {
+      return languageNames?.of(language) || language;
+    } catch (_) {
+      return language;
+    }
+  }
+
+  function setAudioTrack(video, language) {
+    const runtime = runtimes.get(video);
+    if (!runtime?.player || typeof runtime.player.selectAudioLanguage !== "function") {
+      return false;
+    }
+    runtime.player.selectAudioLanguage(language);
+    emit(video, "tawnyaudiotrackchange", audioTrackState(video));
+    // Selecting a language rebuilds the variant list, so the quality chip has
+    // to be told as well or it keeps advertising the old one.
+    emit(video, "tawnyqualitychange", qualityState(video));
+    return true;
   }
 
   function setQuality(video, height) {
@@ -719,7 +786,12 @@
       track.width && track.height ? Math.min(track.width, track.height) : track.height;
     const variants = runtime.player
       .getVariantTracks()
-      .filter((track) => resolution(track) === requested && track.allowedByApplication !== false && track.allowedByKeySystem !== false);
+      .filter(
+        (track) =>
+          resolution(track) === requested &&
+          track.allowedByApplication !== false &&
+          track.allowedByKeySystem !== false,
+      );
     if (!variants.length) return false;
     const active = runtime.player.getVariantTracks().find((track) => track.active);
     const sameLanguage = active
@@ -747,6 +819,8 @@
     normalizePlaybackUrl,
     playbackServerBase,
     qualityState,
+    audioTrackState,
+    setAudioTrack,
     setQuality,
     transportKind,
   };

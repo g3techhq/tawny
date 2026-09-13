@@ -1,5 +1,64 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use surrealdb_types::SurrealValue;
+
+/// Which of a channel's uploads a subscription actually wants in the feed.
+///
+/// A channel's Shorts and its long-form uploads are often two different shows,
+/// and subscribing is currently all-or-nothing. This narrows a subscription
+/// without unsubscribing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubscriptionContent {
+    /// Everything the channel publishes, including livestreams.
+    #[default]
+    All,
+    /// Long-form uploads only; Shorts are dropped from the feed.
+    Videos,
+    /// Shorts only.
+    Shorts,
+}
+
+impl SubscriptionContent {
+    /// SurrealDB stores this as a plain string so the column stays readable and
+    /// an unknown value degrades to "everything" instead of failing the row.
+    /// Only the server reads and writes it.
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    pub fn from_storage(value: &str) -> Self {
+        match value {
+            "videos" => Self::Videos,
+            "shorts" => Self::Shorts,
+            _ => Self::All,
+        }
+    }
+
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    pub fn as_storage(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Videos => "videos",
+            Self::Shorts => "shorts",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "Videos & Shorts",
+            Self::Videos => "Videos only",
+            Self::Shorts => "Shorts only",
+        }
+    }
+
+    /// Livestreams follow the long-form side: they are the channel's "not a
+    /// Short" output, so a Shorts-only subscription drops them too.
+    pub fn accepts(self, is_short: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Videos => !is_short,
+            Self::Shorts => is_short,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
 pub struct Channel {
@@ -13,6 +72,8 @@ pub struct Channel {
     pub description: String,
     #[serde(default)]
     pub banner_url: Option<String>,
+    #[serde(default)]
+    pub subscription_content: SubscriptionContent,
 }
 
 impl Channel {
@@ -85,6 +146,7 @@ mod channel_tests {
             subscribed: true,
             description: "Rich description".into(),
             banner_url: Some("rich-banner".into()),
+            subscription_content: super::SubscriptionContent::All,
         }
     }
 
@@ -130,6 +192,11 @@ pub struct Video {
     pub is_live: bool,
     #[serde(default)]
     pub is_short: bool,
+    /// Play this one without its video stream. Remembered per video, because it
+    /// is a property of the thing being watched - a podcast stays audio, a music
+    /// video does not - rather than a global mode.
+    #[serde(default)]
+    pub audio_only: bool,
 }
 
 impl Video {
@@ -383,6 +450,17 @@ pub struct CaptionTrack {
     pub auto_generated: bool,
 }
 
+/// One selectable audio language for the video being watched.
+///
+/// Reported by the transport rather than the extractor: Shaka is the authority
+/// on which of the manifest's audio adaptations it can actually decode and
+/// switch between, and it carries the display names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioTrackOption {
+    pub language: String,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoComment {
     pub id: String,
@@ -436,7 +514,7 @@ pub enum FeedFilter {
     Live,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DurationFilter {
     Short,
     Medium,
@@ -485,6 +563,257 @@ impl Default for FeedFilter {
     }
 }
 
+/// How a playlist's videos are ordered on its page.
+///
+/// `Added` is the playlist's own order and is the default, because a hand-built
+/// watchlist already carries the order its owner chose. Anything else would make
+/// the control destructive by default rather than helpful.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaylistSort {
+    #[default]
+    Added,
+    Published,
+    Duration,
+    Title,
+}
+
+impl PlaylistSort {
+    pub const ALL: [Self; 4] = [Self::Added, Self::Published, Self::Duration, Self::Title];
+
+    /// The label names the resulting order rather than the field it sorts on,
+    /// because the chip is the only place the direction is visible: tapping an
+    /// active chip flips it, and the text has to be what says so.
+    pub fn label(self, descending: bool) -> &'static str {
+        match (self, descending) {
+            (Self::Added, false) => "First added",
+            (Self::Added, true) => "Last added",
+            (Self::Published, true) => "Newest",
+            (Self::Published, false) => "Oldest",
+            (Self::Duration, true) => "Longest",
+            (Self::Duration, false) => "Shortest",
+            (Self::Title, false) => "A-Z",
+            (Self::Title, true) => "Z-A",
+        }
+    }
+
+    /// Which direction a sort lands on when it is first picked. Newest and
+    /// longest are what someone reaches for; oldest and shortest are the second
+    /// tap.
+    pub fn default_descending(self) -> bool {
+        matches!(self, Self::Published | Self::Duration)
+    }
+
+    /// Order `videos` in place. They arrive in the playlist's own order, which
+    /// is why `Added` sorts on nothing.
+    ///
+    /// Reversing after a stable sort rather than comparing backwards also
+    /// inverts ties. For `Added` that is the whole point, and elsewhere a tie
+    /// means equal keys, so the two orders are equally correct.
+    pub fn apply(self, videos: &mut [Video], descending: bool) {
+        match self {
+            Self::Added => {}
+            // Cached, because parsing a published date is not free and a
+            // playlist can hold hundreds of them.
+            Self::Published => videos.sort_by_cached_key(|video| video.published_epoch()),
+            Self::Duration => videos.sort_by_key(|video| video.duration_seconds),
+            Self::Title => videos.sort_by_cached_key(|video| video.title.to_lowercase()),
+        }
+        if descending {
+            videos.reverse();
+        }
+    }
+}
+
+/// Which kinds of upload a playlist page is showing.
+///
+/// Deliberately not [`FeedFilter`], which also carries `Live`. A playlist holds
+/// whatever was saved to it, and a persisted filter the segmented control cannot
+/// display is a filter nobody can turn off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlaylistKind {
+    #[default]
+    All,
+    Videos,
+    Shorts,
+}
+
+impl PlaylistKind {
+    pub const ALL: [Self; 3] = [Self::All, Self::Videos, Self::Shorts];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Videos => "Videos",
+            Self::Shorts => "Shorts",
+        }
+    }
+
+    /// Position in the segmented control, which speaks in indices.
+    pub fn index(self) -> usize {
+        match self {
+            Self::All => 0,
+            Self::Videos => 1,
+            Self::Shorts => 2,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::Videos,
+            2 => Self::Shorts,
+            _ => Self::All,
+        }
+    }
+
+    /// A live upload counts as a video here. The feed splits Live out because a
+    /// stream is a different thing to sit down to; a playlist entry is something
+    /// its owner filed by hand, and hiding it under a chip it never named would
+    /// just lose it.
+    pub fn matches(self, video: &Video) -> bool {
+        match self {
+            Self::All => true,
+            Self::Videos => !video.is_short,
+            Self::Shorts => video.is_short,
+        }
+    }
+}
+
+/// How one playlist is arranged: what it shows and in what order.
+///
+/// Persisted per playlist, because a run is resolved lazily out of the queue -
+/// see [`PLAYLIST_QUEUE_PREFIX`] - so the arrangement has to outlive the page
+/// that set it. Without that, autoplay would walk a different playlist than the
+/// one the viewer was looking at when they pressed play.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistView {
+    #[serde(default)]
+    pub kind: PlaylistKind,
+    #[serde(default)]
+    pub only_unwatched: bool,
+    #[serde(default)]
+    pub duration: Option<DurationFilter>,
+    #[serde(default)]
+    pub sort: PlaylistSort,
+    #[serde(default)]
+    pub descending: bool,
+}
+
+impl PlaylistView {
+    /// Kind and duration filters plus the sort - everything except the watched
+    /// filter.
+    ///
+    /// The watched filter is left out on purpose. A run finds its place by
+    /// locating the video that just finished, and finishing a video is exactly
+    /// what marks it watched: dropping it here would lose the position and send
+    /// the run back to the top of the playlist. Apply [`Self::shows`] on top of
+    /// this order instead.
+    pub fn arrange(&self, videos: &mut Vec<Video>, settings: &AppSettings) {
+        videos.retain(|video| self.kind.matches(video));
+        if let Some(duration) = self.duration {
+            videos.retain(|video| duration.matches(video, settings));
+        }
+        self.sort.apply(videos, self.descending);
+    }
+
+    /// Whether the watched filter keeps this video on screen.
+    pub fn shows(&self, video: &Video) -> bool {
+        !self.only_unwatched || !video.watched
+    }
+
+    /// What a run plays after `current_video_id`, given an [`Self::arrange`]d
+    /// order.
+    ///
+    /// A current video that is not in `order` means the run has not started yet -
+    /// it is sitting behind something else in the queue - so it begins at the
+    /// top.
+    pub fn next_after(&self, order: &[Video], current_video_id: &str) -> Option<String> {
+        let start = order
+            .iter()
+            .position(|video| video.id == current_video_id)
+            .map_or(0, |index| index + 1);
+        order
+            .get(start..)?
+            .iter()
+            .find(|video| self.shows(video))
+            .map(|video| video.id.clone())
+    }
+
+    /// What a run plays before `current_video_id`. `None` once there is nothing
+    /// shown ahead of it, and for a video the playlist does not hold: going back
+    /// into a run you were never in has no meaning.
+    pub fn previous_before(&self, order: &[Video], current_video_id: &str) -> Option<String> {
+        let index = order
+            .iter()
+            .position(|video| video.id == current_video_id)?;
+        order
+            .get(..index)?
+            .iter()
+            .rev()
+            .find(|video| self.shows(video))
+            .map(|video| video.id.clone())
+    }
+
+    /// Whether anything is being hidden, which is what an empty page has to
+    /// explain: "nothing matches" and "nothing saved" are different problems.
+    pub fn is_filtered(&self) -> bool {
+        self.only_unwatched || self.duration.is_some() || self.kind != PlaylistKind::All
+    }
+
+    /// The filters in force, in words, for somewhere other than the playlist's
+    /// own page to say what a run is walking. Empty when nothing is hidden.
+    pub fn filter_labels(&self) -> Vec<String> {
+        let mut labels = Vec::new();
+        match self.kind {
+            PlaylistKind::All => {}
+            PlaylistKind::Videos => labels.push("Videos only".to_string()),
+            PlaylistKind::Shorts => labels.push("Shorts only".to_string()),
+        }
+        if let Some(duration) = self.duration {
+            labels.push(format!("{} length", duration.label()));
+        }
+        if self.only_unwatched {
+            labels.push("Unwatched only".to_string());
+        }
+        labels
+    }
+}
+
+/// Marks the queue entry that stands in for "the rest of a playlist".
+///
+/// A run used to be spilled into the queue as a list of ids. That froze the
+/// order and the filters at the moment Play was pressed, could not be told apart
+/// from videos queued by hand, and buried a fifty-video playlist in the one
+/// place meant for what comes next. A marker is resolved against the playlist's
+/// current [`PlaylistView`] each time the run advances, so the queue stays one
+/// flat list and a playlist occupies one entry in it.
+///
+/// A YouTube video id is eleven characters of `[A-Za-z0-9_-]`, so the `:` here
+/// can never collide with one.
+pub const PLAYLIST_QUEUE_PREFIX: &str = "playlist:";
+
+pub fn playlist_queue_entry(playlist_id: &str) -> String {
+    format!("{PLAYLIST_QUEUE_PREFIX}{playlist_id}")
+}
+
+/// The playlist a queue entry stands for, or `None` when it is a plain video id.
+pub fn queued_playlist_id(entry: &str) -> Option<&str> {
+    entry.strip_prefix(PLAYLIST_QUEUE_PREFIX)
+}
+
+/// Which native design language the component library renders with.
+///
+/// g3-ui detects this from the platform at startup, which is right for a
+/// packaged build but arbitrary on the web, where the same browser serves both
+/// looks. Storing an explicit override lets the choice be made once and kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlatformStyle {
+    /// Follow the running platform, which is what an installed build wants.
+    #[default]
+    Auto,
+    Ios,
+    Material,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Appearance {
     Dark,
@@ -500,6 +829,8 @@ impl Default for Appearance {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub appearance: Appearance,
+    #[serde(default)]
+    pub platform_style: PlatformStyle,
     pub playback_speed: f64,
     /// Shorts are watched at a different pace than long-form video, so the two
     /// speeds are remembered independently rather than sharing one setting.
@@ -514,7 +845,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub swipe_left_action: SwipeActionKind,
     pub hide_watched: bool,
+    /// Long-form autoplay. Shorts get their own below, for the same reason
+    /// speed does: a feed of ninety-second clips and a forty-minute video are
+    /// not the same decision.
     pub autoplay: bool,
+    #[serde(default = "default_true")]
+    pub shorts_autoplay: bool,
     #[serde(default = "default_true")]
     pub auto_landscape_fullscreen: bool,
     #[serde(default = "default_video_short_max_seconds")]
@@ -525,8 +861,24 @@ pub struct AppSettings {
     pub shorts_short_max_seconds: u64,
     #[serde(default = "default_shorts_medium_max_seconds")]
     pub shorts_medium_max_seconds: u64,
+    #[serde(default)]
+    pub sponsor_block: SponsorBlockSettings,
+    /// BCP-47 language tag the playback transport should prefer for dubbed
+    /// uploads. Stored separately from the browser locale so a device's UI
+    /// language cannot unexpectedly change what a viewer hears.
+    #[serde(default = "default_audio_language")]
+    pub preferred_audio_language: String,
     pub prefer_sabr: bool,
     pub po_token_provider_url: Option<String>,
+    /// How each playlist is arranged, keyed by playlist id.
+    ///
+    /// Kept here rather than on [`Playlist`] because it is a per-device view of
+    /// shared data - a phone and a desktop can reasonably sit on different
+    /// filters - and because it has to be readable while resolving a queued run,
+    /// which happens nowhere near the playlist page. Entries that hold nothing
+    /// but defaults are dropped, so this stays empty until a filter is used.
+    #[serde(default)]
+    pub playlist_views: BTreeMap<String, PlaylistView>,
 }
 
 fn default_speed() -> f64 {
@@ -537,12 +889,16 @@ fn default_true() -> bool {
     true
 }
 
+fn default_audio_language() -> String {
+    "en".to_string()
+}
+
 fn default_video_short_max_seconds() -> u64 {
-    5 * 60
+    10 * 60
 }
 
 fn default_video_medium_max_seconds() -> u64 {
-    20 * 60
+    35 * 60
 }
 
 fn default_shorts_short_max_seconds() -> u64 {
@@ -590,6 +946,22 @@ impl SwipeActionKind {
 
 impl AppSettings {
     /// The remembered speed for this kind of video.
+    pub fn autoplay_for(&self, is_short: bool) -> bool {
+        if is_short {
+            self.shorts_autoplay
+        } else {
+            self.autoplay
+        }
+    }
+
+    pub fn set_autoplay_for(&mut self, is_short: bool, autoplay: bool) {
+        if is_short {
+            self.shorts_autoplay = autoplay;
+        } else {
+            self.autoplay = autoplay;
+        }
+    }
+
     pub fn speed_for(&self, is_short: bool) -> f64 {
         if is_short {
             self.shorts_playback_speed
@@ -611,6 +983,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             appearance: Appearance::Dark,
+            platform_style: PlatformStyle::Auto,
             playback_speed: 1.0,
             shorts_playback_speed: 1.0,
             swipe_right_action: SwipeActionKind::AddToPlaylist,
@@ -619,13 +992,100 @@ impl Default for AppSettings {
             swipe_left_playlist_id: "deep-dives".to_string(),
             hide_watched: false,
             autoplay: true,
+            shorts_autoplay: true,
             auto_landscape_fullscreen: true,
             video_short_max_seconds: default_video_short_max_seconds(),
             video_medium_max_seconds: default_video_medium_max_seconds(),
             shorts_short_max_seconds: default_shorts_short_max_seconds(),
             shorts_medium_max_seconds: default_shorts_medium_max_seconds(),
+            sponsor_block: SponsorBlockSettings::default(),
+            preferred_audio_language: default_audio_language(),
             prefer_sabr: true,
             po_token_provider_url: None,
+            playlist_views: BTreeMap::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::AppSettings;
+
+    #[test]
+    fn audio_preference_starts_with_english() {
+        assert_eq!(AppSettings::default().preferred_audio_language, "en");
+    }
+}
+
+/// The half of the library the client actually owns.
+///
+/// Videos and channels are server-owned: every one the client holds arrived in
+/// a server response, and the server persisted it *before* returning it. Echoing
+/// them back made a routine "mark watched" a 4.3 MB upload and ~11,900 redundant
+/// database upserts. This carries only what the server cannot re-derive.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LibraryUserState {
+    pub cache_revision: u64,
+    pub subscriptions: Vec<SubscriptionState>,
+    pub playlists: Vec<Playlist>,
+    #[serde(default)]
+    pub subscription_groups: Vec<SubscriptionGroup>,
+    #[serde(default)]
+    pub queue: Vec<String>,
+    #[serde(default)]
+    pub history: Vec<HistoryEntry>,
+    /// Only videos the viewer has actually touched, not the whole cache.
+    #[serde(default)]
+    pub progress: Vec<VideoProgress>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionState {
+    pub channel_id: String,
+    pub subscribed: bool,
+    #[serde(default)]
+    pub content: SubscriptionContent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VideoProgress {
+    pub video_id: String,
+    pub watched: bool,
+    pub progress_seconds: u64,
+    #[serde(default)]
+    pub audio_only: bool,
+}
+
+impl From<&LibrarySnapshot> for LibraryUserState {
+    fn from(snapshot: &LibrarySnapshot) -> Self {
+        Self {
+            cache_revision: snapshot.cache_revision,
+            // Subscription rows are one flag and one enum each, so all of them
+            // together stay small even with several hundred channels.
+            subscriptions: snapshot
+                .channels
+                .iter()
+                .map(|channel| SubscriptionState {
+                    channel_id: channel.id.clone(),
+                    subscribed: channel.subscribed,
+                    content: channel.subscription_content,
+                })
+                .collect(),
+            playlists: snapshot.playlists.clone(),
+            subscription_groups: snapshot.subscription_groups.clone(),
+            queue: snapshot.queue.clone(),
+            history: snapshot.history.clone(),
+            progress: snapshot
+                .videos
+                .iter()
+                .filter(|video| video.watched || video.progress_seconds > 0 || video.audio_only)
+                .map(|video| VideoProgress {
+                    video_id: video.id.clone(),
+                    watched: video.watched,
+                    progress_seconds: video.progress_seconds,
+                    audio_only: video.audio_only,
+                })
+                .collect(),
         }
     }
 }
@@ -657,6 +1117,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Practical Rust and software architecture.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
             Channel {
                 id: "UC-tawny-signal".into(),
@@ -667,6 +1128,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Signals, space, and ambitious experiments.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
             Channel {
                 id: "UC-tawny-field".into(),
@@ -677,6 +1139,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Thoughtful stories from outdoors.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
             Channel {
                 id: "UC-tawny-slow".into(),
@@ -687,6 +1150,7 @@ impl LibrarySnapshot {
                 subscribed: true,
                 description: "Make technology feel quieter.".into(),
                 banner_url: None,
+                subscription_content: SubscriptionContent::All,
             },
         ];
 
@@ -704,6 +1168,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "M7lc1UVf-VE".into(),
@@ -718,6 +1183,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "ysz5S6PUM-U".into(),
@@ -732,6 +1198,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "jNQXAC9IVRw".into(),
@@ -746,6 +1213,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: true,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "dQw4w9WgXcQ".into(),
@@ -760,6 +1228,7 @@ impl LibrarySnapshot {
                 watched: true,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
             Video {
                 id: "ScMzIvxBSi4".into(),
@@ -774,6 +1243,7 @@ impl LibrarySnapshot {
                 watched: false,
                 is_live: false,
                 is_short: false,
+                audio_only: false,
             },
         ];
 
@@ -909,4 +1379,730 @@ pub struct PlaybackSession {
     #[serde(default)]
     pub alternatives: Vec<PlaybackSource>,
     pub fallback_url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+/// Who the client is currently acting as.
+///
+/// There is always someone: the first launch mints a guest rather than showing
+/// a sign-in wall, so every code path downstream can assume an owner instead of
+/// carrying an `Option` for the un-authenticated case.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    pub id: String,
+    pub display_name: String,
+    /// `None` for a guest. Its presence is what "has a real account" means.
+    #[serde(default)]
+    pub email: Option<String>,
+    pub is_guest: bool,
+}
+
+impl Account {
+    /// A guest has nothing to sign back in with, so clearing its cookie loses
+    /// the library. That is worth saying out loud in the UI, and this is the
+    /// test the UI asks.
+    pub fn is_recoverable(&self) -> bool {
+        !self.is_guest && self.email.is_some()
+    }
+
+    pub fn label(&self) -> &str {
+        if let Some(email) = self.email.as_deref() {
+            email
+        } else {
+            &self.display_name
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credentials {
+    pub email: String,
+    pub password: String,
+}
+
+/// Why a credential was refused, in the terms the form needs to render.
+///
+/// A bare string would do for display, but the form also has to decide *which
+/// field* to mark, and parsing that back out of prose is how those two drift
+/// apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CredentialProblem {
+    EmailEmpty,
+    EmailMalformed,
+    EmailTaken,
+    PasswordTooShort,
+    PasswordTooLong,
+}
+
+impl CredentialProblem {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::EmailEmpty => "Enter an email address.",
+            Self::EmailMalformed => "That does not look like an email address.",
+            Self::EmailTaken => "An account already uses that email.",
+            Self::PasswordTooShort => "Use at least 8 characters.",
+            Self::PasswordTooLong => "Use at most 512 characters.",
+        }
+    }
+}
+
+/// Argon2 is deliberately slow, so a password long enough to be a denial of
+/// service is rejected before it reaches the hasher.
+pub const PASSWORD_MIN_LENGTH: usize = 8;
+pub const PASSWORD_MAX_LENGTH: usize = 512;
+
+/// Shared by both sides so a client-side form and the server agree on what is
+/// acceptable without the rules being written twice.
+///
+/// Deliberately not an RFC 5322 parser. The only thing this can usefully
+/// establish is that the viewer typed something address-shaped; whether it
+/// receives mail is not knowable here, and Tawny never sends any.
+pub fn validate_email(email: &str) -> Result<String, CredentialProblem> {
+    let normalized = email.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Err(CredentialProblem::EmailEmpty);
+    }
+    let mut parts = normalized.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(CredentialProblem::EmailMalformed);
+    };
+    let domain_is_dotted = domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains("..");
+    if local.is_empty() || domain.is_empty() || !domain_is_dotted {
+        return Err(CredentialProblem::EmailMalformed);
+    }
+    if normalized.chars().any(char::is_whitespace) {
+        return Err(CredentialProblem::EmailMalformed);
+    }
+    Ok(normalized)
+}
+
+pub fn validate_password(password: &str) -> Result<(), CredentialProblem> {
+    // Not trimmed: leading and trailing spaces are legitimate password
+    // characters, and silently removing them would lock out anyone who used
+    // one deliberately.
+    if password.chars().count() < PASSWORD_MIN_LENGTH {
+        return Err(CredentialProblem::PasswordTooShort);
+    }
+    if password.chars().count() > PASSWORD_MAX_LENGTH {
+        return Err(CredentialProblem::PasswordTooLong);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    #[test]
+    fn email_validation_normalizes_case_and_surrounding_space() {
+        assert_eq!(
+            validate_email("  Viewer@Example.COM "),
+            Ok("viewer@example.com".into())
+        );
+    }
+
+    #[test]
+    fn email_validation_rejects_addresses_that_are_not_address_shaped() {
+        for candidate in [
+            "",
+            "   ",
+            "viewer",
+            "viewer@",
+            "@example.com",
+            "viewer@example",
+            "viewer@.com",
+            "viewer@example.",
+            "viewer@exa..mple.com",
+            "one@two@example.com",
+            "view er@example.com",
+        ] {
+            assert!(
+                validate_email(candidate).is_err(),
+                "expected {candidate:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn password_length_is_bounded_at_both_ends() {
+        assert_eq!(
+            validate_password("short"),
+            Err(CredentialProblem::PasswordTooShort)
+        );
+        assert!(validate_password("longenough").is_ok());
+        assert_eq!(
+            validate_password(&"x".repeat(PASSWORD_MAX_LENGTH + 1)),
+            Err(CredentialProblem::PasswordTooLong)
+        );
+    }
+
+    #[test]
+    fn password_whitespace_is_significant() {
+        // Eight characters only if the spaces count, which is the point.
+        assert!(validate_password(" pass a ").is_ok());
+    }
+
+    #[test]
+    fn only_a_real_account_is_recoverable() {
+        let guest = Account {
+            id: "app_user:abc".into(),
+            display_name: "Guest".into(),
+            email: None,
+            is_guest: true,
+        };
+        assert!(!guest.is_recoverable());
+        assert_eq!(guest.label(), "Guest");
+
+        let member = Account {
+            id: "app_user:abc".into(),
+            display_name: "Guest".into(),
+            email: Some("viewer@example.com".into()),
+            is_guest: false,
+        };
+        assert!(member.is_recoverable());
+        assert_eq!(member.label(), "viewer@example.com");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SponsorBlock
+// ---------------------------------------------------------------------------
+
+/// A community-submitted category of segment.
+///
+/// The names on the wire are SponsorBlock's own, and the colours are the ones
+/// its extension uses - a viewer who already knows what a green bar means
+/// should not have to relearn it here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SponsorCategory {
+    Sponsor,
+    #[serde(rename = "selfpromo")]
+    SelfPromo,
+    Interaction,
+    Intro,
+    Outro,
+    Preview,
+    #[serde(rename = "music_offtopic")]
+    MusicOfftopic,
+    Filler,
+    #[serde(rename = "poi_highlight")]
+    Highlight,
+}
+
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+impl SponsorCategory {
+    /// Every category Tawny asks the API for, in the order the settings list
+    /// them.
+    pub const ALL: [Self; 9] = [
+        Self::Sponsor,
+        Self::SelfPromo,
+        Self::Interaction,
+        Self::Intro,
+        Self::Outro,
+        Self::Preview,
+        Self::MusicOfftopic,
+        Self::Filler,
+        Self::Highlight,
+    ];
+
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Self::Sponsor => "sponsor",
+            Self::SelfPromo => "selfpromo",
+            Self::Interaction => "interaction",
+            Self::Intro => "intro",
+            Self::Outro => "outro",
+            Self::Preview => "preview",
+            Self::MusicOfftopic => "music_offtopic",
+            Self::Filler => "filler",
+            Self::Highlight => "poi_highlight",
+        }
+    }
+
+    pub fn from_api_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|category| category.api_name() == name)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sponsor => "Sponsor",
+            Self::SelfPromo => "Unpaid self-promotion",
+            Self::Interaction => "Interaction reminder",
+            Self::Intro => "Intermission / intro",
+            Self::Outro => "Endcards / credits",
+            Self::Preview => "Preview / recap",
+            Self::MusicOfftopic => "Non-music section",
+            Self::Filler => "Filler tangent",
+            Self::Highlight => "Highlight",
+        }
+    }
+
+    /// What the category actually covers.
+    ///
+    /// The names alone do not settle it - "Preview" and "Filler" in particular
+    /// are guessable in several directions, and choosing an action for one you
+    /// have misread is how a viewer ends up skipping the video itself.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Sponsor => "Paid promotion, referral codes, and direct advertising.",
+            Self::SelfPromo => {
+                "Unpaid plugs for the creator's own merch, Patreon, or other channels."
+            }
+            Self::Interaction => "Brief reminders to like, subscribe, or comment.",
+            Self::Intro => "Title cards and animated openers with no content in them.",
+            Self::Outro => "Endcards and credits, where the video is effectively over.",
+            Self::Preview => {
+                "A recap of this video, or a run-through of what is coming later in it."
+            }
+            Self::MusicOfftopic => "The parts of a music video that are not the music.",
+            Self::Filler => "Tangents and jokes the creator added that are not the subject.",
+            Self::Highlight => "The moment the video is actually about. Jumped to, never over.",
+        }
+    }
+
+    /// What a skip toast says once it has happened.
+    pub fn skip_message(self) -> &'static str {
+        match self {
+            Self::Sponsor => "Skipped sponsor",
+            Self::SelfPromo => "Skipped self-promotion",
+            Self::Interaction => "Skipped interaction reminder",
+            Self::Intro => "Skipped intro",
+            Self::Outro => "Skipped endcards",
+            Self::Preview => "Skipped recap",
+            Self::MusicOfftopic => "Skipped non-music section",
+            Self::Filler => "Skipped filler",
+            Self::Highlight => "Jumped to the highlight",
+        }
+    }
+
+    /// SponsorBlock's own palette, so the timeline reads the same as the
+    /// extension's does.
+    pub fn color(self) -> &'static str {
+        match self {
+            Self::Sponsor => "#00d400",
+            Self::SelfPromo => "#ffff00",
+            Self::Interaction => "#cc00ff",
+            Self::Intro => "#00ffff",
+            Self::Outro => "#0202ed",
+            Self::Preview => "#008fd6",
+            Self::MusicOfftopic => "#ff9900",
+            Self::Filler => "#7300ff",
+            Self::Highlight => "#ff1684",
+        }
+    }
+
+    /// A highlight is a point, not a stretch: skipping *to* it is the whole
+    /// action, so it is never skipped over and never auto-applied.
+    pub fn is_point(self) -> bool {
+        matches!(self, Self::Highlight)
+    }
+
+    /// What a fresh install does with each category.
+    ///
+    /// Matches the extension's defaults: the categories nobody wants are
+    /// skipped, the ones that are sometimes content are offered, and the rest
+    /// stay off until asked for.
+    pub fn default_action(self) -> SponsorAction {
+        match self {
+            Self::Sponsor | Self::SelfPromo | Self::Interaction => SponsorAction::Skip,
+            Self::Intro | Self::Outro | Self::Preview | Self::MusicOfftopic => SponsorAction::Show,
+            Self::Filler | Self::Highlight => SponsorAction::Off,
+        }
+    }
+}
+
+/// What to do when playback reaches a segment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SponsorAction {
+    /// Jump past it, and say so.
+    Skip,
+    /// Mark it on the timeline and offer a button, but do not move the
+    /// playhead. The right default for anything that is sometimes the video.
+    #[default]
+    Show,
+    /// Not fetched, not drawn, not skipped.
+    Off,
+}
+
+impl SponsorAction {
+    pub const ALL: [Self; 3] = [Self::Skip, Self::Show, Self::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Skip => "Skip automatically",
+            Self::Show => "Show on the timeline",
+            Self::Off => "Ignore",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|action| action.label() == label)
+            .unwrap_or_default()
+    }
+}
+
+/// One segment of one video.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SponsorSegment {
+    pub uuid: String,
+    pub category: SponsorCategory,
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+    /// SponsorBlock's `locked` flag: a segment vetted by a moderator. Kept
+    /// because it is the tie-breaker when two submissions overlap.
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub votes: i64,
+}
+
+/// Per-category behaviour, stored as a list rather than a map so it serialises
+/// stably and an unknown category from a future build round-trips untouched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SponsorCategorySetting {
+    pub category: SponsorCategory,
+    pub action: SponsorAction,
+}
+
+/// Everything the viewer controls about SponsorBlock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SponsorBlockSettings {
+    pub enabled: bool,
+    /// Whether a skip announces itself. On by default: a video that silently
+    /// jumps looks broken until you know why.
+    pub notify_on_skip: bool,
+    pub categories: Vec<SponsorCategorySetting>,
+}
+
+impl Default for SponsorBlockSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notify_on_skip: true,
+            categories: SponsorCategory::ALL
+                .into_iter()
+                .map(|category| SponsorCategorySetting {
+                    category,
+                    action: category.default_action(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl SponsorBlockSettings {
+    pub fn action_for(&self, category: SponsorCategory) -> SponsorAction {
+        if !self.enabled {
+            return SponsorAction::Off;
+        }
+        self.categories
+            .iter()
+            .find(|setting| setting.category == category)
+            .map(|setting| setting.action)
+            // A category this build knows but the stored settings predate.
+            .unwrap_or_else(|| category.default_action())
+    }
+
+    pub fn set_action(&mut self, category: SponsorCategory, action: SponsorAction) {
+        match self
+            .categories
+            .iter_mut()
+            .find(|setting| setting.category == category)
+        {
+            Some(setting) => setting.action = action,
+            None => self
+                .categories
+                .push(SponsorCategorySetting { category, action }),
+        }
+    }
+
+    /// The categories worth asking the API for. Requesting the ignored ones
+    /// would mean fetching data only to discard it.
+    pub fn requested_categories(&self) -> Vec<SponsorCategory> {
+        SponsorCategory::ALL
+            .into_iter()
+            .filter(|category| self.action_for(*category) != SponsorAction::Off)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod sponsor_tests {
+    use super::*;
+
+    #[test]
+    fn api_names_round_trip() {
+        for category in SponsorCategory::ALL {
+            assert_eq!(
+                SponsorCategory::from_api_name(category.api_name()),
+                Some(category),
+                "{category:?}"
+            );
+        }
+        assert_eq!(SponsorCategory::from_api_name("not_a_category"), None);
+    }
+
+    #[test]
+    fn the_wire_format_matches_sponsorblocks_own_names() {
+        // These strings go to sponsor.ajay.app and come back from it, so they
+        // are a contract with someone else's API rather than an internal name.
+        let encoded = serde_json::to_string(&SponsorCategory::MusicOfftopic).unwrap();
+        assert_eq!(encoded, "\"music_offtopic\"");
+        assert_eq!(
+            serde_json::from_str::<SponsorCategory>("\"poi_highlight\"").unwrap(),
+            SponsorCategory::Highlight
+        );
+        assert_eq!(
+            serde_json::from_str::<SponsorCategory>("\"selfpromo\"").unwrap(),
+            SponsorCategory::SelfPromo
+        );
+    }
+
+    #[test]
+    fn disabling_sponsorblock_turns_every_category_off() {
+        let mut settings = SponsorBlockSettings::default();
+        assert_eq!(
+            settings.action_for(SponsorCategory::Sponsor),
+            SponsorAction::Skip
+        );
+        settings.enabled = false;
+        for category in SponsorCategory::ALL {
+            assert_eq!(settings.action_for(category), SponsorAction::Off);
+        }
+        assert!(settings.requested_categories().is_empty());
+    }
+
+    #[test]
+    fn only_the_categories_in_use_are_requested() {
+        let mut settings = SponsorBlockSettings::default();
+        settings.set_action(SponsorCategory::Sponsor, SponsorAction::Off);
+        let requested = settings.requested_categories();
+        assert!(!requested.contains(&SponsorCategory::Sponsor));
+        assert!(requested.contains(&SponsorCategory::Intro));
+    }
+
+    #[test]
+    fn a_category_missing_from_stored_settings_falls_back_to_its_default() {
+        // Settings written by a build that predates a category must not make it
+        // silently Off - that would look like SponsorBlock ignoring it.
+        let settings = SponsorBlockSettings {
+            enabled: true,
+            notify_on_skip: true,
+            categories: Vec::new(),
+        };
+        assert_eq!(
+            settings.action_for(SponsorCategory::Sponsor),
+            SponsorAction::Skip
+        );
+        assert_eq!(
+            settings.action_for(SponsorCategory::Filler),
+            SponsorAction::Off
+        );
+    }
+
+    #[test]
+    fn a_highlight_is_a_point_and_nothing_else_is() {
+        for category in SponsorCategory::ALL {
+            assert_eq!(
+                category.is_point(),
+                category == SponsorCategory::Highlight,
+                "{category:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn video(id: &str, title: &str, published_at: &str, duration_seconds: u64) -> Video {
+        Video {
+            id: id.into(),
+            title: title.into(),
+            channel_id: "channel".into(),
+            channel_name: "Channel".into(),
+            thumbnail_url: String::new(),
+            published_at: published_at.into(),
+            duration_seconds,
+            view_count: String::new(),
+            progress_seconds: 0,
+            watched: false,
+            is_live: false,
+            is_short: false,
+            audio_only: false,
+        }
+    }
+
+    fn ids(videos: &[Video]) -> Vec<&str> {
+        videos.iter().map(|video| video.id.as_str()).collect()
+    }
+
+    fn sample() -> Vec<Video> {
+        vec![
+            video("b", "Beta", "2024-03-01T00:00:00Z", 600),
+            video("a", "alpha", "2024-01-01T00:00:00Z", 90),
+            video("c", "Gamma", "2024-02-01T00:00:00Z", 3600),
+        ]
+    }
+
+    #[test]
+    fn added_keeps_the_playlists_own_order() {
+        let mut videos = sample();
+        PlaylistSort::Added.apply(&mut videos, false);
+        assert_eq!(ids(&videos), ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn added_reversed_walks_the_playlist_backwards() {
+        let mut videos = sample();
+        PlaylistSort::Added.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn published_sorts_newest_first_when_descending() {
+        let mut videos = sample();
+        PlaylistSort::Published.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["b", "c", "a"]);
+        let mut videos = sample();
+        PlaylistSort::Published.apply(&mut videos, false);
+        assert_eq!(ids(&videos), ["a", "c", "b"]);
+    }
+
+    #[test]
+    fn duration_sorts_longest_first_when_descending() {
+        let mut videos = sample();
+        PlaylistSort::Duration.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["c", "b", "a"]);
+    }
+
+    /// Case is not order: "alpha" belongs before "Beta", not after "Gamma".
+    #[test]
+    fn title_ignores_case() {
+        let mut videos = sample();
+        PlaylistSort::Title.apply(&mut videos, false);
+        assert_eq!(ids(&videos), ["a", "b", "c"]);
+    }
+
+    /// Every chip is reachable in both directions, and the two directions never
+    /// read the same - the label is the only place the direction is shown.
+    #[test]
+    fn every_sort_labels_both_directions_distinctly() {
+        for sort in PlaylistSort::ALL {
+            assert_ne!(sort.label(true), sort.label(false), "{sort:?}");
+        }
+    }
+
+    fn run_order(view: &PlaylistView, videos: Vec<Video>) -> Vec<Video> {
+        let mut videos = videos;
+        view.arrange(&mut videos, &AppSettings::default());
+        videos
+    }
+
+    #[test]
+    fn a_run_walks_the_arrangement_on_screen() {
+        let view = PlaylistView {
+            sort: PlaylistSort::Title,
+            ..PlaylistView::default()
+        };
+        let order = run_order(&view, sample());
+        assert_eq!(ids(&order), ["a", "b", "c"]);
+        assert_eq!(view.next_after(&order, "a").as_deref(), Some("b"));
+        assert_eq!(view.previous_before(&order, "b").as_deref(), Some("a"));
+        assert_eq!(view.next_after(&order, "c"), None, "the last entry ends it");
+        assert_eq!(
+            view.previous_before(&order, "a"),
+            None,
+            "nothing before the first"
+        );
+    }
+
+    /// The regression the split between `arrange` and `shows` exists to prevent.
+    /// Finishing a video is what marks it watched, so an order that had already
+    /// dropped watched videos could not say where the run was - and every advance
+    /// would hand back the top of the playlist forever.
+    #[test]
+    fn finishing_a_video_does_not_send_an_unwatched_run_back_to_the_top() {
+        let view = PlaylistView {
+            only_unwatched: true,
+            ..PlaylistView::default()
+        };
+        let mut videos = sample();
+        videos[0].watched = true;
+        let order = run_order(&view, videos);
+        assert_eq!(ids(&order), ["b", "a", "c"], "playlist order, watched kept");
+        assert_eq!(
+            view.next_after(&order, "b").as_deref(),
+            Some("a"),
+            "advances past the video that just finished"
+        );
+    }
+
+    #[test]
+    fn a_run_skips_over_what_the_filters_hide() {
+        let view = PlaylistView {
+            only_unwatched: true,
+            ..PlaylistView::default()
+        };
+        let mut videos = sample();
+        videos[1].watched = true;
+        let order = run_order(&view, videos);
+        assert_eq!(view.next_after(&order, "b").as_deref(), Some("c"));
+        assert_eq!(view.previous_before(&order, "c").as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_run_starts_at_the_top_for_a_video_it_does_not_hold() {
+        let view = PlaylistView::default();
+        let order = run_order(&view, sample());
+        assert_eq!(view.next_after(&order, "unrelated").as_deref(), Some("b"));
+        assert_eq!(view.previous_before(&order, "unrelated"), None);
+    }
+
+    #[test]
+    fn a_kind_filter_narrows_what_the_run_can_reach() {
+        let mut videos = sample();
+        videos[1].is_short = true;
+        let shorts = PlaylistView {
+            kind: PlaylistKind::Shorts,
+            ..PlaylistView::default()
+        };
+        assert_eq!(ids(&run_order(&shorts, videos.clone())), ["a"]);
+        let long_form = PlaylistView {
+            kind: PlaylistKind::Videos,
+            ..PlaylistView::default()
+        };
+        assert_eq!(ids(&run_order(&long_form, videos)), ["b", "c"]);
+    }
+
+    #[test]
+    fn a_default_view_hides_nothing() {
+        assert!(!PlaylistView::default().is_filtered());
+        for kind in PlaylistKind::ALL {
+            assert_eq!(PlaylistKind::from_index(kind.index()), kind, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_queue_marker_is_told_apart_from_a_video_id() {
+        let entry = playlist_queue_entry("watch-later");
+        assert_eq!(queued_playlist_id(&entry), Some("watch-later"));
+        assert_eq!(
+            queued_playlist_id("dQw4w9WgXcQ"),
+            None,
+            "a video id is never mistaken for a run"
+        );
+    }
 }

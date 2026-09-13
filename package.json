@@ -4,12 +4,29 @@
   "version": "0.1.0",
   "description": "Vendored browser transport runtime for Tawny's Dioxus player",
   "scripts": {
-    "test": "node --check assets/tawny_player_controls.js && node --check assets/tawny_route_history.js && node tests/tawny_route_history.test.cjs && node tests/tawny_transport.test.cjs"
+    "test": "npm run test:unit",
+    "test:all": "npm run test:unit && npm run test:rust && npm run test:ui",
+    "test:unit": "npm run test:unit:js && npm run test:unit:python",
+    "test:unit:js": "node --check assets/tawny_player_controls.js && node --check assets/tawny_route_history.js && node --check assets/tawny_horizontal_scroll.js && node --test tests/tawny_route_history.test.cjs tests/tawny_transport.test.cjs tests/tawny_player_timeline.test.cjs",
+    "test:unit:python": "node scripts/run-python-tests.cjs",
+    "test:rust": "npm run test:rust:web && npm run test:rust:server",
+    "test:rust:web": "cargo test",
+    "test:rust:server": "cargo test --no-default-features --features server",
+    "test:ui": "playwright test",
+    "test:ui:mobile": "playwright test --project mobile-chromium",
+    "test:ui:desktop": "playwright test --project desktop-chromium",
+    "test:ui:headed": "playwright test --headed",
+    "test:ui:report": "playwright show-report",
+    "format:web": "biome format --write .",
+    "format:web:check": "biome format .",
+    "lint:web": "biome lint ."
   },
   "dependencies": {
     "shaka-player": "4.16.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@playwright/test": "^1.56.1",
     "ws": "8.21.0"
   }
 }

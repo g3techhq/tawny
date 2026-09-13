@@ -5,7 +5,7 @@
 ```text
 YouTube Innertube/RSS ──► source normalization
           │                       │
-YouTube WebSub ──────────► SurrealDB/RocksDB ◄──── library sync
+YouTube WebSub ──────────► SurrealDB/SurrealKV ◄── library sync
           │                       │
           └──► yt-dlp sidecar ◄── PO-token provider
                                   │
@@ -35,7 +35,7 @@ Local storage is appropriate for the initial bounded feed. Before offline downlo
 
 ## Server and SurrealDB
 
-Compose points the server at a dedicated SurrealDB container backed by a named RocksDB volume. Outside Compose, an absent `SURREALDB_HOST` still opens embedded RocksDB beneath the platform data directory (overridable with `TAWNY_DATA_DIR`), and `mem://` remains available explicitly for tests or disposable sessions. The schema models:
+Compose points the server at a dedicated SurrealDB container backed by a named SurrealKV volume. Tawny itself uses the configured `SURREALDB_HOST` endpoint rather than embedding a storage engine; server tests use `mem://`. SurrealKit embeds and hash-tracks `database/schema/**/*.surql`, applying changed schema files at startup. The schema models:
 
 - channels and videos;
 - users and subscription relations;
@@ -49,7 +49,9 @@ If `TAWNY_PUBLIC_URL` or `TAWNY_WEBSUB_CALLBACK_URL` is a public HTTPS address, 
 
 Playlist, subscription, watch-state, queue, and history mutations now use optimistic local writes followed by revision-checked SurrealDB snapshot sync. The sync is serialized server-side; a stale or equal client revision receives the current server snapshot instead of overwriting it.
 
-The next server milestone is user authentication and per-account records. Multi-user and long-offline deployments should graduate from whole-library revisions to an operation log so independent edits can merge instead of choosing one complete snapshot.
+Authentication uses the same Axum cookie-session stack as Greenside Partee and Media Mancer. Session rows live in SurrealDB through the shared v3 adapter; middleware resolves the signed-in `app_user` before an account-scoped server function runs. First launch creates a guest account, and registration promotes that row in place. Native clients initialize the Dioxus cookie runtime before launch, so the cookie remains outside application state.
+
+Multi-user and long-offline deployments should graduate from whole-library revisions to an operation log so independent edits can merge instead of choosing one complete snapshot.
 
 ## Discovery source contract
 
@@ -79,7 +81,7 @@ The client generates an in-memory DASH manifest for extracted representation set
 
 The current slice covers the main navigation and interaction model. LibreTube parity should be added in these bounded layers:
 
-1. authentication and operation-log sync;
+1. operation-log sync;
 2. comment replies and richer search suggestions/filters;
 3. native SABR/UMP adapter and background playback controls;
 4. SponsorBlock, Return YouTube Dislike, DeArrow, and live chat;
