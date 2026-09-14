@@ -6,6 +6,8 @@
 /.codex
 /.cargo/config.toml
 .env
+.env.surrealkit.*
+!.env.surrealkit.template
 /rustypipe_reports
 /playwright-report
 /test-results
