@@ -30,6 +30,19 @@ separate from repository visibility, so verify this once after the first images
 are published. If you keep them private, the Portainer host needs
 `docker login ghcr.io` with a token carrying `read:packages`.
 
+## Native mobile artifacts
+
+Native compilation is intentionally separate from image publication and pull
+request CI. Run **Build Mobile Artifacts** manually, choose Android, iOS, or
+both, and enter the public HTTPS origin of the Tawny server the app should use.
+Android runs on Ubuntu and uploads an APK and AAB; iOS runs on macOS and uploads
+an unsigned IPA. Artifacts expire after 14 days.
+
+These artifacts prove that the native targets compile, but they are not yet
+store-distributable. Android release signing needs an upload keystore, and iOS
+needs an Apple distribution certificate and provisioning profile. Add those as
+repository secrets only when the unsigned workflows are consistently green.
+
 ## Portainer stack
 
 1. In Portainer, open the target environment and select **Stacks** → **Add stack**.

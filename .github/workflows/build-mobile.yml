@@ -1,0 +1,148 @@
+name: Build Mobile Artifacts
+
+run-name: Build ${{ inputs.platform }} mobile artifacts for ${{ inputs.server_url }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to compile
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - android
+          - ios
+      server_url:
+        description: HTTPS Tawny server origin to compile into the app
+        required: true
+        type: string
+
+concurrency:
+  group: build-mobile-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DIOXUS_CLI_VERSION: 0.7.9
+  SERVER_URL: ${{ inputs.server_url }}
+
+jobs:
+  android:
+    name: Android APK and AAB
+    if: inputs.platform == 'both' || inputs.platform == 'android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install Java 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install web asset dependencies
+        run: npm ci
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: mobile-android
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@94dc7fe43d6ed7bfa6a6ea24f60f85e3f41dd104
+
+      - name: Install Dioxus CLI
+        run: cargo binstall "dioxus-cli${DIOXUS_CLI_VERSION}" --no-confirm --force
+
+      - name: Validate compiled configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SERVER_URL:?Enter the production HTTPS origin when dispatching the workflow}"
+          [[ "$SERVER_URL" == https://* ]] || {
+            echo "server_url must be an HTTPS origin" >&2
+            exit 1
+          }
+
+      - name: Build Android release bundles
+        run: >
+          dx bundle --android --release --locked --no-default-features
+          --fullstack false --package-types apk --package-types aab
+          --out-dir artifacts/android
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tawny-android-${{ github.sha }}
+          path: artifacts/android/
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    name: iOS IPA
+    if: inputs.platform == 'both' || inputs.platform == 'ios'
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Install web asset dependencies
+        run: npm ci
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: mobile-ios
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@94dc7fe43d6ed7bfa6a6ea24f60f85e3f41dd104
+
+      - name: Install Dioxus CLI
+        run: cargo binstall "dioxus-cli${DIOXUS_CLI_VERSION}" --no-confirm --force
+
+      - name: Validate compiled configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SERVER_URL:?Enter the production HTTPS origin when dispatching the workflow}"
+          [[ "$SERVER_URL" == https://* ]] || {
+            echo "server_url must be an HTTPS origin" >&2
+            exit 1
+          }
+
+      - name: Build unsigned iOS release bundle
+        run: >
+          dx bundle --ios --release --locked --no-default-features
+          --fullstack false --package-types ipa --codesign false
+          --out-dir artifacts/ios
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tawny-ios-${{ github.sha }}
+          path: artifacts/ios/
+          if-no-files-found: error
+          retention-days: 14
