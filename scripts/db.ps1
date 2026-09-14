@@ -1,15 +1,30 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [ValidatePattern("^[A-Za-z0-9_-]+$")]
     [string]$Environment,
 
-    [Parameter(Mandatory = $true, Position = 1, ValueFromRemainingArguments = $true)]
-    [string[]]$SurrealKitArguments
+    [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
+    [AllowEmptyCollection()]
+    [string[]]$SurrealKitArguments = @()
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($Environment) -or $SurrealKitArguments.Count -eq 0) {
+    Write-Host @"
+Usage: .\scripts\db.ps1 <environment> <surrealkit arguments...>
+
+Examples:
+  .\scripts\db.ps1 staging status
+  .\scripts\db.ps1 staging sync --fail-fast
+  .\scripts\db.ps1 staging seed
+  .\scripts\db.ps1 staging rollout status
+  .\scripts\db.ps1 staging rollout plan --name add-tags
+"@
+    return
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $envFile = Join-Path $repoRoot ".env.surrealkit.$Environment"
