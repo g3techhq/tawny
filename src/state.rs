@@ -3,15 +3,15 @@ use crate::{
     api::{get_library, push_library_state, sync_library},
     cache::use_persistent_signal,
     models::{
-        AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, HistoryEntry,
-        LibrarySnapshot, LibraryUserState, Playlist, PlaylistView, SearchResults, SponsorSegment,
-        SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
+        AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, FeedFilter,
+        HistoryEntry, LibrarySnapshot, LibraryUserState, Playlist, PlaylistView, SearchResults,
+        SponsorSegment, SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
         VideoPreviewFrames, playlist_queue_entry, queued_playlist_id,
     },
     session::use_session_provider,
 };
 use dioxus::prelude::*;
-use g3_ui::StatusColor;
+use g3_ui::{Color, ToastOptions, Toaster};
 
 /// How close to the end counts as finished. YouTube stops short of the exact
 /// duration often enough that an exact match would rarely fire.
@@ -38,11 +38,10 @@ pub struct PlaylistRunStatus {
 pub struct AppState {
     pub library: Signal<LibrarySnapshot>,
     pub settings: Signal<AppSettings>,
-    pub toast_open: Signal<bool>,
-    pub toast: Signal<(String, StatusColor)>,
-    /// A new notice must remount the transient banner, even if the prior one is
-    /// still open, so its visible countdown starts over with its new message.
-    pub toast_revision: Signal<u64>,
+    /// g3-ui's toast queue. It belongs to the `AppWrapper`, which sits below
+    /// this state, so a component inside the wrapper hands it over once it
+    /// mounts. Until then a notice has nowhere to show and is dropped.
+    pub toaster: Signal<Option<Toaster>>,
     pub playlist_picker_video: Signal<Option<Video>>,
     pub playlist_picker_open: Signal<bool>,
     pub video_actions_video: Signal<Option<Video>>,
@@ -77,9 +76,9 @@ pub struct AppState {
     /// to the front of history, so stepping back through history immediately
     /// starts bouncing between two videos.
     pub run_back_stack: Signal<Vec<String>>,
-    pub feed_filter_index: Signal<usize>,
-    pub explore_filter_index: Signal<usize>,
-    pub channel_tab_index: Signal<usize>,
+    pub feed_filter: Signal<FeedFilter>,
+    pub explore_filter: Signal<crate::models::ExploreFilter>,
+    pub channel_tab: Signal<FeedFilter>,
 }
 
 impl AppState {
@@ -101,10 +100,6 @@ impl AppState {
 
     pub fn settings(self) -> AppSettings {
         (self.settings)()
-    }
-
-    pub fn toast(self) -> (String, StatusColor) {
-        (self.toast)()
     }
 
     pub fn playlist_picker_video(self) -> Option<Video> {
@@ -244,10 +239,12 @@ impl AppState {
         true
     }
 
-    pub fn show_toast(mut self, message: impl Into<String>, color: StatusColor) {
-        self.toast.set((message.into(), color));
-        self.toast_revision.with_mut(|revision| *revision += 1);
-        self.toast_open.set(true);
+    pub fn show_toast(self, message: impl Into<String>, color: Color) {
+        if let Some(toaster) = *self.toaster.peek() {
+            // Most notices confirm an action that can be repeated at once -
+            // a swipe, a toggle - so the latest replaces rather than queues.
+            toaster.show(ToastOptions::new(message).color(color).replace());
+        }
     }
 
     pub fn add_to_playlist(mut self, video_id: &str, playlist_id: &str) -> Option<String> {
@@ -746,20 +743,20 @@ impl AppState {
         match kind {
             SwipeActionKind::AddToPlaylist => {
                 if let Some(message) = self.add_to_playlist(video_id, &playlist_id) {
-                    self.show_toast(message, StatusColor::Success);
+                    self.show_toast(message, Color::Success);
                 }
             }
             SwipeActionKind::AddToQueue => {
                 let message = self.add_to_queue(video_id, false);
-                self.show_toast(message, StatusColor::Success);
+                self.show_toast(message, Color::Success);
             }
             SwipeActionKind::PlayNext => {
                 let message = self.add_to_queue(video_id, true);
-                self.show_toast(message, StatusColor::Success);
+                self.show_toast(message, Color::Success);
             }
             SwipeActionKind::MarkWatched => {
                 self.mark_watched(video_id, true);
-                self.show_toast("Marked watched", StatusColor::Neutral);
+                self.show_toast("Marked watched", Color::Neutral);
             }
             SwipeActionKind::Share => {
                 if let Some(video) = self
@@ -1251,9 +1248,7 @@ pub fn AppStateProvider(children: Element) -> Element {
     use_context_provider(|| AppState {
         library,
         settings,
-        toast_open: Signal::new(false),
-        toast: Signal::new((String::new(), StatusColor::Neutral)),
-        toast_revision: Signal::new(0),
+        toaster: Signal::new(None),
         playlist_picker_video: Signal::new(None),
         playlist_picker_open: Signal::new(false),
         video_actions_video: Signal::new(None),
@@ -1274,9 +1269,9 @@ pub fn AppStateProvider(children: Element) -> Element {
         syncing: initial_syncing,
         chapters_sheet_open: Signal::new(false),
         run_back_stack: Signal::new(Vec::new()),
-        feed_filter_index: Signal::new(0),
-        explore_filter_index: Signal::new(0),
-        channel_tab_index: Signal::new(0),
+        feed_filter: Signal::new(FeedFilter::All),
+        explore_filter: Signal::new(crate::models::ExploreFilter::All),
+        channel_tab: Signal::new(FeedFilter::All),
     });
 
     rsx! { {children} }

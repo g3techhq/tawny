@@ -1,14 +1,15 @@
 use crate::{
     api::{search_catalog, search_catalog_page},
     app::Route,
-    models::SearchResults,
+    models::{ExploreFilter, SearchResults},
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Search, User};
 use g3_route_transitions::animated_navigate;
-use g3_ui::Field;
-use g3_ui::{Body, Button, SegmentButton, SegmentGroup, StatusColor};
+use g3_ui::{
+    Avatar, AvatarSize, Button, ButtonFill, Chip, Color, Content, Searchbar, SegmentButton,
+    SegmentGroup, Shelf, Space, Spinner, Stack, StackAlign, Text, TextTone,
+};
 use std::collections::{HashMap, HashSet};
 
 use super::{PageHeader, VideoGrid};
@@ -20,12 +21,10 @@ const SUGGESTION_COUNT: usize = 24;
 pub fn Explore() -> Element {
     let app_state = use_context::<AppState>();
     let search = use_signal(String::new);
-    // Owned by the header's segmented control.
-    let filter_index = app_state.explore_filter_index;
+    let filter = (app_state.explore_filter)();
     let mut results = use_signal(|| None::<SearchResults>);
     let mut searching = use_signal(|| false);
     let needle = search().trim().to_lowercase();
-    let can_search = search().trim().chars().count() >= 2;
     let library = app_state.library();
     let mut videos = library.videos.clone();
     let mut channels = library.channels.clone();
@@ -106,46 +105,71 @@ pub fn Explore() -> Element {
         videos = remote.videos;
         channels = remote.channels;
     }
-    match filter_index() {
-        1 => channels.clear(),
-        2 => videos.clear(),
-        _ => {}
+    match filter {
+        ExploreFilter::Videos => channels.clear(),
+        ExploreFilter::Channels => videos.clear(),
+        ExploreFilter::All => {}
     }
     let result_count = videos.len() + channels.len();
     let search_value = search();
     let next_page = results()
         .filter(|results| results.query.trim().eq_ignore_ascii_case(search().trim()))
         .and_then(|results| results.next_page);
-    // The magnifier inside the field is the search control, so there is no
-    // separate submit button to keep in sync.
-    let run_search = move |_| {
-        let query = search().trim().to_string();
+    // Enter runs the remote search; typing filters the cache as it goes.
+    let run_search = move |query: String| {
+        let query = query.trim().to_string();
         if query.chars().count() < 2 || searching() {
             return;
         }
-        let filter = match filter_index() {
-            1 => "videos",
-            2 => "channels",
-            _ => "all",
-        }
-        .to_string();
         searching.set(true);
         spawn(async move {
-            match search_catalog(query, filter).await {
+            match search_catalog(query, filter.query().to_string()).await {
                 Ok(found) => {
                     app_state.ingest_search_results(&found);
                     if !found.remote_available {
                         app_state.show_toast(
                             "Showing cached matches — remote source is unavailable",
-                            StatusColor::Warning,
+                            Color::Warning,
                         );
                     }
                     results.set(Some(found));
                 }
-                Err(_) => app_state.show_toast(
-                    "Server is offline — showing cached matches",
-                    StatusColor::Warning,
-                ),
+                Err(_) => app_state
+                    .show_toast("Server is offline — showing cached matches", Color::Warning),
+            }
+            searching.set(false);
+        });
+    };
+    let has_next_page = next_page.is_some();
+    let load_more = move |_| {
+        let Some(token) = next_page.clone() else {
+            return;
+        };
+        let query = search().trim().to_string();
+        searching.set(true);
+        spawn(async move {
+            match search_catalog_page(query, filter.query().to_string(), token).await {
+                Ok(page) => {
+                    app_state.ingest_search_results(&page);
+                    results.with_mut(|current| {
+                        if let Some(current) = current.as_mut() {
+                            for video in page.videos {
+                                if !current.videos.iter().any(|item| item.id == video.id) {
+                                    current.videos.push(video);
+                                }
+                            }
+                            for channel in page.channels {
+                                if !current.channels.iter().any(|item| item.id == channel.id) {
+                                    current.channels.push(channel);
+                                }
+                            }
+                            current.next_page = page.next_page;
+                        }
+                    });
+                }
+                Err(_) => {
+                    app_state.show_toast("Could not load more search results", Color::Warning)
+                }
             }
             searching.set(false);
         });
@@ -154,68 +178,47 @@ pub fn Explore() -> Element {
     rsx! {
         PageHeader {
             toolbar: rsx! {
-                SegmentGroup { active: app_state.explore_filter_index,
-                    SegmentButton { index: 0, "All" }
-                    SegmentButton { index: 1, "Videos" }
-                    SegmentButton { index: 2, "Channels" }
+                SegmentGroup { value: app_state.explore_filter, aria_label: "Search for",
+                    for option in ExploreFilter::ALL {
+                        SegmentButton { key: "{option.label()}", value: option, "{option.label()}" }
+                    }
                 }
             },
         }
-        Body { padding: false,
-            main { class: "page explore-page",
-                div { class: "explore-search-stack",
-                    div { class: "explore-search",
-                        Field {
-                            label: "".to_string(),
-                            value: search,
-                            placeholder: "Search videos and channels".to_string(),
-                            end: rsx! {
-                                button {
-                                    class: "explore-search-submit",
-                                    r#type: "button",
-                                    aria_label: "Search".to_string(),
-                                    disabled: searching() || !can_search,
-                                    onclick: run_search,
-                                    if searching() {
-                                        span { class: "explore-search-spinner" }
-                                    } else {
-                                        Search { size: 19 }
-                                    }
-                                }
-                            },
-                        }
+        Content {
+            Stack { gap: Space::Md,
+                Stack { horizontal: true, gap: Space::Sm, align: StackAlign::Center,
+                    Searchbar {
+                        class: "min-w-0 flex-1",
+                        value: search,
+                        placeholder: "Search videos and channels",
+                        debounce_ms: 0,
+                        on_submit: run_search,
+                    }
+                    if searching() {
+                        Spinner {}
                     }
                 }
-                if !needle.is_empty() {
-                    p { class: "search-summary", "{result_count} results for “{search_value}”" }
-                } else {
-                    p { class: "search-summary search-context", "Unwatched recents, mixed with channels you watch often" }
+                Text { tone: TextTone::Secondary,
+                    if needle.is_empty() {
+                        "Unwatched recents, mixed with channels you watch often"
+                    } else {
+                        "{result_count} results for “{search_value}”. Press Enter to search online."
+                    }
                 }
                 if !channels.is_empty() {
-                    section { class: "explore-channels",
-                        div { class: "subsection-heading",
-                            h3 { "Channels" }
-                            span { "{channels.len()} found" }
-                        }
-                        div { class: "channel-result-row",
-                            for channel in channels {
-                                {
-                                    let channel_id = channel.id.clone();
-                                    rsx! {
-                                        button {
-                                            class: "channel-result",
-                                            key: "{channel.id}",
-                                            onclick: move |_| { { let v = channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
-                                            if let Some(avatar_url) = channel.avatar_url {
-                                                img { src: "{avatar_url}", alt: "", loading: "lazy" }
-                                            } else {
-                                                span { class: "channel-avatar channel-avatar-fallback", User { size: 18 } }
-                                            }
-                                            span {
-                                                strong { "{channel.name}" }
-                                                small { "{channel.handle}" }
-                                            }
-                                        }
+                    Shelf { title: "Channels", gap: Space::Sm,
+                        for channel in channels {
+                            {
+                                let id = channel.id.clone();
+                                rsx! {
+                                    Chip {
+                                        key: "{channel.id}",
+                                        start: rsx! {
+                                            Avatar { name: channel.name.clone(), src: channel.avatar_url.clone(), size: AvatarSize::Sm }
+                                        },
+                                        onclick: move |_| { spawn(animated_navigate(Route::ChannelDetail { id: id.clone() })); },
+                                        "{channel.name}"
                                     }
                                 }
                             }
@@ -223,50 +226,14 @@ pub fn Explore() -> Element {
                     }
                 }
                 VideoGrid { videos, empty_message: "No matches yet. Check the source connection or try another search.".to_string() }
-                if let Some(next_page) = next_page {
-                    div { class: "load-more-row",
+                if has_next_page {
+                    Stack { align: StackAlign::Center,
                         Button {
-                            style: g3_ui::ButtonStyle::Neutral,
-                            disabled: searching(),
-                            onclick: move |_| {
-                                let query = search().trim().to_string();
-                                let filter = match filter_index() {
-                                    1 => "videos",
-                                    2 => "channels",
-                                    _ => "all",
-                                }
-                                .to_string();
-                                let token = next_page.clone();
-                                searching.set(true);
-                                spawn(async move {
-                                    match search_catalog_page(query, filter, token).await {
-                                        Ok(page) => {
-                                            app_state.ingest_search_results(&page);
-                                            results.with_mut(|current| {
-                                                if let Some(current) = current.as_mut() {
-                                                    for video in page.videos {
-                                                        if !current.videos.iter().any(|item| item.id == video.id) {
-                                                            current.videos.push(video);
-                                                        }
-                                                    }
-                                                    for channel in page.channels {
-                                                        if !current.channels.iter().any(|item| item.id == channel.id) {
-                                                            current.channels.push(channel);
-                                                        }
-                                                    }
-                                                    current.next_page = page.next_page;
-                                                }
-                                            });
-                                        }
-                                        Err(_) => app_state.show_toast(
-                                            "Could not load more search results",
-                                            StatusColor::Warning,
-                                        ),
-                                    }
-                                    searching.set(false);
-                                });
-                            },
-                            if searching() { "Loading…" } else { "Load more results" }
+                            fill: ButtonFill::Outline,
+                            color: Color::Neutral,
+                            loading: searching(),
+                            onclick: load_more,
+                            "Load more results"
                         }
                     }
                 }

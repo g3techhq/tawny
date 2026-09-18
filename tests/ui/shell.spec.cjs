@@ -16,10 +16,11 @@ test.describe("Tawny application shell", () => {
   test("adapts primary navigation to the viewport", async ({ appPage }) => {
     await expectResponsiveNavigation(appPage, primaryTabs);
     await expectNoHorizontalScroll(appPage);
-    await expect(appPage.getByRole("tab", { name: "Feed", exact: true })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await expect(
+      appPage
+        .getByRole("navigation", { name: "Primary navigation" })
+        .getByRole("button", { name: "Feed", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   test("navigates every primary destination and preserves selected state", async ({ appPage }) => {
@@ -31,10 +32,12 @@ test.describe("Tawny application shell", () => {
     ];
 
     for (const [label, route] of destinations) {
-      const tab = appPage.getByRole("tab", { name: label, exact: true });
+      const tab = appPage
+        .getByRole("navigation", { name: "Primary navigation" })
+        .getByRole("button", { name: label, exact: true });
       await tab.click();
       await expect(appPage).toHaveURL(route);
-      await expect(tab).toHaveAttribute("aria-selected", "true");
+      await expect(tab).toHaveAttribute("aria-current", "page");
       await expectNoHorizontalScroll(appPage);
     }
   });

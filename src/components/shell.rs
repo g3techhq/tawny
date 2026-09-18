@@ -1,14 +1,18 @@
 use crate::{app::Route, state::AppState};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
-    ChevronLeft, History, House, List as ListIcon, ListVideo, Play, Search, Settings, Users,
+    History, House, List as ListIcon, ListVideo, Play, Search, Settings, Users,
 };
 #[cfg(target_os = "android")]
 use g3_native_plugins::NativePlugins;
 use g3_route_transitions::{
-    animated_go_back, animated_navigate, use_native_back_navigation_with_interception,
+    RouteTransitionPage, animated_back_or_navigate, animated_navigate,
+    use_native_back_navigation_with_interception,
 };
-use g3_ui::{Button, ButtonStyle, Header, Navbar, NavbarTab, NavbarTabBar};
+use g3_ui::{
+    AdaptiveNav, BackButton, Button, ButtonFill, Color, Header, NavItem, Space, Stack, StackAlign,
+    TabLayout, Text, TextVariant, use_toast,
+};
 
 use super::PersistentPlayer;
 
@@ -69,7 +73,7 @@ fn NativeBackCoordinator() -> Element {
                 // sheet has no scrim to click, so every g3 sheet carries a
                 // hidden dismiss control and Back uses that instead.
                 const dismiss = [
-                    ...document.querySelectorAll('.g3-sheet.g3-sheet-open [data-g3-sheet-dismiss]'),
+                    ...document.querySelectorAll('[data-g3-sheet-dismiss]'),
                 ].pop();
                 if (dismiss) {
                     event.preventDefault();
@@ -114,56 +118,46 @@ fn NativeMediaCoordinator() -> Element {
 fn NativeMediaCoordinator() -> Element {
     rsx! {}
 }
-/// The bar every page renders for itself.
-///
-/// The shell used to own a single header and swap its title per route. That bar
-/// belonged to the shell, so it stayed put while the page slid out from under
-/// it, which read as the content sliding behind fixed furniture. Giving each
-/// page its own header lets the bar travel with the page it describes.
+/// The bar every page renders for itself, so it travels with the page it
+/// describes rather than staying put while the page slides out from under it.
 #[component]
 pub fn PageHeader(
     /// Blank for pages that lead with their own title block, such as a channel.
     title: Option<String>,
-    /// Supplied by pages that were navigated into: renders a back affordance in
-    /// place of the brand lockup, and is the destination used when the page was
-    /// deep-linked and has no history to pop.
+    /// Supplied by pages that were navigated into: renders Back in place of the
+    /// brand lockup, and is the destination used when the page was deep-linked
+    /// and has no history to pop.
     back_to: Option<Route>,
     /// Optional segmented control rendered under the bar.
     toolbar: Option<Element>,
-    /// Page-specific content aligned with the header's trailing controls.
-    /// Detail pages use this for quiet context that belongs beside the title,
-    /// not in the content body's first row.
+    /// Page-specific content beside the header's trailing controls.
     end_slot: Option<Element>,
 ) -> Element {
     let route: Route = use_route();
     let app_state = use_context::<AppState>();
     // All three are one group of peers presented over the page that launched
-    // them. Once any of them is up, the group has done its job - offering it
-    // again from inside itself is just chrome the sheet has to carry.
+    // them. Once any of them is up, offering the group again from inside
+    // itself is just chrome the sheet has to carry.
     let show_global_actions = !is_auxiliary_route(&route);
 
-    let start_button = match back_to {
+    let start = match back_to {
         Some(home) => rsx! {
-            Button {
-                style: ButtonStyle::Clear,
-                aria_label: "Back".to_string(),
-                class: "icon-button",
+            // Popping keeps the two back affordances agreeing; the route is
+            // only a fallback for a deep link with nothing to pop.
+            BackButton {
                 onclick: move |_| {
-                    // Popping keeps the two back affordances agreeing. Pushing
-                    // the parent instead left the detail page ahead in history,
-                    // so the browser's back button walked straight back into
-                    // the page the user had just left. The route is only a
-                    // fallback, for arriving by deep link with nothing to pop.
-                    let home = home.clone();
-                    spawn(async move { animated_go_back(home).await; });
+                    spawn(animated_back_or_navigate(home.clone()));
                 },
-                ChevronLeft { size: 22 }
             }
         },
         None => rsx! {
-            div { class: "brand-lockup",
-                span { class: "brand-mark", Play { size: 16, fill: "currentColor" } }
-                span { class: "header-eyebrow", "{section_label(&route)}" }
+            Stack { horizontal: true, gap: Space::Sm, align: StackAlign::Center, class: "px-2",
+                span {
+                    class: "grid size-7 place-items-center rounded-lg",
+                    style: "background: var(--g3-color-accent); color: var(--g3-color-on-accent);",
+                    Play { size: 15, fill: "currentColor" }
+                }
+                Text { variant: TextVariant::Overline, color: Color::Accent, "{section_label(&route)}" }
             }
         },
     };
@@ -171,41 +165,45 @@ pub fn PageHeader(
     rsx! {
         Header {
             title: title.unwrap_or_default(),
-            class: "tawny-header",
-            start_button,
-            end_button: rsx! {
-                div { class: "header-actions",
-                    if let Some(end_slot) = end_slot {
-                        {end_slot}
+            start,
+            end: rsx! {
+                if let Some(end_slot) = end_slot {
+                    {end_slot}
+                }
+                if show_global_actions {
+                    Button {
+                        fill: ButtonFill::Clear,
+                        aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
+                        onclick: move |_| { spawn(animated_navigate(Route::QueuePage {})); },
+                        ListVideo { size: 20 }
                     }
-                    if show_global_actions {
-                        Button {
-                            style: ButtonStyle::Clear,
-                            aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
-                            class: "icon-button",
-                            onclick: move |_| { spawn(async move { animated_navigate(Route::QueuePage {}).await; }); },
-                            ListVideo { size: 19 }
-                        }
-                        Button {
-                            style: ButtonStyle::Clear,
-                            aria_label: "History".to_string(),
-                            class: "icon-button header-history-button",
-                            onclick: move |_| { spawn(async move { animated_navigate(Route::HistoryPage {}).await; }); },
-                            History { size: 19 }
-                        }
-                        Button {
-                            style: ButtonStyle::Clear,
-                            aria_label: "Settings".to_string(),
-                            class: "icon-button",
-                            onclick: move |_| { spawn(async move { animated_navigate(Route::SettingsPage {}).await; }); },
-                            Settings { size: 20 }
-                        }
+                    Button {
+                        fill: ButtonFill::Clear,
+                        aria_label: "History",
+                        onclick: move |_| { spawn(animated_navigate(Route::HistoryPage {})); },
+                        History { size: 20 }
+                    }
+                    Button {
+                        fill: ButtonFill::Clear,
+                        aria_label: "Settings",
+                        onclick: move |_| { spawn(animated_navigate(Route::SettingsPage {})); },
+                        Settings { size: 20 }
                     }
                 }
             },
             toolbar,
         }
     }
+}
+
+/// Hands g3-ui's toast queue to the app state, which is provided above the
+/// `AppWrapper` that owns the queue.
+#[component]
+fn ToasterBridge() -> Element {
+    let mut app_state = use_context::<AppState>();
+    let toaster = use_toast();
+    use_hook(move || app_state.toaster.set(Some(toaster)));
+    rsx! {}
 }
 
 #[component]
@@ -229,48 +227,58 @@ pub fn AppShell() -> Element {
     if is_auxiliary {
         shell_class.push_str(" tawny-shell-auxiliary");
     }
+    // A sheet route carries the overlay region itself, and must not also
+    // render a page region: that would be captured separately and leave the
+    // rising sheet without its content.
+    let is_sheet = player_expanded || is_auxiliary;
 
     rsx! {
         NativeMediaCoordinator {}
-        // The navbar is the base a sheet covers, and g3-ui marks it as such.
-        // Nothing may wrap it in another snapshot marker: a named descendant is
-        // lifted out of its ancestor, so an outer full-page marker ends up
-        // naming a region that contains only the lifted base, and paints as a
-        // bare background behind the sheet.
         NativeBackCoordinator {}
-        Navbar { class: shell_class,
+        ToasterBridge {}
+        // The tab layout is the base region a sheet covers. Nothing may wrap
+        // it in another snapshot region: a named descendant is lifted out of
+        // its ancestor, so the outer region would contain only the lifted
+        // base and paint as a bare background behind the sheet.
+        TabLayout { class: shell_class,
             // Mounted here rather than inside a page so playback survives
             // navigation. Minimized it is fixed and out of flow; expanded it is
             // in flow above the watch page's own body.
             PersistentPlayer { expanded: player_expanded }
-            Outlet::<Route> {}
-            // Always rendered: the desktop rail is permanent chrome, and only
-            // the compact bottom bar gets out of a sheet's way. Hiding it in
-            // CSS keeps that a layout decision rather than a routing one.
-            NavbarTabBar { aria_label: "Primary navigation".to_string(),
-                NavbarTab {
-                    label: "Feed".to_string(),
+            if is_sheet {
+                Outlet::<Route> {}
+            } else {
+                // The page's own header and body, captured as one image, so
+                // the bar slides with the page it belongs to.
+                RouteTransitionPage { Outlet::<Route> {} }
+            }
+            // Always rendered: the wide-layout rail is permanent chrome, and
+            // only the compact bottom bar gets out of a sheet's way. Hiding it
+            // in CSS keeps that a layout decision rather than a routing one.
+            AdaptiveNav { aria_label: "Primary navigation",
+                NavItem {
+                    label: "Feed",
                     selected: matches!(route, Route::Feed {}),
-                    icon: rsx! { House { size: 20 } },
-                    onclick: move |_| { spawn(async move { animated_navigate(Route::Feed {}).await; }); },
+                    icon: rsx! { House { size: 22 } },
+                    onclick: move |_| { spawn(animated_navigate(Route::Feed {})); },
                 }
-                NavbarTab {
-                    label: "Playlists".to_string(),
+                NavItem {
+                    label: "Playlists",
                     selected: matches!(route, Route::Playlists {} | Route::PlaylistDetail { .. }),
-                    icon: rsx! { ListIcon { size: 20 } },
-                    onclick: move |_| { spawn(async move { animated_navigate(Route::Playlists {}).await; }); },
+                    icon: rsx! { ListIcon { size: 22 } },
+                    onclick: move |_| { spawn(animated_navigate(Route::Playlists {})); },
                 }
-                NavbarTab {
-                    label: "Search".to_string(),
+                NavItem {
+                    label: "Search",
                     selected: matches!(route, Route::Explore {}),
-                    icon: rsx! { Search { size: 20 } },
-                    onclick: move |_| { spawn(async move { animated_navigate(Route::Explore {}).await; }); },
+                    icon: rsx! { Search { size: 22 } },
+                    onclick: move |_| { spawn(animated_navigate(Route::Explore {})); },
                 }
-                NavbarTab {
-                    label: "Subscriptions".to_string(),
+                NavItem {
+                    label: "Subscriptions",
                     selected: matches!(route, Route::Subscriptions {} | Route::ChannelDetail { .. }),
-                    icon: rsx! { Users { size: 20 } },
-                    onclick: move |_| { spawn(async move { animated_navigate(Route::Subscriptions {}).await; }); },
+                    icon: rsx! { Users { size: 22 } },
+                    onclick: move |_| { spawn(animated_navigate(Route::Subscriptions {})); },
                 }
             }
         }

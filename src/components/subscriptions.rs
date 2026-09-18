@@ -1,57 +1,59 @@
 use crate::{app::Route, models::Channel, state::AppState};
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Check, Layers, Plus, Search, Trash2, User};
+use dioxus_icons::lucide::{Check, Plus, Trash2, Users};
 use g3_route_transitions::animated_navigate;
-use g3_ui::{Body, Button, ButtonSize, ButtonStyle, Card, Field, Modal, StatusColor};
+use g3_ui::{
+    Avatar, AvatarSize, Button, ButtonFill, ButtonSize, Card, Color, Content, EmptyState, Grid,
+    GridColumns, Input, Item, List, ListLines, ListVariant, Modal, Searchbar, Shelf, Space, Stack,
+    Text, TextTone,
+};
 
 use super::PageHeader;
 
-/// One channel tile, used by both the subscribed grid and the suggestions row.
+/// One channel tile, used by both the subscribed grid and the suggestions.
 #[component]
-fn ChannelCard(channel: Channel) -> Element {
+pub fn ChannelCard(channel: Channel) -> Element {
     let app_state = use_context::<AppState>();
     let channel_id = channel.id.clone();
     let open_channel_id = channel.id.clone();
     let is_subscribed = channel.subscribed;
-    let avatar_url = channel.avatar_url.clone();
+    let subscribers = channel.subscriber_count.trim().to_string();
 
     rsx! {
-        article {
-            class: "channel-card",
-            role: "button",
-            tabindex: "0",
-            onclick: move |_| { { let v = open_channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
-            if let Some(avatar_url) = avatar_url {
-                img {
-                    class: "channel-avatar channel-avatar-large",
-                    src: "{avatar_url}",
-                    alt: "{channel.name}",
-                    loading: "lazy",
+        Card {
+            title: channel.name.clone(),
+            subtitle: (!subscribers.is_empty()).then(|| format!("{subscribers} subscribers")),
+            class: "h-full [&_.g3-card-title]:line-clamp-1",
+            start: rsx! {
+                Avatar { name: channel.name.clone(), src: channel.avatar_url.clone() }
+            },
+            onclick: move |_| { spawn(animated_navigate(Route::ChannelDetail { id: open_channel_id.clone() })); },
+            end: rsx! {
+                Button {
+                    size: ButtonSize::Sm,
+                    fill: if is_subscribed { ButtonFill::Outline } else { ButtonFill::Solid },
+                    color: if is_subscribed { Color::Neutral } else { Color::Accent },
+                    "aria-pressed": if is_subscribed { "true" } else { "false" },
+                    start: is_subscribed.then(|| rsx! { Check { size: 15 } }),
+                    onclick: move |_| {
+                        if let Some(now_subscribed) = app_state.toggle_subscription(&channel_id) {
+                            let message = if now_subscribed { "Subscribed" } else { "Unsubscribed" };
+                            app_state.show_toast(message, Color::Neutral);
+                        }
+                    },
+                    if is_subscribed { "Subscribed" } else { "Subscribe" }
                 }
-            } else {
-                div { class: "channel-avatar channel-avatar-large channel-avatar-fallback", User { size: 24 } }
-            }
-            div { class: "channel-card-copy",
-                h3 { "{channel.name}" }
-                if !channel.subscriber_count.trim().is_empty() {
-                    span { "{channel.subscriber_count} subscribers" }
-                }
-            }
-            Button {
-                size: ButtonSize::Sm,
-                class: "channel-subscribe-button",
-                start: if is_subscribed { Some(rsx! { Check { size: 15 } }) } else { None },
-                style: if is_subscribed { ButtonStyle::Neutral } else { ButtonStyle::Solid },
-                onclick: move |event: MouseEvent| {
-                    event.stop_propagation();
-                    if let Some(now_subscribed) = app_state.toggle_subscription(&channel_id) {
-                        let message = if now_subscribed { "Subscribed" } else { "Unsubscribed" };
-                        app_state.show_toast(message, StatusColor::Neutral);
-                    }
-                },
-                if is_subscribed { "Subscribed" } else { "Subscribe" }
-            }
+            },
         }
+    }
+}
+
+/// "1 channel", "3 channels".
+fn channel_count(count: usize) -> String {
+    if count == 1 {
+        "1 channel".to_string()
+    } else {
+        format!("{count} channels")
     }
 }
 
@@ -60,7 +62,7 @@ pub fn Subscriptions() -> Element {
     let app_state = use_context::<AppState>();
     let mut create_open = use_signal(|| false);
     let mut group_name = use_signal(String::new);
-    // Which group's membership sheet is open.
+    // Which group's membership editor is open.
     let mut editing_group = use_signal(|| None::<String>);
     let mut editor_open = use_signal(|| false);
     let mut group_search = use_signal(String::new);
@@ -98,177 +100,140 @@ pub fn Subscriptions() -> Element {
 
     rsx! {
         PageHeader {}
-        Body { padding: false,
-            main { class: "page subscriptions-page",
-                section { class: "subscription-groups",
-                    Card { title: "Groups".to_string(),
-                        if groups.is_empty() {
-                            p { class: "group-empty-copy", "Group channels to filter your feed with one tap." }
-                        } else {
-                            div { class: "group-card-list",
-                                for group in groups.clone() {
-                                    {
-                                        let group_id = group.id.clone();
-                                        let delete_id = group.id.clone();
-                                        let members = group
-                                            .channel_ids
-                                            .iter()
-                                            .filter_map(|id| subscribed.iter().find(|channel| &channel.id == id))
-                                            .cloned()
-                                            .collect::<Vec<_>>();
-                                        let member_count = group.channel_ids.len();
-                                        rsx! {
-                                            div { class: "group-row", key: "{group.id}",
-                                                div { class: "group-row-copy",
-                                                    strong { "{group.name}" }
-                                                    span {
-                                                        if member_count == 1 {
-                                                            "1 channel"
-                                                        } else {
-                                                            "{member_count} channels"
-                                                        }
-                                                    }
-                                                }
+        Content {
+            Stack { gap: Space::Lg,
+                Card {
+                    title: "Groups",
+                    subtitle: "Group channels to filter your feed with one tap.",
+                    end: rsx! {
+                        Button {
+                            size: ButtonSize::Sm,
+                            fill: ButtonFill::Clear,
+                            start: rsx! { Plus { size: 16 } },
+                            onclick: move |_| create_open.set(true),
+                            "New group"
+                        }
+                    },
+                    if !groups.is_empty() {
+                        List { variant: ListVariant::Filled, lines: ListLines::Inset,
+                            for group in groups.clone() {
+                                {
+                                    let group_id = group.id.clone();
+                                    let delete_id = group.id.clone();
+                                    let members = group
+                                        .channel_ids
+                                        .iter()
+                                        .filter_map(|id| subscribed.iter().find(|channel| &channel.id == id))
+                                        .cloned()
+                                        .collect::<Vec<_>>();
+                                    rsx! {
+                                        Item {
+                                            key: "{group.id}",
+                                            label: group.name.clone(),
+                                            description: channel_count(group.channel_ids.len()),
+                                            onclick: move |_| {
+                                                editing_group.set(Some(group_id.clone()));
+                                                group_search.set(String::new());
+                                                editor_open.set(true);
+                                            },
+                                            end: rsx! {
                                                 // Faces make a group's contents readable at a glance.
-                                                div { class: "group-row-faces",
-                                                    for member in members.iter().take(6) {
-                                                        if let Some(avatar_url) = member.avatar_url.clone() {
-                                                            img {
-                                                                class: "channel-avatar channel-avatar-fallback",
-                                                                key: "{member.id}",
-                                                                src: "{avatar_url}",
-                                                                alt: "{member.name}",
-                                                                title: "{member.name}",
-                                                                loading: "lazy",
-                                                            }
-                                                        } else {
-                                                            div {
-                                                                class: "channel-avatar",
-                                                                key: "{member.id}",
-                                                                title: "{member.name}",
-                                                                User { size: 16 }
-                                                            }
+                                                div { class: "flex -space-x-2", aria_hidden: "true",
+                                                    for member in members.iter().take(5) {
+                                                        Avatar {
+                                                            key: "{member.id}",
+                                                            name: member.name.clone(),
+                                                            src: member.avatar_url.clone(),
+                                                            size: AvatarSize::Sm,
                                                         }
                                                     }
                                                 }
                                                 Button {
+                                                    fill: ButtonFill::Clear,
+                                                    color: Color::Danger,
                                                     size: ButtonSize::Sm,
-                                                    style: ButtonStyle::Neutral,
-                                                    onclick: move |_| {
-                                                        editing_group.set(Some(group_id.clone()));
-                                                        group_search.set(String::new());
-                                                        editor_open.set(true);
-                                                    },
-                                                    "Edit"
-                                                }
-                                                button {
-                                                    class: "group-row-delete",
                                                     aria_label: "Delete {group.name}",
-                                                    onclick: move |event: MouseEvent| {
-                                                        event.stop_propagation();
+                                                    onclick: move |_| {
                                                         if let Some(name) = app_state.delete_subscription_group(&delete_id) {
-                                                            app_state.show_toast(format!("Deleted {name}"), StatusColor::Neutral);
+                                                            app_state.show_toast(format!("Deleted {name}"), Color::Neutral);
                                                         }
                                                     },
-                                                    Trash2 { size: 15 }
+                                                    Trash2 { size: 16 }
                                                 }
-                                            }
+                                            },
                                         }
                                     }
                                 }
                             }
                         }
-                        // Creating a group belongs with the groups, not in a page header.
-                        Button {
-                            expand: true,
-                            style: ButtonStyle::Neutral,
-                            start: rsx! { Plus { size: 16 } },
-                            onclick: move |_| create_open.set(true),
-                            "New group"
-                        }
                     }
                 }
 
-                div { class: "subsection-heading subscription-heading",
-                    h3 { Layers { size: 18 } "Subscriptions" }
-                    span { class: "subscription-count", "{subscribed.len()}" }
-                }
-                if subscribed.is_empty() {
-                    div { class: "empty-state",
-                        div { class: "empty-icon", User { size: 25 } }
-                        h3 { "No subscriptions yet" }
-                        p { "You have not subscribed to any channels yet." }
-                    }
-                } else {
-                    div { class: "channel-grid",
-                        for channel in subscribed.clone() {
-                            ChannelCard { key: "{channel.id}", channel }
+                Stack { gap: Space::Sm,
+                    // Styled as the Suggested shelf title below, so the two
+                    // sections read as peers.
+                    Text { variant: g3_ui::TextVariant::Overline, "Subscriptions · {subscribed.len()}" }
+                    if subscribed.is_empty() {
+                        EmptyState {
+                            title: "No subscriptions yet",
+                            icon: rsx! { Users { size: 40 } },
+                            "Subscribe to a channel from search or a video to see it here."
+                        }
+                    } else {
+                        Grid { columns: GridColumns::Fit(20.0),
+                            for channel in subscribed.clone() {
+                                ChannelCard { key: "{channel.id}", channel }
+                            }
                         }
                     }
                 }
 
                 if !suggested.is_empty() {
-                    div { class: "subsection-heading",
-                        h3 { "Suggested" }
-                        span { "From your searches and watch history" }
-                    }
-                    div { class: "channel-grid",
+                    Shelf { title: "Suggested", gap: Space::Md,
+                        end: rsx! { Text { tone: TextTone::Secondary, "From your searches and watch history" } },
                         for channel in suggested {
-                            ChannelCard { key: "{channel.id}", channel }
+                            div { key: "{channel.id}", class: "w-72",
+                                ChannelCard { channel }
+                            }
                         }
                     }
                 }
             }
 
             // Membership editing lives in one place, so adding a channel to a
-            // specific group does not mean hunting for that channel's tile.
-            // A modal rather than a sheet: this is a focused editing task with a
-            // search field and a long list, not a short menu of choices, and it
-            // should not have to share the screen with the page behind it.
+            // specific group does not mean hunting for that channel's tile. A
+            // modal rather than a sheet: this is a focused editing task with a
+            // search field and a long list.
             Modal {
                 open: editor_open,
                 title: editing_group_name.clone(),
-                description: rsx! { "Choose which channels belong to this group" },
-                class: "group-editor-modal".to_string(),
                 actions: rsx! {
                     Button { onclick: move |_| editor_open.set(false), "Done" }
                 },
-                Field {
-                    label: "Search channels".to_string(),
-                    value: group_search,
-                    r#type: "search".to_string(),
-                    placeholder: "Search subscribed channels".to_string(),
-                    class: "group-editor-search",
-                    end: rsx! { Search { size: 18 } },
-                }
-                if subscribed.is_empty() {
-                    p { class: "detail-muted", "Subscribe to a channel first." }
-                } else if subscribed_for_editor.is_empty() {
-                    p { class: "group-editor-empty", "No subscribed channels match your search." }
-                } else {
-                    div { class: "group-editor-list",
-                        for channel in subscribed_for_editor {
-                            {
-                                let channel_id = channel.id.clone();
-                                let included = editing_members.contains(&channel.id);
-                                let group_id = editing.clone().unwrap_or_default();
-                                rsx! {
-                                    button {
-                                        class: if included { "group-editor-row included" } else { "group-editor-row" },
-                                        key: "{channel.id}",
-                                        onclick: move |_| {
-                                            app_state.toggle_channel_in_group(&group_id, &channel_id);
-                                        },
-                                        if let Some(avatar_url) = channel.avatar_url.clone() {
-                                            img { class: "channel-avatar", src: "{avatar_url}", alt: "", loading: "lazy" }
-                                        } else {
-                                            div { class: "channel-avatar channel-avatar-fallback", User { size: 16 } }
-                                        }
-                                        span { "{channel.name}" }
-                                        if included {
-                                            Check { size: 17 }
-                                        } else {
-                                            Plus { size: 17 }
+                Stack {
+                    Text { tone: TextTone::Secondary, "Choose which channels belong to this group." }
+                    Searchbar { value: group_search, placeholder: "Search subscribed channels", debounce_ms: 0 }
+                    if subscribed.is_empty() {
+                        Text { tone: TextTone::Secondary, "Subscribe to a channel first." }
+                    } else if subscribed_for_editor.is_empty() {
+                        Text { tone: TextTone::Secondary, "No subscribed channels match your search." }
+                    } else {
+                        List { lines: ListLines::Inset,
+                            for channel in subscribed_for_editor {
+                                {
+                                    let channel_id = channel.id.clone();
+                                    let group_id = editing.clone().unwrap_or_default();
+                                    rsx! {
+                                        Item {
+                                            key: "{channel.id}",
+                                            label: channel.name.clone(),
+                                            checked: editing_members.contains(&channel.id),
+                                            start: rsx! {
+                                                Avatar { name: channel.name.clone(), src: channel.avatar_url.clone(), size: AvatarSize::Sm }
+                                            },
+                                            onclick: move |_| {
+                                                app_state.toggle_channel_in_group(&group_id, &channel_id);
+                                            },
                                         }
                                     }
                                 }
@@ -280,9 +245,9 @@ pub fn Subscriptions() -> Element {
 
             Modal {
                 open: create_open,
-                title: "New group".to_string(),
+                title: "New group",
                 actions: rsx! {
-                    Button { style: ButtonStyle::Clear, onclick: move |_| create_open.set(false), "Cancel" }
+                    Button { fill: ButtonFill::Clear, onclick: move |_| create_open.set(false), "Cancel" }
                     Button {
                         disabled: group_name().trim().is_empty(),
                         onclick: move |_| {
@@ -291,15 +256,15 @@ pub fn Subscriptions() -> Element {
                             app_state.create_subscription_group(name.clone());
                             group_name.set(String::new());
                             create_open.set(false);
-                            app_state.show_toast(format!("Created {name}"), StatusColor::Success);
+                            app_state.show_toast(format!("Created {name}"), Color::Success);
                         },
                         "Create"
                     }
                 },
-                Field {
-                    label: "Group name".to_string(),
+                Input {
+                    label: "Group name",
                     value: group_name,
-                    placeholder: "Documentaries".to_string(),
+                    placeholder: "Documentaries",
                     autofocus: true,
                 }
             }

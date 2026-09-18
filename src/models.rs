@@ -514,6 +514,58 @@ pub enum FeedFilter {
     Live,
 }
 
+impl FeedFilter {
+    pub const ALL: [Self; 4] = [Self::All, Self::Videos, Self::Shorts, Self::Live];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Videos => "Videos",
+            Self::Shorts => "Shorts",
+            Self::Live => "Live",
+        }
+    }
+
+    /// Whether a video belongs under this filter.
+    pub fn accepts(self, video: &Video) -> bool {
+        match self {
+            Self::All => true,
+            Self::Videos => !video.is_live && !video.is_short,
+            Self::Shorts => video.is_short && !video.is_live,
+            Self::Live => video.is_live,
+        }
+    }
+}
+
+/// What a search looks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExploreFilter {
+    All,
+    Videos,
+    Channels,
+}
+
+impl ExploreFilter {
+    pub const ALL: [Self; 3] = [Self::All, Self::Videos, Self::Channels];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Videos => "Videos",
+            Self::Channels => "Channels",
+        }
+    }
+
+    /// The server's name for the filter.
+    pub fn query(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Videos => "videos",
+            Self::Channels => "channels",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DurationFilter {
     Short,
@@ -645,23 +697,6 @@ impl PlaylistKind {
             Self::All => "All",
             Self::Videos => "Videos",
             Self::Shorts => "Shorts",
-        }
-    }
-
-    /// Position in the segmented control, which speaks in indices.
-    pub fn index(self) -> usize {
-        match self {
-            Self::All => 0,
-            Self::Videos => 1,
-            Self::Shorts => 2,
-        }
-    }
-
-    pub fn from_index(index: usize) -> Self {
-        match index {
-            1 => Self::Videos,
-            2 => Self::Shorts,
-            _ => Self::All,
         }
     }
 
@@ -937,10 +972,6 @@ impl SwipeActionKind {
             Self::Share => "Share",
             Self::MarkWatched => "Mark watched",
         }
-    }
-
-    pub fn from_label(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.label() == label)
     }
 }
 
@@ -1743,13 +1774,6 @@ impl SponsorAction {
             Self::Off => "Ignore",
         }
     }
-
-    pub fn from_label(label: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|action| action.label() == label)
-            .unwrap_or_default()
-    }
 }
 
 /// One segment of one video.
@@ -2090,9 +2114,6 @@ mod tests {
     #[test]
     fn a_default_view_hides_nothing() {
         assert!(!PlaylistView::default().is_filtered());
-        for kind in PlaylistKind::ALL {
-            assert_eq!(PlaylistKind::from_index(kind.index()), kind, "{kind:?}");
-        }
     }
 
     #[test]
