@@ -99,7 +99,7 @@ fn NativeBackCoordinator() -> Element {
     rsx! {}
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 #[component]
 fn NativeMediaCoordinator() -> Element {
     let mut plugins = use_context::<NativePlugins>();
@@ -109,7 +109,7 @@ fn NativeMediaCoordinator() -> Element {
     rsx! {}
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[component]
 fn NativeMediaCoordinator() -> Element {
     rsx! {}

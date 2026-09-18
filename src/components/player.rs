@@ -148,7 +148,29 @@ fn NativePlayerBridges(title: String) -> Element {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+/// iOS keeps only the playback bridges: its picture-in-picture goes through
+/// WebKit's own presentation mode, and nothing asks it to lock orientation.
+/// Starting playback claims the `.playback` audio session that keeps audio
+/// running once the app leaves the foreground.
+#[cfg(target_os = "ios")]
+#[component]
+fn NativePlayerBridges(title: String) -> Element {
+    let mut plugins = use_context::<g3_native_plugins::NativePlugins>();
+    rsx! {
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-playback-start": "",
+            onclick: move |_| { let _ = plugins.media.write().set_playback_active(true, title.clone()); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-playback-stop": "",
+            onclick: move |_| { let _ = plugins.media.write().set_playback_active(false, String::new()); },
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[component]
 fn NativePlayerBridges(title: String) -> Element {
     let _ = title;
