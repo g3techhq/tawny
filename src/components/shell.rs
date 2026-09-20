@@ -6,8 +6,8 @@ use dioxus_icons::lucide::{
 #[cfg(target_os = "android")]
 use g3_native_plugins::NativePlugins;
 use g3_route_transitions::{
-    RouteTransitionPage, animated_back_or_navigate, animated_navigate,
-    use_native_back_navigation_with_interception,
+    ROUTE_TRANSITION_PERSISTENT_CLASS, RouteTransitionPage, animated_back_or_navigate,
+    animated_navigate, use_native_back_navigation_with_interception,
 };
 use g3_ui::{
     AdaptiveNav, BackButton, Button, ButtonFill, Color, Header, NavItem, Space, Stack, StackAlign,
@@ -227,9 +227,8 @@ pub fn AppShell() -> Element {
     if is_auxiliary {
         shell_class.push_str(" tawny-shell-auxiliary");
     }
-    // A sheet route carries the overlay region itself, and must not also
-    // render a page region: that would be captured separately and leave the
-    // rising sheet without its content.
+    // A sheet route carries the overlay region itself and therefore does not
+    // render a page region as well.
     let is_sheet = player_expanded || is_auxiliary;
 
     rsx! {
@@ -240,7 +239,7 @@ pub fn AppShell() -> Element {
         // it in another snapshot region: a named descendant is lifted out of
         // its ancestor, so the outer region would contain only the lifted
         // base and paint as a bare background behind the sheet.
-        TabLayout { class: shell_class, route_transition_base: !is_sheet,
+        TabLayout { class: shell_class,
             // Mounted here rather than inside a page so playback survives
             // navigation. Minimized it is fixed and out of flow; expanded it is
             // in flow above the watch page's own body.
@@ -255,7 +254,9 @@ pub fn AppShell() -> Element {
             // Always rendered: the wide-layout rail is permanent chrome, and
             // only the compact bottom bar gets out of a sheet's way. Hiding it
             // in CSS keeps that a layout decision rather than a routing one.
-            AdaptiveNav { aria_label: "Primary navigation",
+            AdaptiveNav {
+                class: ROUTE_TRANSITION_PERSISTENT_CLASS,
+                aria_label: "Primary navigation",
                 NavItem {
                     label: "Feed",
                     selected: matches!(route, Route::Feed {}),

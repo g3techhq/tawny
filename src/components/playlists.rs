@@ -448,7 +448,6 @@ pub fn PlaylistDetail(id: String) -> Element {
                         disabled: shuffle_run.len() < 2,
                         start: rsx! { Shuffle { size: 17 } },
                         onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
-                        span { class: "playlist-collapse-label", "Shuffle" }
                     }
                     if watched_count > 0 {
                         Button {

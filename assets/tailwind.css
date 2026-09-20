@@ -463,6 +463,68 @@ body {
 button, input, textarea {
   font: inherit;
 }
+.video-card-swipe {
+  min-height: 100%;
+}
+.playlist-actions .g3-btn {
+  white-space: nowrap;
+}
+@container g3-app-shell (width <= 30rem) {
+  .playlist-actions .playlist-collapse-label {
+    display: none;
+  }
+  .playlist-actions .g3-btn {
+    min-width: 2.75rem;
+    padding-inline: 0.625rem;
+  }
+  .playlist-actions .playlist-remove-watched {
+    min-width: 0;
+    font-size: 0.75rem;
+  }
+}
+@media (hover: hover) {
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] {
+    --video-card-thumbnail-height: calc(100cqi * 0.5625);
+    display: block;
+    position: relative;
+    container-type: inline-size;
+    overflow: hidden;
+  }
+  .video-card-swipe.video-card-short.g3-swipe-item[data-mouse-swipe="false"] {
+    --video-card-thumbnail-height: calc(100cqi * 1.7778);
+  }
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] > .g3-swipe-content {
+    width: 100%;
+  }
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] > .g3-swipe-actions {
+    position: absolute;
+    z-index: 4;
+    top: max(0.5rem, calc(var(--video-card-thumbnail-height) / 2 - 1.5rem));
+    bottom: auto;
+    width: 3rem;
+    height: 3rem;
+  }
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] > .g3-swipe-actions-start {
+    left: 0.5rem;
+  }
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] > .g3-swipe-actions-end {
+    right: 0.5rem;
+  }
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] .g3-swipe-action {
+    width: 3rem;
+    min-width: 3rem;
+    height: 3rem;
+    padding: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, #000 28%, transparent);
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(4px);
+  }
+  .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] .g3-swipe-action:hover {
+    background: color-mix(in srgb, #000 56%, transparent);
+  }
+}
 .tawny-shell {
   background: radial-gradient(circle at 15% -10%, rgba(245, 165, 36, 0.075), transparent 25rem), var(--g3-color-bg);
 }
@@ -558,36 +620,6 @@ button, input, textarea {
   border-bottom: 1px solid var(--g3-color-border);
   background: var(--g3-color-card);
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.28);
-  animation: tawny-mini-player-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-@keyframes tawny-mini-player-enter {
-  from {
-    opacity: 0;
-    transform: translateY(0.75rem) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-.video-card-swipe {
-  min-height: 100%;
-}
-.playlist-actions .g3-btn {
-  white-space: nowrap;
-}
-@container g3-app-shell (width <= 30rem) {
-  .playlist-actions .playlist-collapse-label {
-    display: none;
-  }
-  .playlist-actions .g3-btn {
-    min-width: 2.75rem;
-    padding-inline: 0.625rem;
-  }
-  .playlist-actions .playlist-remove-watched {
-    min-width: 0;
-    font-size: 0.75rem;
-  }
 }
 .persistent-player.mini .persistent-player-stage {
   height: 4.15rem;

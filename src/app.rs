@@ -192,10 +192,10 @@ fn ThemedApp() -> Element {
             theme: tawny_theme(appearance),
             mode: component_mode,
             text_selection: false,
-            // The wrapper is the routed overlay region. Root routes lift the
-            // TabLayout base snapshot out of it; sheet routes turn that base
-            // marker off so the same layout becomes the rising overlay while
-            // the navigation rail is captured as persistent chrome.
+            // Routed covers name their own overlay region. Naming the wrapper
+            // as well would produce duplicate `overlay` snapshots and make the
+            // browser abort every sheet/player transition.
+            route_transition_overlay: false,
             // Inside the wrapper so the setup screen is themed. A component
             // adds no DOM node of its own, so passing children through leaves
             // the snapshot structure untouched.
