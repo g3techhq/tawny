@@ -9,7 +9,7 @@ use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
     DividerOrientation, EmptyState, Grid, GridColumns, Img, Input, Modal, SegmentButton,
-    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone, TextVariant,
+    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
 };
 
 use super::{PageHeader, VideoGrid, duration_candidates, use_duration_hydration};
@@ -423,9 +423,6 @@ pub fn PlaylistDetail(id: String) -> Element {
         }
         Content {
             Stack { gap: Space::Md,
-                Text { variant: TextVariant::Caption, tone: TextTone::Secondary,
-                    "{video_count(saved_count)}"
-                }
                 // One row of actions: the two ways to start watching, and the
                 // tidying that acts on the same list. Cleanup stays quiet, and on
                 // the trailing edge, so it is never the thing a thumb lands on.
