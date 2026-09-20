@@ -431,6 +431,7 @@ pub fn PlaylistDetail(id: String) -> Element {
                 // the trailing edge, so it is never the thing a thumb lands on.
                 Stack { class: "playlist-actions", horizontal: true, gap: Space::Sm, align: StackAlign::Center,
                     Button {
+                        class: "playlist-play",
                         aria_label: "Play all",
                         disabled: run.is_empty(),
                         start: rsx! { Play { size: 17, fill: "currentColor" } },
@@ -442,6 +443,7 @@ pub fn PlaylistDetail(id: String) -> Element {
                         span { class: "playlist-collapse-label", "Play all" }
                     }
                     Button {
+                        class: "playlist-icon-only",
                         aria_label: "Shuffle",
                         fill: ButtonFill::Outline,
                         color: Color::Neutral,

@@ -105,53 +105,60 @@ pub fn VideoCard(
     });
     let start_id = video.id.clone();
     let end_id = video.id.clone();
+    let desktop_start_id = video.id.clone();
+    let desktop_end_id = video.id.clone();
     let swipe_id = video.id.clone();
+    let short = short.unwrap_or(false);
 
     rsx! {
         // A swipe files the video into one of two playlists. On a mouse the
-        // gesture gives way to the row's own actions button.
-        SwipeItem {
-            class: if short.unwrap_or(false) {
-                "video-card-swipe video-card-short h-full rounded-[inherit]"
+        // gesture gives way to full-height thumbnail edge actions. Those
+        // desktop controls are separate from the swipe layer so they remain
+        // real, clickable buttons while the touch actions stay hidden.
+        div {
+            class: if short {
+                "video-card-frame video-card-short h-full rounded-[inherit]"
             } else {
-                "video-card-swipe h-full rounded-[inherit]"
+                "video-card-frame h-full rounded-[inherit]"
             },
-            start_behavior: SwipeBehavior::Activate,
-            end_behavior: SwipeBehavior::Activate,
-            mouse_swipe: false,
-            start_actions: rsx! {
-                SwipeAction {
-                    color: Color::Accent,
-                    aria_label: "Add to {start_playlist_name}",
-                    onclick: move |_| app_state.run_swipe_action(&start_id, true),
-                    ListPlus { size: 22 }
-                    span { "{start_playlist_name}" }
-                }
-            },
-            end_actions: rsx! {
-                SwipeAction {
-                    aria_label: "Add to {end_playlist_name}",
-                    onclick: move |_| app_state.run_swipe_action(&end_id, false),
-                    ListPlus { size: 22 }
-                    span { "{end_playlist_name}" }
-                }
-            },
-            on_activate: move |swipe: SwipeState| {
-                app_state.run_swipe_action(&swipe_id, swipe.side == SwipeSide::Start);
-            },
-            Card {
-                variant: CardVariant::Flat,
-                class: "h-full [&_.g3-card-title]:line-clamp-2 [&_.g3-card-title]:text-[0.95rem]",
-                title: video.title.clone(),
-                subtitle,
-                onclick: open,
-                media: rsx! {
-                    div { class: "relative",
-                        Img {
-                            src: video.thumbnail_url.clone(),
-                            alt: "",
-                            aspect_ratio: if short.unwrap_or(false) { "9 / 16" } else { "16 / 9" },
-                        }
+            SwipeItem {
+                class: "video-card-swipe h-full rounded-[inherit]",
+                start_behavior: SwipeBehavior::Activate,
+                end_behavior: SwipeBehavior::Activate,
+                mouse_swipe: false,
+                start_actions: rsx! {
+                    SwipeAction {
+                        color: Color::Accent,
+                        aria_label: "Add to {start_playlist_name}",
+                        onclick: move |_| app_state.run_swipe_action(&start_id, true),
+                        ListPlus { size: 22 }
+                        span { "{start_playlist_name}" }
+                    }
+                },
+                end_actions: rsx! {
+                    SwipeAction {
+                        aria_label: "Add to {end_playlist_name}",
+                        onclick: move |_| app_state.run_swipe_action(&end_id, false),
+                        ListPlus { size: 22 }
+                        span { "{end_playlist_name}" }
+                    }
+                },
+                on_activate: move |swipe: SwipeState| {
+                    app_state.run_swipe_action(&swipe_id, swipe.side == SwipeSide::Start);
+                },
+                Card {
+                    variant: CardVariant::Flat,
+                    class: "h-full [&_.g3-card-title]:line-clamp-2 [&_.g3-card-title]:text-[0.95rem]",
+                    title: video.title.clone(),
+                    subtitle,
+                    onclick: open,
+                    media: rsx! {
+                        div { class: "relative",
+                            Img {
+                                src: video.thumbnail_url.clone(),
+                                alt: "",
+                                aspect_ratio: if short { "9 / 16" } else { "16 / 9" },
+                            }
                         // Listings that come from a flat playlist carry no
                         // runtime. No badge is honest; "0:00" is not.
                         div { class: "pointer-events-none absolute right-2 bottom-2 flex gap-1",
@@ -172,41 +179,56 @@ pub fn VideoCard(
                                 label: "Watched {progress:.0}%",
                             }
                         }
-                        if let Some(remove) = remove {
-                            div { class: "absolute top-2 right-2",
-                                Button {
-                                    size: ButtonSize::Sm,
-                                    color: Color::Neutral,
-                                    aria_label: "Remove from playlist",
-                                    onclick: remove,
-                                    Trash2 { size: 15 }
+                            if let Some(remove) = remove {
+                                div { class: "video-card-remove absolute top-2 right-2",
+                                    Button {
+                                        size: ButtonSize::Sm,
+                                        color: Color::Neutral,
+                                        aria_label: "Remove from playlist",
+                                        onclick: remove,
+                                        Trash2 { size: 15 }
+                                    }
                                 }
                             }
                         }
-                    }
-                },
-                start: rsx! {
-                    button {
-                        r#type: "button",
-                        class: "rounded-full",
-                        aria_label: "Open {video.channel_name}",
-                        onclick: open_channel,
-                        Avatar {
-                            name: video.channel_name.clone(),
-                            src: channel_avatar_url,
-                            size: AvatarSize::Sm,
+                    },
+                    start: rsx! {
+                        button {
+                            r#type: "button",
+                            class: "rounded-full",
+                            aria_label: "Open {video.channel_name}",
+                            onclick: open_channel,
+                            Avatar {
+                                name: video.channel_name.clone(),
+                                src: channel_avatar_url,
+                                size: AvatarSize::Sm,
+                            }
                         }
-                    }
-                },
-                end: rsx! {
-                    Button {
-                        fill: ButtonFill::Clear,
-                        size: ButtonSize::Sm,
-                        aria_label: "Video actions",
-                        onclick: open_menu,
-                        EllipsisVertical { size: 20 }
-                    }
-                },
+                    },
+                    end: rsx! {
+                        Button {
+                            fill: ButtonFill::Clear,
+                            size: ButtonSize::Sm,
+                            aria_label: "Video actions",
+                            onclick: open_menu,
+                            EllipsisVertical { size: 20 }
+                        }
+                    },
+                }
+            }
+            button {
+                r#type: "button",
+                class: "video-card-edge-action video-card-edge-action-start",
+                aria_label: "Add to {start_playlist_name}",
+                onclick: move |_| app_state.run_swipe_action(&desktop_start_id, true),
+                ListPlus { size: 24 }
+            }
+            button {
+                r#type: "button",
+                class: "video-card-edge-action video-card-edge-action-end",
+                aria_label: "Add to {end_playlist_name}",
+                onclick: move |_| app_state.run_swipe_action(&desktop_end_id, false),
+                ListPlus { size: 24 }
             }
         }
     }
