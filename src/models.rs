@@ -973,6 +973,18 @@ impl SwipeActionKind {
             Self::MarkWatched => "Mark watched",
         }
     }
+
+    /// Compact text for the closed selector; the full label remains in the
+    /// menu where it has room to explain the action.
+    pub fn trigger_label(self) -> &'static str {
+        match self {
+            Self::AddToPlaylist => "Playlist",
+            Self::AddToQueue => "Queue",
+            Self::PlayNext => "Play next",
+            Self::Share => "Share",
+            Self::MarkWatched => "Watched",
+        }
+    }
 }
 
 impl AppSettings {
@@ -1772,6 +1784,14 @@ impl SponsorAction {
             Self::Skip => "Skip automatically",
             Self::Show => "Show on the timeline",
             Self::Off => "Ignore",
+        }
+    }
+
+    pub fn trigger_label(self) -> &'static str {
+        match self {
+            Self::Skip => "Skip",
+            Self::Show => "Show",
+            Self::Off => "Off",
         }
     }
 }

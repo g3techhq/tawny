@@ -9,7 +9,7 @@ use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
     DividerOrientation, EmptyState, Grid, GridColumns, Img, Input, Modal, SegmentButton,
-    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
+    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone, TextVariant,
 };
 
 use super::{PageHeader, VideoGrid, duration_candidates, use_duration_hydration};
@@ -404,9 +404,6 @@ pub fn PlaylistDetail(id: String) -> Element {
         PageHeader {
             title: playlist.name.clone(),
             back_to: Route::Playlists {},
-            end_slot: rsx! {
-                Text { tone: TextTone::Secondary, "{video_count(saved_count)}" }
-            },
             // The same control the feed carries, in the same place, because it
             // answers the same question: which kind of upload am I looking at.
             toolbar: rsx! {
@@ -426,11 +423,15 @@ pub fn PlaylistDetail(id: String) -> Element {
         }
         Content {
             Stack { gap: Space::Md,
+                Text { variant: TextVariant::Caption, tone: TextTone::Secondary,
+                    "{video_count(saved_count)}"
+                }
                 // One row of actions: the two ways to start watching, and the
                 // tidying that acts on the same list. Cleanup stays quiet, and on
                 // the trailing edge, so it is never the thing a thumb lands on.
-                Stack { horizontal: true, gap: Space::Sm, align: StackAlign::Center,
+                Stack { class: "playlist-actions", horizontal: true, gap: Space::Sm, align: StackAlign::Center,
                     Button {
+                        aria_label: "Play all",
                         disabled: run.is_empty(),
                         start: rsx! { Play { size: 17, fill: "currentColor" } },
                         onclick: move |_| {
@@ -438,19 +439,20 @@ pub fn PlaylistDetail(id: String) -> Element {
                                 play_from_playlist(app_state, &play_all_id, first, true);
                             }
                         },
-                        "Play all"
+                        span { class: "playlist-collapse-label", "Play all" }
                     }
                     Button {
+                        aria_label: "Shuffle",
                         fill: ButtonFill::Outline,
                         color: Color::Neutral,
                         disabled: shuffle_run.len() < 2,
                         start: rsx! { Shuffle { size: 17 } },
                         onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
-                        "Shuffle"
+                        span { class: "playlist-collapse-label", "Shuffle" }
                     }
                     if watched_count > 0 {
                         Button {
-                            class: "ml-auto",
+                            class: "playlist-remove-watched ml-auto",
                             fill: ButtonFill::Clear,
                             size: ButtonSize::Sm,
                             start: rsx! { CheckCheck { size: 15 } },

@@ -558,6 +558,36 @@ button, input, textarea {
   border-bottom: 1px solid var(--g3-color-border);
   background: var(--g3-color-card);
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.28);
+  animation: tawny-mini-player-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes tawny-mini-player-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.video-card-swipe {
+  min-height: 100%;
+}
+.playlist-actions .g3-btn {
+  white-space: nowrap;
+}
+@container g3-app-shell (width <= 30rem) {
+  .playlist-actions .playlist-collapse-label {
+    display: none;
+  }
+  .playlist-actions .g3-btn {
+    min-width: 2.75rem;
+    padding-inline: 0.625rem;
+  }
+  .playlist-actions .playlist-remove-watched {
+    min-width: 0;
+    font-size: 0.75rem;
+  }
 }
 .persistent-player.mini .persistent-player-stage {
   height: 4.15rem;

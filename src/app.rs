@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 use g3_native_plugins::NativePluginsProvider;
 use g3_route_transitions::{
     Platform as TransitionPlatform, RouteTransitions, init_auto_platform, set_platform,
+    use_browser_history_transitions,
 };
 use g3_ui::{AppWrapper, ComponentMode, Theme};
 
@@ -24,7 +25,6 @@ const TAILWIND_CSS: Asset = asset!(
 const SHAKA_PLAYER_JS: Asset = asset!("/node_modules/shaka-player/dist/shaka-player.compiled.js");
 const TAWNY_TRANSPORT_JS: Asset = asset!("/assets/tawny_transport.js");
 const TAWNY_PLAYER_CONTROLS_JS: Asset = asset!("/assets/tawny_player_controls.js");
-const TAWNY_ROUTE_HISTORY_JS: Asset = asset!("/assets/tawny_route_history.js");
 const FAVICON_SVG: Asset = asset!("/assets/favicon.svg");
 
 /// Primary destinations are stable roots. Pages reached from a card push above
@@ -133,8 +133,6 @@ pub fn App() -> Element {
         document::Script { src: SHAKA_PLAYER_JS }
         document::Script { src: TAWNY_TRANSPORT_JS }
         document::Script { src: TAWNY_PLAYER_CONTROLS_JS }
-        // Must load before the router so its popstate listener registers first.
-        document::Script { src: TAWNY_ROUTE_HISTORY_JS }
         NativePluginsProvider {
             AppStateProvider {
                 ThemedApp {}
@@ -148,6 +146,7 @@ fn ThemedApp() -> Element {
     let app_state = use_context::<AppState>();
     let settings = app_state.settings();
     let appearance = settings.appearance;
+    use_browser_history_transitions::<Route>();
 
     // g3-ui and the transition library each keep their own notion of platform,
     // and both have to agree or the components render one language while the
@@ -193,14 +192,10 @@ fn ThemedApp() -> Element {
             theme: tawny_theme(appearance),
             mode: component_mode,
             text_selection: false,
-            // The sheet being presented owns the overlay region - the watch
-            // page, or the body region on the three header destinations. This
-            // wrapper must not claim it: it is an ancestor of the tab layout
-            // that carries the base region, and a named descendant is lifted
-            // out of its ancestor, so the overlay would capture everything
-            // except the app and slide an empty background over the page. The
-            // wrapper still links the transition stylesheet.
-            route_transition_overlay: false,
+            // The wrapper is the routed overlay region. Root routes lift the
+            // TabLayout base snapshot out of it; sheet routes turn that base
+            // marker off so the same layout becomes the rising overlay while
+            // the navigation rail is captured as persistent chrome.
             // Inside the wrapper so the setup screen is themed. A component
             // adds no DOM node of its own, so passing children through leaves
             // the snapshot structure untouched.

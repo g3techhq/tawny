@@ -1738,14 +1738,12 @@ fn VideoDetailInner(id: String) -> Element {
                 if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() || audio_tracks().len() > 1 {
                     Stack { horizontal: true, wrap: true, gap: Space::Sm, align: StackAlign::Center,
                         if details.like_count > 0 {
-                            Badge { aria_label: "{details.like_count} likes",
-                                ThumbsUp { size: 13 }
+                            Chip { start: rsx! { ThumbsUp { size: 15 } },
                                 "{compact_number(details.like_count)}"
                             }
                         }
                         if details.dislike_count > 0 {
-                            Badge { aria_label: "{details.dislike_count} dislikes",
-                                ThumbsDown { size: 13 }
+                            Chip { start: rsx! { ThumbsDown { size: 15 } },
                                 "{compact_number(details.dislike_count)}"
                             }
                         }

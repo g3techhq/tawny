@@ -111,7 +111,7 @@ pub fn VideoCard(
         // A swipe files the video into one of two playlists. On a mouse the
         // gesture gives way to the row's own actions button.
         SwipeItem {
-            class: "rounded-[inherit]",
+            class: "video-card-swipe h-full rounded-[inherit]",
             start_behavior: SwipeBehavior::Activate,
             end_behavior: SwipeBehavior::Activate,
             mouse_swipe: false,

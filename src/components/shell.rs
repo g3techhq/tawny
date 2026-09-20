@@ -240,7 +240,7 @@ pub fn AppShell() -> Element {
         // it in another snapshot region: a named descendant is lifted out of
         // its ancestor, so the outer region would contain only the lifted
         // base and paint as a bare background behind the sheet.
-        TabLayout { class: shell_class,
+        TabLayout { class: shell_class, route_transition_base: !is_sheet,
             // Mounted here rather than inside a page so playback survives
             // navigation. Minimized it is fixed and out of flow; expanded it is
             // in flow above the watch page's own body.

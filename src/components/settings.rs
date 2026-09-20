@@ -117,7 +117,10 @@ fn SwipeSetting(label: String, right: bool) -> Element {
                     value: action,
                     aria_label: "{label} action",
                     width: SelectWidth::Fit,
-                    options: SwipeActionKind::ALL.iter().map(|kind| SelectOption::new(*kind, kind.label())).collect::<Vec<_>>(),
+                    options: SwipeActionKind::ALL
+                        .iter()
+                        .map(|kind| SelectOption::new(*kind, kind.label()).trigger_label(kind.trigger_label()))
+                        .collect::<Vec<_>>(),
                     onchange: move |kind: SwipeActionKind| {
                         let mut settings = app_state.settings.write();
                         if right { settings.swipe_right_action = kind } else { settings.swipe_left_action = kind }
@@ -150,8 +153,6 @@ pub fn SettingsPage() -> Element {
     let mut app_state = use_context::<AppState>();
 
     let settings = app_state.settings();
-    let library = app_state.library();
-    let cache_size = library.videos.len() + library.channels.len() + library.playlists.len();
     let autoplay = use_signal(|| settings.autoplay);
     let shorts_autoplay = use_signal(|| settings.shorts_autoplay);
     let audio_language = use_signal(|| settings.preferred_audio_language.clone());
@@ -344,13 +345,6 @@ pub fn SettingsPage() -> Element {
 
                     SubscriptionTransferCard {}
 
-                    Card { title: "Data",
-                        List { variant: ListVariant::Filled, lines: ListLines::Inset,
-                            Item { label: "Local cache", description: "Cached records", metadata: "{cache_size}" }
-                            Item { label: "Sync server", description: "SurrealDB-backed", metadata: "Ready" }
-                            Item { label: "Playback", description: "PoToken per request", metadata: "Built-in" }
-                        }
-                    }
                 }
             }
         }
@@ -522,7 +516,10 @@ fn SponsorCategoryRow(category: SponsorCategory) -> Element {
                     value,
                     aria_label: "{category.label()}",
                     width: SelectWidth::Fit,
-                    options: SponsorAction::ALL.iter().map(|action| SelectOption::new(*action, action.label())).collect::<Vec<_>>(),
+                    options: SponsorAction::ALL
+                        .iter()
+                        .map(|action| SelectOption::new(*action, action.label()).trigger_label(action.trigger_label()))
+                        .collect::<Vec<_>>(),
                     onchange: move |action: SponsorAction| {
                         app_state.settings.write().sponsor_block.set_action(category, action);
                     },
