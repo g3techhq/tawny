@@ -329,7 +329,12 @@
       const spans = [
         [0, 100, "rgba(255, 255, 255, 0.25)"],
         [0, buffered, "rgba(255, 255, 255, 0.5)"],
-        [0, played, "var(--color-focused)"],
+        // A defined token: an unknown custom property makes the whole
+        // background invalid at computed-value time, and the browser then
+        // paints no track at all rather than falling back - which is why the
+        // chapters and segments vanished the moment the playhead left zero,
+        // where a played span of no width keeps this stop out of the gradient.
+        [0, played, "var(--g3-color-accent)"],
       ];
 
       for (const segment of sponsorSegments) {
