@@ -493,6 +493,7 @@ window[key] = {
 #[component]
 pub fn PersistentPlayer(expanded: bool) -> Element {
     let app_state = use_context::<AppState>();
+    let mut theater_mode = use_signal(|| false);
     let mut playback_attempt = use_signal(|| 0_u8);
     // The privacy-enhanced iframe is a manual escape hatch, never an automatic
     // one. Silently swapping to it hides extraction regressions behind a player
@@ -743,7 +744,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let playback_title = video.title.clone();
 
     rsx! {
-        div { class: if expanded { "persistent-player expanded" } else { "persistent-player mini" },
+        div { class: if expanded {
+                if theater_mode() { "persistent-player expanded theater-mode" } else { "persistent-player expanded" }
+            } else { "persistent-player mini" },
             section {
                 id: "tawny-player",
                 // Dropping the video AdaptationSets covers the adaptive path, but a
@@ -1081,6 +1084,24 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     title: "Change playback speed",
                                     "data-player-action": "speed",
                                     span { "data-player-speed-label": "", "{current_speed}×" }
+                                }
+                                if expanded {
+                                    button {
+                                        r#type: "button",
+                                        class: "player-control-button player-theater-button",
+                                        aria_label: if theater_mode() { "Exit theater mode" } else { "Enter theater mode" },
+                                        title: if theater_mode() { "Exit theater mode" } else { "Theater mode" },
+                                        aria_pressed: theater_mode().to_string(),
+                                        onclick: move |event: Event<MouseData>| {
+                                            event.stop_propagation();
+                                            theater_mode.toggle();
+                                        },
+                                        if theater_mode() {
+                                            Minimize2 { size: 21 }
+                                        } else {
+                                            Maximize2 { size: 21 }
+                                        }
+                                    }
                                 }
                                 // Both icons ship; CSS shows whichever matches
                                 // the current state, the same way play/pause does.

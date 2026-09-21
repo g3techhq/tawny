@@ -2,8 +2,8 @@ use crate::state::AppState;
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, Copy, ListPlus, Play, Plus, Rows3, Share2};
 use g3_ui::{
-    BottomSheet, Button, ButtonExpand, ButtonFill, Color, Img, Item, List, ListLines, ListVariant,
-    Modal, Space, Stack, StackAlign, Text, TextTone, TextVariant, Toggle,
+    BottomSheet, Button, ButtonExpand, ButtonFill, Color, Img, Input, Item, List, ListLines,
+    ListVariant, Modal, Space, Stack, StackAlign, Text, TextTone, TextVariant, Toggle,
 };
 
 fn youtube_share_url(video_id: &str, with_timestamp: bool, timestamp_seconds: u64) -> String {
@@ -28,6 +28,8 @@ fn timestamp_label(seconds: u64) -> String {
 #[component]
 pub fn AppOverlays() -> Element {
     let mut app_state = use_context::<AppState>();
+    let mut create_playlist_open = use_signal(|| false);
+    let mut new_playlist_name = use_signal(String::new);
     #[cfg(any(
         target_arch = "wasm32",
         target_os = "android",
@@ -153,7 +155,11 @@ pub fn AppOverlays() -> Element {
                                     label: playlist.name,
                                     description: format!("{} videos", playlist.video_ids.len()),
                                     onclick: move |_| {
-                                        if let Some(message) = app_state.add_to_playlist(&video_id, &playlist_id) {
+                                        if already_saved {
+                                            if app_state.remove_from_playlist(&video_id, &playlist_id) {
+                                                app_state.show_toast(format!("Removed from {playlist_name}"), Color::Neutral);
+                                            }
+                                        } else if let Some(message) = app_state.add_to_playlist(&video_id, &playlist_id) {
                                             app_state.show_toast(message, Color::Success);
                                         } else {
                                             app_state.show_toast(format!("Could not open {playlist_name}"), Color::Danger);
@@ -171,12 +177,38 @@ pub fn AppOverlays() -> Element {
                     expand: ButtonExpand::Block,
                     start: rsx! { Plus { size: 18 } },
                     onclick: move |_| {
-                        app_state.playlist_picker_open.set(false);
-                        app_state.show_toast("Create playlists from the Playlists tab", Color::Neutral);
+                        new_playlist_name.set(String::new());
+                        create_playlist_open.set(true);
                     },
                     "New playlist"
                 }
             }
+        }
+        Modal {
+            open: create_playlist_open,
+            title: "New playlist",
+            actions: rsx! {
+                Button {
+                    fill: ButtonFill::Clear,
+                    color: Color::Neutral,
+                    onclick: move |_| create_playlist_open.set(false),
+                    "Cancel"
+                }
+                Button {
+                    disabled: new_playlist_name().trim().is_empty(),
+                    onclick: move |_| {
+                        let name = new_playlist_name().trim().to_string();
+                        let Some(video) = target.as_ref() else { return; };
+                        let playlist_id = app_state.create_playlist(name.clone());
+                        let _ = app_state.add_to_playlist(&video.id, &playlist_id);
+                        create_playlist_open.set(false);
+                        app_state.playlist_picker_open.set(false);
+                        app_state.show_toast(format!("Created {name} and saved video"), Color::Success);
+                    },
+                    "Create"
+                }
+            },
+            Input { label: "Playlist name", value: new_playlist_name, autofocus: true }
         }
         Modal {
             open: app_state.share_open,

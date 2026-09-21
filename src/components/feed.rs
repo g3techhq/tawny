@@ -5,8 +5,8 @@ use crate::{
 };
 use dioxus::prelude::*;
 use g3_ui::{
-    Button, ButtonFill, Chip, Color, Content, Divider, DividerOrientation, SegmentButton,
-    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
+    Chip, Color, Content, Divider, DividerOrientation, InfiniteScroll, SegmentButton, SegmentGroup,
+    Shelf, Space, Stack, Text, TextTone,
 };
 
 use super::{
@@ -133,6 +133,12 @@ pub fn Feed() -> Element {
             app_state.syncing.set(false);
         });
     };
+    let load_next_page = move |_| {
+        if remaining == 0 {
+            return;
+        }
+        visible_count += FEED_PAGE_SIZE;
+    };
 
     rsx! {
         PageHeader {
@@ -197,15 +203,10 @@ pub fn Feed() -> Element {
                     empty_message: "Try another filter or refresh when you are back online.".to_string(),
                 }
 
-                if remaining > 0 {
-                    Stack { align: StackAlign::Center,
-                        Button {
-                            fill: ButtonFill::Outline,
-                            color: Color::Neutral,
-                            onclick: move |_| visible_count += FEED_PAGE_SIZE,
-                            "Load {remaining.min(FEED_PAGE_SIZE)} more"
-                        }
-                    }
+                InfiniteScroll {
+                    loading: false,
+                    complete: remaining == 0,
+                    on_load: load_next_page,
                 }
             }
         }

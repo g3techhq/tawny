@@ -34,6 +34,7 @@ const FAVICON_SVG: Asset = asset!("/assets/favicon.svg");
 #[rustfmt::skip]
 pub enum Route {
     #[layout(AppShell)]
+        #[redirect("/:..segments", |segments: Vec<String>| { let _ = segments; Route::Feed {} })]
         #[transition(layer = stack_root)]
         #[route("/")]
         Feed {},

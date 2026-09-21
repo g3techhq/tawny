@@ -129,8 +129,15 @@ textarea {
 
   .video-card-frame > .video-card-swipe > .g3-swipe-content {
     width: 100%;
+    background: transparent;
+    box-shadow: none;
+    border-radius: inherit;
     transform: none;
     z-index: auto;
+  }
+
+  .video-card-frame > .video-card-swipe > .g3-swipe-content > .g3-card {
+    overflow: hidden;
   }
 
   .video-card-frame > .video-card-swipe > .g3-swipe-actions {
@@ -356,6 +363,15 @@ textarea {
     border: 1px solid var(--g3-color-border);
     border-radius: var(--tawny-radius);
     box-shadow: 0 18px 44px var(--g3-color-shadow);
+  }
+
+  /* The player is normally comfortable for reading around it. Theater mode is
+     an explicit choice: it uses the entire shell content width while the rail
+     remains permanent navigation outside that shell. */
+  .persistent-player.expanded.theater-mode {
+    width: 100%;
+    max-width: none;
+    margin: 0;
   }
 }
 

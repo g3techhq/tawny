@@ -9,8 +9,8 @@ use dioxus_icons::lucide::{Check, History, ListVideo, Play, Trash2, Tv};
 use g3_route_transitions::{ROUTE_TRANSITION_OVERLAY_REGION_CLASS, animated_navigate};
 use g3_ui::{
     Avatar, AvatarSize, BottomSheet, Button, ButtonFill, ButtonSize, Card, Color, Content,
-    EmptyState, SegmentButton, SegmentGroup, Space, Spinner, Stack, StackAlign, Text, TextTone,
-    TextVariant,
+    EmptyState, InfiniteScroll, SegmentButton, SegmentGroup, Space, Spinner, Stack, StackAlign,
+    Text, TextTone, TextVariant,
 };
 
 use super::{FeedFilterSegments, PageHeader, VideoGrid};
@@ -521,7 +521,6 @@ pub fn ChannelDetail(id: String) -> Element {
                 ChannelHero { channel }
                 VideoGrid {
                     videos,
-                    shorts_layout: selected_tab == Some(ChannelMediaTab::Shorts),
                     empty_message: match selected_tab {
                         Some(ChannelMediaTab::Shorts) => "No Shorts were returned for this channel.".to_string(),
                         Some(ChannelMediaTab::Live) => "No livestreams were returned for this channel.".to_string(),
@@ -529,16 +528,10 @@ pub fn ChannelDetail(id: String) -> Element {
                         None => "No uploads were returned for this channel.".to_string(),
                     }
                 }
-                if has_next_page {
-                    Stack { align: StackAlign::Center,
-                        Button {
-                            fill: ButtonFill::Outline,
-                            color: Color::Neutral,
-                            loading: page_loading(),
-                            onclick: load_more,
-                            "Load more"
-                        }
-                    }
+                InfiniteScroll {
+                    loading: page_loading(),
+                    complete: !has_next_page,
+                    on_load: load_more,
                 }
             }
         }
