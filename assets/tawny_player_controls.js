@@ -868,6 +868,11 @@
         handleSurfaceClickSequenceAction(event.clientX, event.detail);
         return;
       }
+      if (tapOpensControls) {
+        tapOpensControls = false;
+        showControls(false);
+        return;
+      }
       if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
       surfaceClickCommitted = false;
       surfaceClickTimer = setTimeout(() => {
@@ -884,6 +889,7 @@
     let swallowNextClick = false;
     let surfaceClickTimer = null;
     let surfaceClickCommitted = false;
+    let tapOpensControls = false;
     let surfacePressSequence = null;
     let lastPointerTapAt = 0;
     let lastClickSequenceActionAt = 0;
@@ -954,6 +960,13 @@
         at: Date.now(),
         committed: event.pointerType === "mouse",
       };
+      // A finger has no hover, so a tap is the only way to reach the controls
+      // - and taking that tap as play/pause stopped the video every time
+      // someone went looking for the seek bar. The bar answers the first tap,
+      // the video answers the next. Read here rather than at the click,
+      // because the press itself raises the bar on the way through.
+      tapOpensControls =
+        event.pointerType !== "mouse" && !controls.classList.contains("controls-visible");
       if (gestureStart.committed) {
         // A mouse drag never competes with scrolling, so capture immediately;
         // a release outside the player still has to report back here.
