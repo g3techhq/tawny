@@ -87,7 +87,6 @@
     const progress = controls.querySelector("[data-player-progress]");
     const sponsorNotice = controls.querySelector("[data-player-sponsor-notice]");
     const sponsorSkip = controls.querySelector("[data-player-sponsor-skip]");
-    const sponsorSkipLabel = controls.querySelector("[data-player-sponsor-skip-label]");
     let sponsorNoticeTimer = null;
     let sponsorSkipOffer = null;
     const chapterLabel = controls.querySelector("[data-player-chapter-label]");
@@ -428,8 +427,15 @@
       if ((offer?.uuid || null) === (sponsorSkipOffer?.uuid || null)) return;
       sponsorSkipOffer = offer;
       sponsorSkip.hidden = !offer;
-      if (offer && sponsorSkipLabel) {
-        sponsorSkipLabel.textContent = `Skip ${offer.label || "segment"}`;
+      // "Skip" alone on the button. A segment set to "show" is as often an
+      // intro, an endcard or a recap as it is a sponsor, and naming the
+      // category on the button was wrong more often than it was right. The
+      // category still goes to a screen reader, which has room for it.
+      if (offer) {
+        sponsorSkip.setAttribute(
+          "aria-label",
+          offer.label ? `Skip ${offer.label}` : "Skip this section",
+        );
       }
     }
 

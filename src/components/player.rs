@@ -1023,7 +1023,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             class: "player-sponsor-skip",
                             "data-player-sponsor-skip": "",
                             hidden: true,
-                            span { "data-player-sponsor-skip-label": "", "Skip" }
+                            span { "Skip" }
                             ChevronRight { size: 16 }
                         }
                         div { class: "player-controls-bottom",

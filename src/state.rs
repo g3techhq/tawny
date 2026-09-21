@@ -144,18 +144,34 @@ impl AppState {
         self.active_video.set(Some(video));
     }
 
+    /// Fill in what is known about the video that is playing.
+    ///
+    /// Only ever adds. The same player is handed two descriptions of a video:
+    /// the copy cached in the library, which carries no chapters, captions or
+    /// preview frames because the library does not store them, and the one the
+    /// details request returns, which carries all three. They arrive in either
+    /// order and more than once, so applying an empty field on top of a full
+    /// one would strip the timeline of its divisions and its segment colours
+    /// part way through a video. Changing video is what clears this - see
+    /// [`Self::play`] and [`Self::stop_playback`].
     pub fn set_player_metadata(
         mut self,
         captions: Vec<CaptionTrack>,
         chapters: Vec<VideoChapter>,
         preview_frames: Option<VideoPreviewFrames>,
     ) {
-        if (self.selected_caption)().is_none() && !captions.is_empty() {
-            self.selected_caption.set(Some(0));
+        if !captions.is_empty() {
+            if (self.selected_caption)().is_none() {
+                self.selected_caption.set(Some(0));
+            }
+            self.active_captions.set(captions);
         }
-        self.active_captions.set(captions);
-        self.active_chapters.set(chapters);
-        self.active_preview_frames.set(preview_frames);
+        if !chapters.is_empty() {
+            self.active_chapters.set(chapters);
+        }
+        if preview_frames.is_some() {
+            self.active_preview_frames.set(preview_frames);
+        }
     }
 
     pub fn stop_playback(mut self) {
