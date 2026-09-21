@@ -1,12 +1,32 @@
-use crate::{app::Route, models::Video, state::AppState};
+use crate::{
+    app::Route,
+    models::{SwipeActionKind, Video},
+    state::AppState,
+};
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Check, EllipsisVertical, ListPlus, Trash2, Video as VideoIcon};
+use dioxus_icons::lucide::{
+    Check, EllipsisVertical, ListPlus, Play, Rows3, Share2, Trash2, Video as VideoIcon,
+};
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Avatar, AvatarSize, Badge, Button, ButtonFill, ButtonSize, Card, CardVariant, Color,
     EmptyState, Grid, GridColumns, Img, Progress, Space, SwipeAction, SwipeBehavior, SwipeItem,
     SwipeSide, SwipeState,
 };
+
+/// The icon for a swipe action. A swipe can be set to any of five things, so
+/// drawing the playlist icon for all of them told the reader the wrong one
+/// four times out of five. These are the same icons the video actions sheet
+/// uses for the same actions.
+fn swipe_icon(kind: SwipeActionKind, size: u32) -> Element {
+    match kind {
+        SwipeActionKind::AddToPlaylist => rsx! { ListPlus { size } },
+        SwipeActionKind::AddToQueue => rsx! { Rows3 { size } },
+        SwipeActionKind::PlayNext => rsx! { Play { size } },
+        SwipeActionKind::Share => rsx! { Share2 { size } },
+        SwipeActionKind::MarkWatched => rsx! { Check { size } },
+    }
+}
 
 #[component]
 pub fn VideoGrid(
@@ -51,8 +71,10 @@ pub fn VideoCard(
     short: Option<bool>,
 ) -> Element {
     let mut app_state = use_context::<AppState>();
-    let start_playlist_name = app_state.swipe_action_label(true);
-    let end_playlist_name = app_state.swipe_action_label(false);
+    let start_action = app_state.swipe_action_label(true);
+    let end_action = app_state.swipe_action_label(false);
+    let start_kind = app_state.swipe_action_kind(true);
+    let end_kind = app_state.swipe_action_kind(false);
     let channel_avatar_url = app_state.with_library(|library| {
         library
             .channels
@@ -126,18 +148,18 @@ pub fn VideoCard(
                 start_actions: rsx! {
                     SwipeAction {
                         color: Color::Accent,
-                        aria_label: "Add to {start_playlist_name}",
+                        aria_label: "{start_action}",
                         onclick: move |_| app_state.run_swipe_action(&start_id, true),
-                        ListPlus { size: 22 }
-                        span { "{start_playlist_name}" }
+                        {swipe_icon(start_kind, 22)}
+                        span { "{start_action}" }
                     }
                 },
                 end_actions: rsx! {
                     SwipeAction {
-                        aria_label: "Add to {end_playlist_name}",
+                        aria_label: "{end_action}",
                         onclick: move |_| app_state.run_swipe_action(&end_id, false),
-                        ListPlus { size: 22 }
-                        span { "{end_playlist_name}" }
+                        {swipe_icon(end_kind, 22)}
+                        span { "{end_action}" }
                     }
                 },
                 on_activate: move |swipe: SwipeState| {
@@ -221,16 +243,16 @@ pub fn VideoCard(
             button {
                 r#type: "button",
                 class: "video-card-edge-action video-card-edge-action-start",
-                aria_label: "Add to {start_playlist_name}",
+                aria_label: "{start_action}",
                 onclick: move |_| app_state.run_swipe_action(&desktop_start_id, true),
-                ListPlus { size: 24 }
+                {swipe_icon(start_kind, 24)}
             }
             button {
                 r#type: "button",
                 class: "video-card-edge-action video-card-edge-action-end",
-                aria_label: "Add to {end_playlist_name}",
+                aria_label: "{end_action}",
                 onclick: move |_| app_state.run_swipe_action(&desktop_end_id, false),
-                ListPlus { size: 24 }
+                {swipe_icon(end_kind, 24)}
             }
         }
     }

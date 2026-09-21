@@ -1,4 +1,4 @@
-use crate::state::AppState;
+use crate::state::{AppState, PlaylistSave};
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{Check, Copy, ListPlus, Play, Plus, Rows3, Share2};
 use g3_ui::{
@@ -159,8 +159,15 @@ pub fn AppOverlays() -> Element {
                                             if app_state.remove_from_playlist(&video_id, &playlist_id) {
                                                 app_state.show_toast(format!("Removed from {playlist_name}"), Color::Neutral);
                                             }
-                                        } else if let Some(message) = app_state.add_to_playlist(&video_id, &playlist_id) {
-                                            app_state.show_toast(message, Color::Success);
+                                        } else if let Some(saved) = app_state.add_to_playlist(&video_id, &playlist_id) {
+                                            match saved {
+                                                PlaylistSave::Saved(name) => {
+                                                    app_state.show_toast(format!("Added to {name}"), Color::Success)
+                                                }
+                                                PlaylistSave::AlreadyThere(name) => {
+                                                    app_state.show_toast(format!("Already in {name}"), Color::Warning)
+                                                }
+                                            }
                                         } else {
                                             app_state.show_toast(format!("Could not open {playlist_name}"), Color::Danger);
                                         }

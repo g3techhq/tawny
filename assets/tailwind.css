@@ -324,6 +324,9 @@
   .shrink-0 {
     flex-shrink: 0;
   }
+  .grow {
+    flex-grow: 1;
+  }
   .resize {
     resize: both;
   }

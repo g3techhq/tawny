@@ -17,6 +17,14 @@ use g3_ui::{Color, ToastOptions, Toaster};
 /// duration often enough that an exact match would rarely fire.
 const PROGRESS_WATCHED_TAIL_SECONDS: u64 = 15;
 
+/// What saving a video to a playlist did. A swipe that lands on a video the
+/// playlist already holds has changed nothing, and saying so in the same
+/// green as a save reads as though it saved again.
+pub enum PlaylistSave {
+    Saved(String),
+    AlreadyThere(String),
+}
+
 /// A snapshot of the playlist run, resolved the same way autoplay resolves it.
 pub struct PlaylistRunStatus {
     pub playlist_id: String,
@@ -247,7 +255,7 @@ impl AppState {
         }
     }
 
-    pub fn add_to_playlist(mut self, video_id: &str, playlist_id: &str) -> Option<String> {
+    pub fn add_to_playlist(mut self, video_id: &str, playlist_id: &str) -> Option<PlaylistSave> {
         let mut library = self.library.write();
         let playlist_name = {
             let playlist = library
@@ -255,7 +263,7 @@ impl AppState {
                 .iter_mut()
                 .find(|playlist| playlist.id == playlist_id)?;
             if playlist.video_ids.iter().any(|id| id == video_id) {
-                return Some(format!("Already in {}", playlist.name));
+                return Some(PlaylistSave::AlreadyThere(playlist.name.clone()));
             }
             playlist.video_ids.insert(0, video_id.to_string());
             playlist.name.clone()
@@ -263,7 +271,7 @@ impl AppState {
         library.cache_revision += 1;
         drop(library);
         self.sync_in_background();
-        Some(format!("Added to {playlist_name}"))
+        Some(PlaylistSave::Saved(playlist_name))
     }
 
     pub fn create_playlist(mut self, name: String) -> String {
@@ -741,11 +749,15 @@ impl AppState {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };
         match kind {
-            SwipeActionKind::AddToPlaylist => {
-                if let Some(message) = self.add_to_playlist(video_id, &playlist_id) {
-                    self.show_toast(message, Color::Success);
+            SwipeActionKind::AddToPlaylist => match self.add_to_playlist(video_id, &playlist_id) {
+                Some(PlaylistSave::Saved(name)) => {
+                    self.show_toast(format!("Added to {name}"), Color::Success)
                 }
-            }
+                Some(PlaylistSave::AlreadyThere(name)) => {
+                    self.show_toast(format!("Already in {name}"), Color::Warning)
+                }
+                None => {}
+            },
             SwipeActionKind::AddToQueue => {
                 let message = self.add_to_queue(video_id, false);
                 self.show_toast(message, Color::Success);
@@ -794,6 +806,21 @@ impl AppState {
     }
 
     /// The label a swipe direction should show on its action panel.
+    /// Which action a swipe on this side is set to, so a card can show the
+    /// icon for what it will actually do.
+    pub fn swipe_action_kind(self, start_side: bool) -> crate::models::SwipeActionKind {
+        let settings = self.settings();
+        if start_side {
+            settings.swipe_right_action
+        } else {
+            settings.swipe_left_action
+        }
+    }
+
+    /// What a swipe on this side says it will do, named in full: a playlist
+    /// action carries the playlist's own name, and the rest speak for
+    /// themselves. The card shows this and reads it out, so it cannot be a
+    /// bare name that only makes sense after the word "Add to".
     pub fn swipe_action_label(self, start_side: bool) -> String {
         use crate::models::SwipeActionKind;
 
@@ -808,12 +835,15 @@ impl AppState {
         };
         match kind {
             SwipeActionKind::AddToPlaylist => self.with_library(|library| {
-                library
+                let name = library
                     .playlists
                     .iter()
                     .find(|playlist| playlist.id == playlist_id)
-                    .map(|playlist| playlist.name.clone())
-                    .unwrap_or_else(|| "Playlist".into())
+                    .map(|playlist| playlist.name.clone());
+                match name {
+                    Some(name) => format!("Add to {name}"),
+                    None => SwipeActionKind::AddToPlaylist.label().to_string(),
+                }
             }),
             other => other.label().to_string(),
         }
