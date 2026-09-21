@@ -21,7 +21,7 @@ use g3_route_transitions::{
 use g3_ui::{
     Avatar, AvatarSize, Badge, BottomSheet, Button, ButtonExpand, ButtonFill, ButtonSize, Card,
     CardVariant, Chip, Color, Content, EmptyState, Item, List, ListLines, SheetBackdrop, Shelf,
-    Space, Spinner, Stack, StackAlign, Text, TextTone, TextVariant,
+    Skeleton, SkeletonShape, Space, Spinner, Stack, StackAlign, Text, TextTone, TextVariant,
 };
 
 use super::VideoGrid;
@@ -40,15 +40,20 @@ fn playback_server_url() -> &'static str {
 }
 
 fn sync_player_metadata(
+    video_id: String,
     tracks: Vec<CaptionTrack>,
     selected_caption: Option<usize>,
     captions_enabled: bool,
     chapters: Vec<VideoChapter>,
     preview_frames: Option<VideoPreviewFrames>,
     sponsor_segments: Vec<SponsorTimelineSegment>,
+    sponsor_enabled: bool,
     sponsor_notify: bool,
     autoplay: bool,
 ) {
+    let Ok(video_id) = serde_json::to_string(&video_id) else {
+        return;
+    };
     let Ok(tracks) = serde_json::to_string(&tracks) else {
         return;
     };
@@ -74,6 +79,7 @@ fn sync_player_metadata(
             const chapters = {chapters};
             const previewFrames = {preview_frames};
             const sponsorSegments = {sponsor_segments};
+            const sponsorEnabled = {sponsor_enabled};
             const sponsorNotify = {sponsor_notify};
             const autoplay = {autoplay};
             const serverUrl = {server_url};
@@ -96,12 +102,14 @@ fn sync_player_metadata(
                     }}
                 }});
                 window.TawnyPlayerControls.setMetadata(media, {{
+                    videoId: {video_id},
                     captions: tracks,
                     selectedCaption: {selected_caption},
                     captionsEnabled: {captions_enabled},
                     chapters,
                     previewFrames,
                     sponsorSegments,
+                    sponsorEnabled,
                     sponsorNotify,
                     autoplay,
                 }});
@@ -700,17 +708,21 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // remounts the element on purpose - are read here so the metadata follows
     // it over.
     let audio_only_to_sync = audio_only_active;
+    let sync_video_id = video.id.clone();
     use_effect(use_reactive!(|audio_only_to_sync| {
         let _ = audio_only_to_sync;
         let _ = playback_attempt_to_sync();
         let sponsor_settings = sponsor_settings_state.settings().sponsor_block;
+        let sponsor_enabled = !sponsor_settings.requested_categories().is_empty();
         sync_player_metadata(
+            sync_video_id.clone(),
             captions_to_sync(),
             selected_caption_to_sync(),
             captions_enabled_to_sync(),
             chapters_to_sync(),
             preview_frames_to_sync(),
             timeline_segments(&sponsor_segments_to_sync(), &sponsor_settings),
+            sponsor_enabled,
             sponsor_settings.notify_on_skip,
             autoplay_to_sync,
         )
@@ -1869,6 +1881,20 @@ fn VideoDetailInner(id: String) -> Element {
                     }
                 }
 
+                // The cached copy of a video knows neither its channel nor its
+                // description, so both cards were absent until the details
+                // request answered and then inserted themselves, growing the
+                // page under whatever the reader was already looking at. A
+                // placeholder of the same height holds their place instead.
+                if channel.is_none() && !details_remote_available {
+                    Card {
+                        start: rsx! { Skeleton { shape: SkeletonShape::Avatar } },
+                        Stack { gap: Space::Sm,
+                            Skeleton { width: "45%" }
+                            Skeleton { width: "28%" }
+                        }
+                    }
+                }
                 if let Some(channel) = channel {
                     Card {
                         title: channel.name.clone(),
@@ -1893,6 +1919,21 @@ fn VideoDetailInner(id: String) -> Element {
                     }
                 }
 
+                if details.description.is_empty() && !details_remote_available {
+                    Card { title: "Description",
+                        Stack { gap: Space::Sm,
+                            // Four lines: the same as the clamp the real
+                            // description opens at.
+                            Skeleton { width: "100%" }
+                            Skeleton { width: "96%" }
+                            Skeleton { width: "88%" }
+                            Skeleton { width: "60%" }
+                            // The 'Show more' button below the text is part of
+                            // the height being held.
+                            Skeleton { class: "h-8 mt-1", width: "5.5rem" }
+                        }
+                    }
+                }
                 if !details.description.is_empty() {
                     Card {
                         title: "Description",

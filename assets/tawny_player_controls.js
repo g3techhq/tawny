@@ -1193,10 +1193,40 @@
     controllers.delete(video);
   }
 
+  /**
+   * Fold an answer about the current video into what is already known.
+   *
+   * For one video this only ever adds. The page describes a video from more
+   * than one source - the copy cached in the library, the details request,
+   * the SponsorBlock lookup - and they answer at different times, more than
+   * once, and sometimes not at all. An answer carrying nothing is not news
+   * that the video has no chapters; it is a source that has not spoken yet,
+   * or could not reach anyone. Letting one of those through is what kept
+   * taking the timeline's divisions and colours away part way through a
+   * video, whichever source happened to be the quiet one that time.
+   *
+   * Changing video replaces everything, including with nothing. So does
+   * turning SponsorBlock off, which is an answer rather than a silence.
+   */
+  function mergeMetadata(known, incoming) {
+    const next = incoming || {};
+    if (!known || !next.videoId || next.videoId !== known.videoId) return next;
+    const spoken = (answer, heard) => (answer && answer.length ? answer : heard || []);
+    return {
+      ...next,
+      captions: spoken(next.captions, known.captions),
+      chapters: spoken(next.chapters, known.chapters),
+      previewFrames: next.previewFrames || known.previewFrames || null,
+      sponsorSegments:
+        next.sponsorEnabled === false ? [] : spoken(next.sponsorSegments, known.sponsorSegments),
+    };
+  }
+
   function setMetadata(video, metadata) {
-    lastMetadata.set(video, metadata);
+    const merged = mergeMetadata(lastMetadata.get(video), metadata);
+    lastMetadata.set(video, merged);
     const controller = controllers.get(video);
-    if (controller) controller.setMetadata(metadata);
+    if (controller) controller.setMetadata(merged);
   }
 
   window.TawnyPlayerControls = { attach, detach, setMetadata };
