@@ -494,7 +494,13 @@ window[key] = {
 #[component]
 pub fn PersistentPlayer(expanded: bool) -> Element {
     let app_state = use_context::<AppState>();
-    let mut theater_mode = use_signal(|| false);
+    // Remembered per viewer rather than per video: chosen once, every desktop
+    // video opens on the wider stage. The setting is the state rather than
+    // something copied into a signal at mount - the stored settings are read
+    // back a moment after the first render, so a copy would be the default
+    // and a reload would forget the choice.
+    let mut settings_for_theater = app_state.settings;
+    let theater_mode = app_state.settings().theater_mode;
     let mut playback_attempt = use_signal(|| 0_u8);
     // The privacy-enhanced iframe is a manual escape hatch, never an automatic
     // one. Silently swapping to it hides extraction regressions behind a player
@@ -746,7 +752,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
 
     rsx! {
         div { class: if expanded {
-                if theater_mode() { "persistent-player expanded theater-mode" } else { "persistent-player expanded" }
+                if theater_mode { "persistent-player expanded theater-mode" } else { "persistent-player expanded" }
             } else { "persistent-player mini" },
             section {
                 id: "tawny-player",
@@ -1008,6 +1014,18 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             role: "status",
                             aria_live: "polite",
                         }
+                        // A segment set to "show" is left for the viewer to
+                        // decide about, which until now meant colour on the
+                        // timeline and no way to act on it. The offer stands
+                        // only while the playhead is inside the segment.
+                        button {
+                            r#type: "button",
+                            class: "player-sponsor-skip",
+                            "data-player-sponsor-skip": "",
+                            hidden: true,
+                            span { "data-player-sponsor-skip-label": "", "Skip" }
+                            ChevronRight { size: 16 }
+                        }
                         div { class: "player-controls-bottom",
                             div { class: "player-control-row",
                                 span { class: "player-time",
@@ -1090,14 +1108,14 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     button {
                                         r#type: "button",
                                         class: "player-control-button player-theater-button",
-                                        aria_label: if theater_mode() { "Exit theater mode" } else { "Enter theater mode" },
-                                        title: if theater_mode() { "Exit theater mode" } else { "Theater mode" },
-                                        aria_pressed: theater_mode().to_string(),
+                                        aria_label: if theater_mode { "Exit theater mode" } else { "Enter theater mode" },
+                                        title: if theater_mode { "Exit theater mode" } else { "Theater mode" },
+                                        aria_pressed: theater_mode.to_string(),
                                         onclick: move |event: Event<MouseData>| {
                                             event.stop_propagation();
-                                            theater_mode.toggle();
+                                            settings_for_theater.write().theater_mode = !theater_mode;
                                         },
-                                        if theater_mode() {
+                                        if theater_mode {
                                             PanelTopClose { size: 21 }
                                         } else {
                                             PanelTopOpen { size: 21 }

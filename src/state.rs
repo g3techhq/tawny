@@ -817,10 +817,42 @@ impl AppState {
         }
     }
 
+    /// The few words a swipe action wears under its icon.
+    ///
+    /// A swipe reveals about a thumb's travel, which is no room for a
+    /// sentence. A playlist action carries the playlist's own name, since
+    /// that is the part that differs between the two directions; the rest
+    /// name themselves in a word. The full phrase stays in
+    /// [`Self::swipe_action_label`], which is what a screen reader hears.
+    pub fn swipe_action_caption(self, start_side: bool) -> String {
+        use crate::models::SwipeActionKind;
+
+        let settings = self.settings();
+        let (kind, playlist_id) = if start_side {
+            (
+                settings.swipe_right_action,
+                settings.swipe_right_playlist_id,
+            )
+        } else {
+            (settings.swipe_left_action, settings.swipe_left_playlist_id)
+        };
+        match kind {
+            SwipeActionKind::AddToPlaylist => self.with_library(|library| {
+                library
+                    .playlists
+                    .iter()
+                    .find(|playlist| playlist.id == playlist_id)
+                    .map(|playlist| playlist.name.clone())
+                    .unwrap_or_else(|| SwipeActionKind::AddToPlaylist.trigger_label().to_string())
+            }),
+            other => other.trigger_label().to_string(),
+        }
+    }
+
     /// What a swipe on this side says it will do, named in full: a playlist
     /// action carries the playlist's own name, and the rest speak for
-    /// themselves. The card shows this and reads it out, so it cannot be a
-    /// bare name that only makes sense after the word "Add to".
+    /// themselves. This is the accessible name; the card shows the shorter
+    /// [`Self::swipe_action_caption`].
     pub fn swipe_action_label(self, start_side: bool) -> String {
         use crate::models::SwipeActionKind;
 

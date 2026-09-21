@@ -2,7 +2,8 @@
   "use strict";
 
   const controllers = new WeakMap();
-  const pendingMetadata = new WeakMap();
+  /// The last metadata given for a media element, applied again on re-attach.
+  const lastMetadata = new WeakMap();
   const speedSteps = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
   const quickSpeedSteps = [1, 1.25, 1.5, 2];
 
@@ -85,7 +86,10 @@
     const signal = abort.signal;
     const progress = controls.querySelector("[data-player-progress]");
     const sponsorNotice = controls.querySelector("[data-player-sponsor-notice]");
+    const sponsorSkip = controls.querySelector("[data-player-sponsor-skip]");
+    const sponsorSkipLabel = controls.querySelector("[data-player-sponsor-skip-label]");
     let sponsorNoticeTimer = null;
+    let sponsorSkipOffer = null;
     const chapterLabel = controls.querySelector("[data-player-chapter-label]");
     const seekPreview = controls.querySelector("[data-player-seek-preview]");
     const previewImage = controls.querySelector("[data-player-preview-image]");
@@ -400,7 +404,37 @@
      * Only `skip` segments move the playhead, and only once each: a viewer who
      * seeks back into one is doing it on purpose.
      */
+    /**
+     * Offer to skip the segment the playhead is inside, for segments set to
+     * "show" rather than "skip".
+     *
+     * A viewer who asked to see a segment marked on the timeline still wants a
+     * way past it; the alternative is scrubbing by eye. The offer is withdrawn
+     * as soon as the playhead leaves the segment, and a segment skipped or
+     * declined does not ask again.
+     */
+    function offerSponsorSkip(position) {
+      if (!sponsorSkip) return;
+      const offer =
+        scrubbing || !sponsorSegments.length
+          ? null
+          : sponsorSegments.find(
+              (segment) =>
+                segment.action === "show" &&
+                !sponsorHandled.has(segment.uuid) &&
+                position >= Number(segment.start_seconds) &&
+                position < Number(segment.end_seconds),
+            ) || null;
+      if ((offer?.uuid || null) === (sponsorSkipOffer?.uuid || null)) return;
+      sponsorSkipOffer = offer;
+      sponsorSkip.hidden = !offer;
+      if (offer && sponsorSkipLabel) {
+        sponsorSkipLabel.textContent = `Skip ${offer.label || "segment"}`;
+      }
+    }
+
     function applySponsorSegments() {
+      offerSponsorSkip(currentPosition());
       if (!sponsorSegments.length || scrubbing) return;
       const position = currentPosition();
       for (const segment of sponsorSegments) {
@@ -1056,6 +1090,20 @@
       beginPipTransition();
       recoverIntendedPlayback(0);
     });
+    if (sponsorSkip) {
+      listen(sponsorSkip, "click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const offer = sponsorSkipOffer;
+        if (!offer) return;
+        sponsorHandled.add(offer.uuid);
+        const end = Number(offer.end_seconds);
+        // Never past the end, for the same reason an automatic skip is not.
+        const target = Math.min(end, (video.duration || end) - 0.05);
+        if (target > currentPosition()) video.currentTime = target;
+        offerSponsorSkip(currentPosition());
+      });
+    }
     listen(video, "durationchange", updateTimeline);
     listen(video, "durationchange", renderTimeline);
     listen(window, "resize", renderTimeline);
@@ -1117,11 +1165,13 @@
       },
     };
     controllers.set(video, controller);
-    const pending = pendingMetadata.get(video);
-    if (pending) {
-      pendingMetadata.delete(video);
-      controller.setMetadata(pending);
-    }
+    // The metadata is kept rather than consumed. A controller is rebuilt
+    // whenever this element is attached again - a retried stream, a quality
+    // change - and a fresh one starts with no chapters and no segments, so
+    // the timeline lost its divisions and its colours until something
+    // upstream happened to send them a second time.
+    const known = lastMetadata.get(video);
+    if (known) controller.setMetadata(known);
   }
 
   function detach(video) {
@@ -1132,9 +1182,9 @@
   }
 
   function setMetadata(video, metadata) {
+    lastMetadata.set(video, metadata);
     const controller = controllers.get(video);
     if (controller) controller.setMetadata(metadata);
-    else pendingMetadata.set(video, metadata);
   }
 
   window.TawnyPlayerControls = { attach, detach, setMetadata };

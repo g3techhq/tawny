@@ -888,6 +888,10 @@ pub struct AppSettings {
     pub shorts_autoplay: bool,
     #[serde(default = "default_true")]
     pub auto_landscape_fullscreen: bool,
+    /// Whether a desktop player opens in theater mode. A viewer who chose the
+    /// wider stage once meant it for watching, not for this one video.
+    #[serde(default)]
+    pub theater_mode: bool,
     #[serde(default = "default_video_short_max_seconds")]
     pub video_short_max_seconds: u64,
     #[serde(default = "default_video_medium_max_seconds")]
@@ -1037,6 +1041,7 @@ impl Default for AppSettings {
             autoplay: true,
             shorts_autoplay: true,
             auto_landscape_fullscreen: true,
+            theater_mode: false,
             video_short_max_seconds: default_video_short_max_seconds(),
             video_medium_max_seconds: default_video_medium_max_seconds(),
             shorts_short_max_seconds: default_shorts_short_max_seconds(),

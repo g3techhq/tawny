@@ -73,6 +73,8 @@ pub fn VideoCard(
     let mut app_state = use_context::<AppState>();
     let start_action = app_state.swipe_action_label(true);
     let end_action = app_state.swipe_action_label(false);
+    let start_caption = app_state.swipe_action_caption(true);
+    let end_caption = app_state.swipe_action_caption(false);
     let start_kind = app_state.swipe_action_kind(true);
     let end_kind = app_state.swipe_action_kind(false);
     let channel_avatar_url = app_state.with_library(|library| {
@@ -151,7 +153,7 @@ pub fn VideoCard(
                         aria_label: "{start_action}",
                         onclick: move |_| app_state.run_swipe_action(&start_id, true),
                         {swipe_icon(start_kind, 22)}
-                        span { "{start_action}" }
+                        span { "{start_caption}" }
                     }
                 },
                 end_actions: rsx! {
@@ -159,7 +161,7 @@ pub fn VideoCard(
                         aria_label: "{end_action}",
                         onclick: move |_| app_state.run_swipe_action(&end_id, false),
                         {swipe_icon(end_kind, 22)}
-                        span { "{end_action}" }
+                        span { "{end_caption}" }
                     }
                 },
                 on_activate: move |swipe: SwipeState| {
