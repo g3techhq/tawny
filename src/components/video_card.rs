@@ -28,6 +28,7 @@ pub fn VideoGrid(
         } else {
             // Shorts are portrait, so more of them fit across.
             Grid {
+                class: if shorts { "video-grid video-grid-shorts" } else { "video-grid" },
                 columns: GridColumns::Fit(if shorts { 9.0 } else { 17.0 }),
                 gap: Space::Lg,
                 for video in videos {
@@ -60,11 +61,7 @@ pub fn VideoCard(
             .and_then(|channel| channel.avatar_url.clone())
     });
     let progress = video.progress_percent();
-    let subtitle = if video.channel_name.is_empty() {
-        video.stats_label()
-    } else {
-        format!("{} · {}", video.channel_name, video.stats_label())
-    };
+    let stats = video.stats_label();
 
     let open = {
         let video = video.clone();
@@ -150,7 +147,6 @@ pub fn VideoCard(
                     variant: CardVariant::Flat,
                     class: "h-full [&_.g3-card-title]:line-clamp-2 [&_.g3-card-title]:text-[0.95rem]",
                     title: video.title.clone(),
-                    subtitle,
                     onclick: open,
                     media: rsx! {
                         div { class: "relative",
@@ -214,6 +210,12 @@ pub fn VideoCard(
                             EllipsisVertical { size: 20 }
                         }
                     },
+                    div { class: "video-card-metadata",
+                        span { class: "video-card-metadata-line",
+                            if video.channel_name.is_empty() { "\u{00a0}" } else { "{video.channel_name}" }
+                        }
+                        span { class: "video-card-metadata-line", "{stats}" }
+                    }
                 }
             }
             button {

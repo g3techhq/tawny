@@ -423,9 +423,9 @@ pub fn PlaylistDetail(id: String) -> Element {
         }
         Content {
             Stack { gap: Space::Md,
-                // One row of actions: the two ways to start watching, and the
-                // tidying that acts on the same list. Cleanup stays quiet, and on
-                // the trailing edge, so it is never the thing a thumb lands on.
+                // One compact action group. The destructive-looking cleanup is
+                // neutral and outlined, but keeps the same full tap height as
+                // the playback controls instead of floating alone at the edge.
                 Stack { class: "playlist-actions", horizontal: true, gap: Space::Sm, align: StackAlign::Center,
                     Button {
                         class: "playlist-play",
@@ -450,9 +450,9 @@ pub fn PlaylistDetail(id: String) -> Element {
                     }
                     if watched_count > 0 {
                         Button {
-                            class: "playlist-remove-watched ml-auto",
-                            fill: ButtonFill::Clear,
-                            size: ButtonSize::Sm,
+                            class: "playlist-remove-watched",
+                            fill: ButtonFill::Outline,
+                            color: Color::Neutral,
                             start: rsx! { CheckCheck { size: 15 } },
                             onclick: move |_| {
                                 let removed = app_state.remove_watched_from_playlist(&clear_id);

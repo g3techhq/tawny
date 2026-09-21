@@ -40,6 +40,16 @@ textarea {
   min-height: 100%;
 }
 
+.video-grid {
+  width: 100%;
+  max-width: 72.5rem;
+  margin-inline: auto;
+}
+
+.video-grid.video-grid-shorts {
+  max-width: 61.5rem;
+}
+
 .playlist-actions .g3-btn {
   white-space: nowrap;
 }
@@ -59,7 +69,6 @@ textarea {
   }
 
   .playlist-actions .playlist-remove-watched {
-    min-width: 0;
     font-size: 0.75rem;
   }
 }
@@ -78,6 +87,26 @@ textarea {
   position: relative;
   min-height: 100%;
   container-type: inline-size;
+}
+
+.video-card-frame .g3-card-title {
+  min-height: 2.6em;
+}
+
+.video-card-metadata {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+  color: var(--g3-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.video-card-metadata-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .video-card-edge-action {
