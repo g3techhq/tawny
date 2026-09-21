@@ -1040,7 +1040,15 @@
       lastClickSequenceActionAt = now;
       handleSurfaceClickSequenceAction(event.clientX, 2);
     });
-    listen(root, "pointermove", () => showControls(false));
+    listen(root, "pointermove", (event) => {
+      // Hovering is a mouse idea. A finger never holds perfectly still, so a
+      // touch press sends one of these too - and raising the bar mid-press
+      // put a control under the finger that was not there when it went down.
+      // The tap then landed on whichever button had appeared, which is how
+      // reaching for the controls paused the video.
+      if (event.pointerType !== "mouse") return;
+      showControls(false);
+    });
     listen(root, "pointerleave", () => {
       timelineHovering = false;
       hideScrubPreview();
