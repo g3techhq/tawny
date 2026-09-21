@@ -191,7 +191,10 @@ pub fn Subscriptions() -> Element {
                 if !suggested.is_empty() {
                     Shelf { title: "Suggested", gap: Space::Md,
                         end: rsx! { Text { tone: TextTone::Secondary, "From your searches and watch history" } },
-                        for channel in suggested {
+                        // A shelf is a preview, not a second copy of the full
+                        // channel catalogue. Keeping it bounded also avoids
+                        // mounting hundreds of image cards in one scroll row.
+                        for channel in suggested.into_iter().take(12) {
                             div { key: "{channel.id}", class: "w-72",
                                 ChannelCard { channel }
                             }

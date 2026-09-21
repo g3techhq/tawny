@@ -11,8 +11,9 @@ use crate::{
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
     Captions, Check, ChevronLeft, ChevronRight, Clock, EyeOff, Heart, Languages, ListVideo,
-    Maximize2, MessageSquare, Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw,
-    Settings2, Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, Volume2, VolumeX, X,
+    Maximize2, MessageSquare, Minimize2, PanelTopClose, PanelTopOpen, Pause, PictureInPicture,
+    Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight,
+    Volume2, VolumeX, X,
 };
 use g3_route_transitions::{
     ROUTE_TRANSITION_OVERLAY_REGION_CLASS, animated_back_or_navigate, animated_navigate,
@@ -1097,9 +1098,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                             theater_mode.toggle();
                                         },
                                         if theater_mode() {
-                                            Minimize2 { size: 21 }
+                                            PanelTopClose { size: 21 }
                                         } else {
-                                            Maximize2 { size: 21 }
+                                            PanelTopOpen { size: 21 }
                                         }
                                     }
                                 }

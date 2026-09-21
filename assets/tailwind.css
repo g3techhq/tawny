@@ -482,7 +482,12 @@ button, input, textarea {
 .video-card-frame {
   position: relative;
   min-height: 100%;
+  overflow: clip;
+  border-radius: 0.75rem;
   container-type: inline-size;
+}
+.video-card-frame > .video-card-swipe, .video-card-frame > .video-card-swipe > .g3-swipe-content, .video-card-frame > .video-card-swipe > .g3-swipe-content > .g3-card {
+  border-radius: inherit;
 }
 .video-card-frame .g3-card-title {
   height: 2.6em;
@@ -826,6 +831,14 @@ button, input, textarea {
 .player-control-button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+.player-theater-button {
+  display: none;
+}
+@container g3-app-shell (width >= 48rem) {
+  .player-theater-button {
+    display: inline-grid;
+  }
 }
 .player-play-button {
   width: clamp(3.5rem, 8vw, 4.5rem);
