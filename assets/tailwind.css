@@ -960,8 +960,10 @@ button, input, textarea {
 }
 .player-sponsor-skip {
   position: absolute;
+  z-index: 5;
   right: 0.9rem;
   bottom: 4.6rem;
+  pointer-events: auto;
   display: inline-flex;
   gap: 0.25rem;
   align-items: center;

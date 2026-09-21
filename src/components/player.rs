@@ -694,9 +694,14 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let sponsor_segments_to_sync = app_state.active_sponsor_segments;
     let sponsor_settings_state = app_state;
     let autoplay_to_sync = app_state.settings().autoplay_for(is_short);
-    use_effect(move || {
-        // Re-send metadata when a failed stream creates a replacement video
-        // element. The chapter/controller state is attached per element.
+    // Metadata belongs to the media element, so a replacement element starts
+    // with none: no chapters, no segments, a bare timeline. Both things that
+    // build a new one - a retried stream, and the audio-only switch, which
+    // remounts the element on purpose - are read here so the metadata follows
+    // it over.
+    let audio_only_to_sync = audio_only_active;
+    use_effect(use_reactive!(|audio_only_to_sync| {
+        let _ = audio_only_to_sync;
         let _ = playback_attempt_to_sync();
         let sponsor_settings = sponsor_settings_state.settings().sponsor_block;
         sync_player_metadata(
@@ -709,7 +714,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             sponsor_settings.notify_on_skip,
             autoplay_to_sync,
         )
-    });
+    }));
     let mut captions_enabled = app_state.captions_enabled;
     let captions_for_toggle = app_state.active_captions;
     let caption_tracks_to_render = (app_state.active_captions)();
@@ -824,6 +829,21 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     div { class: "player-seek-feedback player-seek-feedback-right", aria_hidden: "true",
                         RotateCw { size: 30 }
                         span { "10 seconds" }
+                    }
+                    // A segment set to "show" is left for the viewer to decide
+                    // about, which until now meant colour on the timeline and
+                    // no way to act on it. The offer stands while the playhead
+                    // is inside the segment, and lives outside the control bar:
+                    // that bar takes no pointer events and fades on its own
+                    // schedule, which would have made this the one control with
+                    // a deadline that you cannot press.
+                    button {
+                        r#type: "button",
+                        class: "player-sponsor-skip",
+                        "data-player-sponsor-skip": "",
+                        hidden: true,
+                        span { "Skip" }
+                        ChevronRight { size: 16 }
                     }
                     div {
                         class: "tawny-player-controls controls-visible",
@@ -1013,18 +1033,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             "data-player-sponsor-notice": "",
                             role: "status",
                             aria_live: "polite",
-                        }
-                        // A segment set to "show" is left for the viewer to
-                        // decide about, which until now meant colour on the
-                        // timeline and no way to act on it. The offer stands
-                        // only while the playhead is inside the segment.
-                        button {
-                            r#type: "button",
-                            class: "player-sponsor-skip",
-                            "data-player-sponsor-skip": "",
-                            hidden: true,
-                            span { "Skip" }
-                            ChevronRight { size: 16 }
                         }
                         div { class: "player-controls-bottom",
                             div { class: "player-control-row",
@@ -1549,10 +1557,14 @@ fn VideoDetailInner(id: String) -> Element {
             }
             // A failure here is not worth a toast: SponsorBlock being
             // unreachable means the video plays exactly as it would have.
-            let fetched = get_sponsor_segments(video_id, categories)
-                .await
-                .unwrap_or_default();
-            sponsor_segments.set(fetched);
+            // It does not mean the segments already on the timeline are
+            // wrong, though, so a failed request leaves them alone. This
+            // effect runs again on every settings change, and answering each
+            // failure with "no segments" is what wiped the colours part way
+            // through a video.
+            if let Ok(fetched) = get_sponsor_segments(video_id, categories).await {
+                sponsor_segments.set(fetched);
+            }
         });
     });
     let mut comments = use_signal(Vec::<VideoComment>::new);

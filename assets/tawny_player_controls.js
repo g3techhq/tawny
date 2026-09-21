@@ -86,7 +86,8 @@
     const signal = abort.signal;
     const progress = controls.querySelector("[data-player-progress]");
     const sponsorNotice = controls.querySelector("[data-player-sponsor-notice]");
-    const sponsorSkip = controls.querySelector("[data-player-sponsor-skip]");
+    // On the stage rather than in the control bar - see the markup.
+    const sponsorSkip = root.querySelector("[data-player-sponsor-skip]");
     let sponsorNoticeTimer = null;
     let sponsorSkipOffer = null;
     const chapterLabel = controls.querySelector("[data-player-chapter-label]");
@@ -1097,6 +1098,11 @@
       recoverIntendedPlayback(0);
     });
     if (sponsorSkip) {
+      // The stage toggles playback on a pointer press, and a press that lands
+      // on this button is not a press on the video.
+      for (const name of ["pointerdown", "pointerup", "mousedown", "mouseup"]) {
+        listen(sponsorSkip, name, (event) => event.stopPropagation());
+      }
       listen(sponsorSkip, "click", (event) => {
         event.preventDefault();
         event.stopPropagation();
