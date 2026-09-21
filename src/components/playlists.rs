@@ -423,50 +423,6 @@ pub fn PlaylistDetail(id: String) -> Element {
         }
         Content {
             Stack { gap: Space::Md,
-                // One compact action group. The destructive-looking cleanup is
-                // neutral and outlined, but keeps the same full tap height as
-                // the playback controls instead of floating alone at the edge.
-                Stack { class: "playlist-actions", horizontal: true, gap: Space::Sm, align: StackAlign::Center,
-                    Button {
-                        class: "playlist-play",
-                        aria_label: "Play all",
-                        disabled: run.is_empty(),
-                        start: rsx! { Play { size: 17, fill: "currentColor" } },
-                        onclick: move |_| {
-                            if let Some(first) = play_all_first.clone() {
-                                play_from_playlist(app_state, &play_all_id, first, true);
-                            }
-                        },
-                        span { class: "playlist-collapse-label", "Play all" }
-                    }
-                    Button {
-                        class: "playlist-icon-only",
-                        aria_label: "Shuffle",
-                        fill: ButtonFill::Outline,
-                        color: Color::Neutral,
-                        disabled: shuffle_run.len() < 2,
-                        start: rsx! { Shuffle { size: 17 } },
-                        onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
-                    }
-                    if watched_count > 0 {
-                        Button {
-                            class: "playlist-remove-watched",
-                            fill: ButtonFill::Outline,
-                            color: Color::Neutral,
-                            start: rsx! { CheckCheck { size: 15 } },
-                            onclick: move |_| {
-                                let removed = app_state.remove_watched_from_playlist(&clear_id);
-                                if removed > 0 {
-                                    app_state.show_toast(
-                                        format!("Removed {removed} watched video{}", if removed == 1 { "" } else { "s" }),
-                                        Color::Success,
-                                    );
-                                }
-                            },
-                            "Remove watched"
-                        }
-                    }
-                }
                 if saved_count > 1 {
                     Shelf { aria_label: "Playlist filters and order", gap: Space::Sm,
                         Chip {
@@ -523,6 +479,50 @@ pub fn PlaylistDetail(id: String) -> Element {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+                // Keep playlist-wide actions below the filters they operate on.
+                // Cleanup remains neutral and outlined, with the same full tap
+                // height as the playback controls.
+                Stack { class: "playlist-actions", horizontal: true, gap: Space::Sm, align: StackAlign::Center,
+                    Button {
+                        class: "playlist-play",
+                        aria_label: "Play all",
+                        disabled: run.is_empty(),
+                        start: rsx! { Play { size: 17, fill: "currentColor" } },
+                        onclick: move |_| {
+                            if let Some(first) = play_all_first.clone() {
+                                play_from_playlist(app_state, &play_all_id, first, true);
+                            }
+                        },
+                        span { class: "playlist-collapse-label", "Play all" }
+                    }
+                    Button {
+                        class: "playlist-icon-only",
+                        aria_label: "Shuffle",
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        disabled: shuffle_run.len() < 2,
+                        start: rsx! { Shuffle { size: 17 } },
+                        onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
+                    }
+                    if watched_count > 0 {
+                        Button {
+                            class: "playlist-remove-watched",
+                            fill: ButtonFill::Outline,
+                            color: Color::Neutral,
+                            start: rsx! { CheckCheck { size: 15 } },
+                            onclick: move |_| {
+                                let removed = app_state.remove_watched_from_playlist(&clear_id);
+                                if removed > 0 {
+                                    app_state.show_toast(
+                                        format!("Removed {removed} watched video{}", if removed == 1 { "" } else { "s" }),
+                                        Color::Success,
+                                    );
+                                }
+                            },
+                            "Remove watched"
                         }
                     }
                 }

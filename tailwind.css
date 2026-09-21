@@ -40,16 +40,6 @@ textarea {
   min-height: 100%;
 }
 
-.video-grid {
-  width: 100%;
-  max-width: 72.5rem;
-  margin-inline: auto;
-}
-
-.video-grid.video-grid-shorts {
-  max-width: 61.5rem;
-}
-
 .playlist-actions .g3-btn {
   white-space: nowrap;
 }
@@ -90,7 +80,16 @@ textarea {
 }
 
 .video-card-frame .g3-card-title {
+  height: 2.6em;
   min-height: 2.6em;
+  overflow: hidden;
+}
+
+.video-card-frame .g3-card-title > .g3-card-action {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .video-card-metadata {

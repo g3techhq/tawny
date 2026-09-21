@@ -28,8 +28,8 @@ pub fn VideoGrid(
         } else {
             // Shorts are portrait, so more of them fit across.
             Grid {
-                class: if shorts { "video-grid video-grid-shorts" } else { "video-grid" },
-                columns: GridColumns::Fit(if shorts { 9.0 } else { 17.0 }),
+                columns: GridColumns::Count(if shorts { 2 } else { 1 }),
+                wide_columns: GridColumns::Count(if shorts { 6 } else { 4 }),
                 gap: Space::Lg,
                 for video in videos {
                     VideoCard { key: "{video.id}", video, playlist_id: playlist_id.clone(), short: shorts }
@@ -145,7 +145,7 @@ pub fn VideoCard(
                 },
                 Card {
                     variant: CardVariant::Flat,
-                    class: "h-full [&_.g3-card-title]:line-clamp-2 [&_.g3-card-title]:text-[0.95rem]",
+                    class: "h-full [&_.g3-card-title]:text-[0.95rem]",
                     title: video.title.clone(),
                     onclick: open,
                     media: rsx! {

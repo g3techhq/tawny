@@ -458,14 +458,6 @@
       -webkit-line-clamp: 1;
     }
   }
-  .\[\&_\.g3-card-title\]\:line-clamp-2 {
-    & .g3-card-title {
-      overflow: hidden;
-      display: -webkit-box;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
-    }
-  }
   .\[\&_\.g3-card-title\]\:text-\[0\.95rem\] {
     & .g3-card-title {
       font-size: 0.95rem;
@@ -495,14 +487,6 @@ button, input, textarea {
 }
 .video-card-swipe {
   min-height: 100%;
-}
-.video-grid {
-  width: 100%;
-  max-width: 72.5rem;
-  margin-inline: auto;
-}
-.video-grid.video-grid-shorts {
-  max-width: 61.5rem;
 }
 .playlist-actions .g3-btn {
   white-space: nowrap;
@@ -534,7 +518,15 @@ button, input, textarea {
   container-type: inline-size;
 }
 .video-card-frame .g3-card-title {
+  height: 2.6em;
   min-height: 2.6em;
+  overflow: hidden;
+}
+.video-card-frame .g3-card-title > .g3-card-action {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .video-card-metadata {
   display: grid;
