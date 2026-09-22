@@ -89,15 +89,15 @@ Compose does not delete either volume during ordinary stop, restart, or image
 updates. Do not use `docker compose down -v` unless the library should be
 erased.
 
-`TAWNY_SURREALDB_DATA_DIR` and `TAWNY_APP_DATA_DIR` choose where each one
+`TAWNY_SURREALDB_VOLUME` and `TAWNY_APP_VOLUME` choose where each one
 lives. A bare name is a Docker named volume, which Docker places under
 `/var/lib/docker/volumes`; an absolute path is a bind mount instead. Use a path
 when the stack directory is managed for you, as it is under Portainer, or when
 the data belongs on a specific disk:
 
 ```sh
-TAWNY_SURREALDB_DATA_DIR=/srv/tawny/surrealdb
-TAWNY_APP_DATA_DIR=/srv/tawny/app
+TAWNY_SURREALDB_VOLUME=/srv/tawny/surrealdb
+TAWNY_APP_VOLUME=/srv/tawny/app
 ```
 
 Both default to the named volumes, so leaving them unset keeps the existing
@@ -105,6 +105,12 @@ behaviour. Switching an existing stack from one to the other does not move any
 data: copy it across first, or the containers come up empty. The init container
 chowns whichever target it is given, so a fresh host directory needs no manual
 permission setup.
+
+These two are the only knobs for placing data under Docker. `TAWNY_DATA_DIR` is
+a different setting despite the similar name: it is the path the server writes
+to *inside* its own process, and the Compose stack pins it to `/data`, so
+setting it in `.env` changes nothing for a container. It applies only when
+running the server directly on the host.
 
 Versions are pinned through `.env` defaults (`SURREALDB_VERSION`,
 `YTDLP_VERSION`, and `POT_PROVIDER_VERSION`). Update one pin at a time, rebuild,
