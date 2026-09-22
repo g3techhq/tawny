@@ -868,11 +868,6 @@
         handleSurfaceClickSequenceAction(event.clientX, event.detail);
         return;
       }
-      if (tapOpensControls) {
-        tapOpensControls = false;
-        showControls(false);
-        return;
-      }
       if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
       surfaceClickCommitted = false;
       surfaceClickTimer = setTimeout(() => {
@@ -896,6 +891,10 @@
     const SWIPE_DISTANCE = 55;
     const DOUBLE_PRESS_MS = 500;
     const TAP_SLOP = 14;
+
+    // A pointer that can hover has already raised the bar by the time it is
+    // pressed; one that cannot has to tap for it.
+    const canHover = () => matchMedia("(hover: hover) and (pointer: fine)").matches;
 
     const surfaceZoneAt = (clientX) => {
       const bounds = video.getBoundingClientRect();
@@ -943,6 +942,24 @@
       root.classList.remove("player-swiping");
     };
 
+    // Capture, so this runs before any control's own handler: by the time the
+    // click is dispatched the bar has come up, and the browser hit-tests
+    // again, so a tap on the middle of the video arrives at the play button
+    // that has just appeared there. What matters is whether the bar was up
+    // when the finger went down, which is what this was told.
+    listen(
+      root,
+      "click",
+      (event) => {
+        if (!tapOpensControls) return;
+        tapOpensControls = false;
+        event.preventDefault();
+        event.stopPropagation();
+        showControls(false);
+      },
+      { capture: true },
+    );
+
     listen(root, "pointerdown", (event) => {
       swallowNextClick = false;
       // Capture retargets the later click to `root`. Every interactive piece
@@ -966,7 +983,8 @@
       // the video answers the next. Read here rather than at the click,
       // because the press itself raises the bar on the way through.
       tapOpensControls =
-        event.pointerType !== "mouse" && !controls.classList.contains("controls-visible");
+        (event.pointerType !== "mouse" || !canHover()) &&
+        !controls.classList.contains("controls-visible");
       if (gestureStart.committed) {
         // A mouse drag never competes with scrolling, so capture immediately;
         // a release outside the player still has to report back here.
@@ -1046,7 +1064,7 @@
       // put a control under the finger that was not there when it went down.
       // The tap then landed on whichever button had appeared, which is how
       // reaching for the controls paused the video.
-      if (event.pointerType !== "mouse") return;
+      if (event.pointerType !== "mouse" || !canHover()) return;
       showControls(false);
     });
     listen(root, "pointerleave", () => {
