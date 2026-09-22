@@ -6,7 +6,7 @@ services:
     user: "0:0"
     command: ["chown", "-R", "65532:65532", "/data"]
     volumes:
-      - ${TAWNY_SURREALDB_DATA_DIR:-surrealdb-data}:/data
+      - ${TAWNY_SURREALDB_VOLUME:-surrealdb-data}:/data
     restart: "no"
 
   surrealdb:
@@ -25,7 +25,7 @@ services:
     ports:
       - "127.0.0.1:${SURREALDB_PORT:-8001}:8000"
     volumes:
-      - ${TAWNY_SURREALDB_DATA_DIR:-surrealdb-data}:/data
+      - ${TAWNY_SURREALDB_VOLUME:-surrealdb-data}:/data
     depends_on:
       surrealdb-init:
         condition: service_completed_successfully
@@ -92,7 +92,6 @@ services:
       SURREALDB_NAME: ${SURREALDB_NAME:-main}
       SURREALDB_USER: ${SURREALDB_USER:-root}
       SURREALDB_PASSWORD: ${SURREALDB_PASSWORD:-root}
-      TAWNY_DATA_DIR: /data
       TAWNY_YTDLP_SERVICE_URL: http://extractor:8080
       TAWNY_PUBLIC_URL: ${TAWNY_PUBLIC_URL:-http://localhost:8080}
       TAWNY_WEBSUB_CALLBACK_URL: ${TAWNY_WEBSUB_CALLBACK_URL:-}
@@ -100,7 +99,7 @@ services:
     ports:
       - "${TAWNY_PORT:-8080}:8080"
     volumes:
-      - ${TAWNY_APP_DATA_DIR:-tawny-data}:/data
+      - ${TAWNY_APP_VOLUME:-tawny-data}:/data
     depends_on:
       surrealdb:
         condition: service_healthy
