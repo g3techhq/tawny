@@ -29,6 +29,9 @@ long_description = "Tawny is a privacy-minded, local-first YouTube client for mo
 
 [ios]
 deployment_target = "15.0"
+# The media plugin's `.playback` audio session only survives leaving the app
+# when the Info.plist declares background audio.
+background_modes = ["audio"]
 
 [android]
 min_sdk = 35

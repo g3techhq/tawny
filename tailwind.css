@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @source "./src/**/*.{rs,html,css}";
-@source "../g3-ui/src/**/*.{rs,html,css}";
 
 :root {
   --tawny-amber: #f5a524;
@@ -14,16 +13,16 @@
    white: a flash on load, and the colour that shows through a cross-fade.
    Dark is the default appearance, so these are the dark theme's values. */
 :root {
-  --color-bg: #0b0f14;
-  --color-text: #f8fafc;
+  --g3-color-bg: #0b0f14;
+  --g3-color-text: #f8fafc;
 }
 
 html,
 body {
   margin: 0;
   min-width: 320px;
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: var(--g3-color-bg);
+  color: var(--g3-color-text);
 }
 
 body {
@@ -37,1275 +36,181 @@ textarea {
   font: inherit;
 }
 
-.tawny-shell {
-  background:
-    radial-gradient(circle at 15% -10%, rgba(245, 165, 36, 0.075), transparent 25rem),
-    var(--color-bg);
+.video-card-swipe {
+  min-height: 100%;
 }
 
-.tawny-header {
-  border-bottom: 1px solid var(--color-card-border);
-  backdrop-filter: blur(20px) saturate(130%);
-  background: color-mix(in srgb, var(--color-bg) 88%, transparent);
-}
-
-.brand-lockup,
-.sheet-heading,
-.settings-hero,
-.setting-row,
-.playback-status-row,
-.feed-count,
-.resolver-pill,
-.speed-strip > span,
-.watched-badge,
-.swipe-action-content {
-  display: flex;
-  align-items: center;
-}
-
-.brand-lockup {
-  gap: 0.6rem;
-}
-
-.brand-mark {
-  display: inline-grid;
-  width: 2rem;
-  height: 2rem;
-  place-items: center;
-  border-radius: 10px 10px 12px 8px;
-  background: linear-gradient(145deg, #ffc45d, #d97816);
-  color: #231509;
-  font-family: Georgia, serif;
-  font-size: 1.1rem;
-  font-weight: 900;
-  box-shadow: 0 5px 16px rgba(217, 120, 22, 0.25);
-}
-
-.brand-mark-large {
-  width: 3.5rem;
-  height: 3.5rem;
-  border-radius: 18px 18px 21px 14px;
-  font-size: 1.8rem;
-}
-
-.header-eyebrow,
-.section-kicker {
-  color: var(--color-focused);
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-}
-
-.sync-dot {
-  display: inline-block;
-  width: 0.42rem;
-  height: 0.42rem;
-  margin-left: 0.5rem;
-  border-radius: 50%;
-  background: var(--color-success);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success) 14%, transparent);
-}
-
-.header-actions,
-.heading-actions,
-.library-summary {
-  display: flex;
-  align-items: center;
-}
-
-.header-actions {
-  gap: 0.1rem;
-}
-
-.page {
-  width: min(100%, 1320px);
-  margin: 0 auto;
-  padding: 1.5rem;
-}
-
-.feed-intro,
-.section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.25rem;
-  margin: 0.25rem 0 1rem;
-}
-
-.feed-intro h2,
-.section-heading h2,
-.discovery-banner h2,
-.settings-hero h2,
-.sheet-heading h2,
-.playlist-detail-hero h2 {
-  margin: 0.24rem 0 0.35rem;
-  font-size: clamp(1.35rem, 2.5vw, 2.15rem);
-  font-weight: 760;
-  letter-spacing: -0.035em;
-}
-
-.feed-intro p,
-.section-heading p,
-.discovery-banner p,
-.settings-hero p,
-.sheet-heading p,
-.playlist-detail-hero p {
-  max-width: 42rem;
-  margin: 0;
-  color: var(--color-text-secondary);
-  line-height: 1.55;
-}
-
-.feed-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.7rem;
-}
-
-.feed-toolbar .g3-segment-group {
-  width: min(100%, 27rem);
-}
-
-.group-filter-row {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  overflow-x: auto;
-  margin: 0.25rem 0 1.15rem;
-  padding: 0.1rem 0 0.4rem;
-  scrollbar-width: none;
-  /* The edge fade further down this file already signals the overflow; what was
-     missing was any way to act on it with a mouse, which
-     tawny_horizontal_scroll.js supplies. This keeps a horizontal overscroll from
-     chaining out to the page mid-strip. */
-  overscroll-behavior-x: contain;
-}
-
-/* A chip must never be squeezed to fit; overflowing is what makes the row
-   scrollable in the first place. */
-.group-filter-row > * {
-  flex: 0 0 auto;
-}
-
-/* Keeps the count anchored while the filters scroll past it. */
-.group-filter-row .feed-count {
-  flex: 0 0 auto;
-  margin-right: 0.35rem;
-}
-
-.group-filter-row::-webkit-scrollbar {
-  display: none;
-}
-
-/* Sideways gestures must not move the page.
-
-   Two halves of the same problem. A horizontal strip declares `pan-x`, which
-   tells the browser the gesture is ours before it starts, so a flick along the
-   chips cannot also scroll the feed.
-
-   A swipeable row cannot do that - it has to keep `pan-y` so an ordinary
-   vertical scroll still starts anywhere on the list - so the browser is free to
-   begin scrolling before the swipe is recognised, and by the time g3-ui knows
-   the gesture is sideways its `preventDefault` is too late to cancel a scroll
-   already running on the compositor. It does mark the row it is dragging, and
-   taking the overflow off the scroller for as long as that mark is up stops the
-   scroll dead. Height and scroll position are untouched, so nothing jumps. */
-.group-filter-row,
-.channel-result-row,
-.speed-strip,
-.player-actions,
-.chapter-strip,
-.caption-strip {
-  touch-action: pan-x;
-}
-
-.g3-body-content:has(.g3-swipe-item[data-dragging="true"]) {
-  overflow-y: hidden;
-  overscroll-behavior: contain;
-}
-
-.filter-divider {
-  width: 1px;
-  height: 1.45rem;
-  flex: 0 0 1px;
-  margin-inline: 0.2rem;
-  background: var(--color-card-border);
-}
-
-.duration-filter {
-  border-style: dashed;
-}
-
-.duration-filter.active {
-  border-style: solid;
-}
-
-.group-filter-label,
-.group-filter {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.38rem;
-}
-
-.group-filter-label {
-  margin-right: 0.15rem;
-  color: var(--color-text-secondary);
-  font-size: 0.75rem;
-}
-
-.group-filter {
-  padding: 0.45rem 0.72rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 999px;
-  background: var(--color-card);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 0.76rem;
-  cursor: pointer;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    color 160ms ease;
-}
-
-.group-filter.active {
-  border-color: color-mix(in srgb, var(--color-focused) 58%, var(--color-card-border));
-  background: var(--tawny-amber-soft);
-  color: var(--color-text);
-}
-
-/* Touch browsers keep :hover latched after a tap. Keeping hover inside this
-   capability query lets a duration chip visibly clear when it is tapped a
-   second time without taking hover feedback away from mouse users. */
-@media (hover: hover) {
-  .group-filter:hover {
-    border-color: color-mix(in srgb, var(--color-focused) 58%, var(--color-card-border));
-    background: var(--tawny-amber-soft);
-    color: var(--color-text);
-  }
-}
-
-.load-more-row {
-  display: flex;
-  justify-content: center;
-  margin: 1.25rem 0 0.35rem;
-}
-
-.feed-count {
-  gap: 0.35rem;
-  color: var(--color-text-secondary);
-  font-size: 0.8rem;
+.playlist-actions .g3-btn {
   white-space: nowrap;
 }
 
-.feed-refresh-button .g3-btn-content-start {
-  min-width: 6.25rem;
-  padding: 0.1rem 0.75rem 0.1rem 2.25rem;
-}
-
-.swipe-hint {
-  display: flex;
-  align-items: center;
-  gap: 0.42rem;
-  margin: 0 0 1.15rem;
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
-}
-
-.swipe-hint strong {
-  color: var(--color-focused);
-  font-weight: 700;
-}
-
-.swipe-hint i {
-  opacity: 0.5;
-}
-
-.video-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: clamp(1rem, 2vw, 1.65rem);
-  align-items: stretch;
-}
-
-.video-grid-cell {
-  position: relative;
-  display: flex;
-  min-width: 0;
-}
-
-/* Every card in a row matches the tallest one, so thumbnails line up and the
-   grid reads as even rows. The stretch has to be threaded through g3's swipe
-   wrapper, which sits between the cell and the card. */
-.video-grid-cell > .video-swipe-row {
-  display: flex;
-  width: 100%;
-  flex-direction: column;
-}
-
-.video-swipe-row > .g3-swipe-content {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-}
-
-/* Overlays the thumbnail's top-right corner so a playlist grid does not gain a
-   row of chrome under every tile. */
-.playlist-remove-video {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 4;
-  display: flex;
-  width: 1.75rem;
-  height: 1.75rem;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  background: rgba(8, 12, 18, 0.72);
-  color: #fff;
-  cursor: pointer;
-}
-
-.playlist-remove-video:hover {
-  border-color: var(--color-danger);
-  background: var(--color-danger);
-  color: #fff;
-}
-
-.video-grid-cell {
-  position: relative;
-}
-
-.page-actions-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  /* Wraps because a playlist carries three actions plus its count, and a phone
-     is narrower than that. Squeezing them instead would shrink the labels to
-     the point where "Remove watched" reads as an icon. */
-  flex-wrap: wrap;
-  row-gap: 0.6rem;
-  justify-content: flex-end;
-  margin-bottom: 0.85rem;
-}
-
-/* One row: the two ways to start watching, then the cleanup that acts on the
-   same list. */
-.playlist-lead {
-  display: grid;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-}
-
-.playlist-lead-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-/* Takes the width it is offered: starting the playlist is why this page exists,
-   and Shuffle is the variant of that decision, not its equal. */
-.playlist-lead-actions .playlist-play-all {
-  flex: 1 1 auto;
-}
-
-.playlist-lead-actions > :not(.playlist-play-all) {
-  flex: 0 0 auto;
-}
-
-/* Pushed to the trailing edge and kept quiet: tidying is not why anyone opened a
-   playlist, and it must never be what a thumb reaching for Shuffle lands on. */
-.playlist-lead-actions .playlist-remove-watched {
-  margin-inline-start: auto;
-}
-
-/* On a phone the three labels do not fit side by side - iOS buttons least of
-   all - and a line of its own made cleanup a whole row of chrome. It keeps its
-   place on the trailing edge as an icon; the button still carries its name. */
-@container g3-app-shell (width < 30rem) {
-  .playlist-lead-actions .playlist-remove-watched-label {
+@container g3-app-shell (width <= 30rem) {
+  .playlist-actions .playlist-play .g3-btn-label {
     display: none;
   }
+
+  .playlist-actions .playlist-play .g3-btn-content {
+    gap: 0;
+  }
+
+  .playlist-actions .g3-btn {
+    min-width: 2.75rem;
+    padding-inline: 0.625rem;
+  }
+
+  .playlist-actions .playlist-remove-watched {
+    font-size: 0.75rem;
+  }
 }
 
-.playlist-header-count {
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.playlist-card-actions {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.playlist-card-action {
-  display: flex;
-  width: 1.75rem;
-  height: 1.75rem;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.playlist-card-action:hover {
-  background: var(--color-control);
-  color: var(--color-text);
-}
-
-.playlist-card-action.danger:hover {
-  color: var(--color-danger);
-}
-
-.explore-search-submit {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.15rem;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.explore-search-submit:hover:not(:disabled) {
-  color: var(--color-focused);
-}
-
-.explore-search-submit:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-.explore-search-spinner {
-  display: block;
-  width: 1.05rem;
-  height: 1.05rem;
-  border: 2px solid var(--color-control);
-  border-top-color: var(--color-focused);
-  border-radius: 50%;
-  animation: spin 700ms linear infinite;
-}
-
-.video-swipe-row {
-  --g3-swipe-row-max-height: 32rem;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: var(--tawny-radius);
-  background: var(--color-surface);
-}
-
-/* The swipe actions sit behind the card, so at the card's rounded corners
-   their accent fill showed through as gold slivers — worse on hover, where
-   the card lifts. Matching the radius keeps them tucked behind it. */
-.video-swipe-row .g3-swipe-actions {
-  border-radius: var(--tawny-radius);
-}
-
-/* Pointer alternative to the swipe gesture, revealed on hover/focus. The hit
-   area is a full-height quarter of the thumbnail rather than a small circle, so
-   it is easy to hit with a mouse; the middle half stays free for click-to-play. */
-.card-quick-action {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 3;
+.playlist-actions .playlist-icon-only .g3-btn-label {
   display: none;
-  width: 25%;
-  align-items: center;
-  padding: 0 0.6rem;
-  border: 0;
-  color: #fff;
-  opacity: 0;
-  transition: opacity 140ms ease;
-  cursor: pointer;
 }
 
-.card-quick-action-start {
-  left: 0;
-  justify-content: flex-start;
-  background: linear-gradient(to right, rgba(8, 12, 18, 0.78), transparent);
+.playlist-actions .playlist-icon-only .g3-btn-content {
+  gap: 0;
 }
 
-.card-quick-action-end {
-  right: 0;
-  justify-content: flex-end;
-  background: linear-gradient(to left, rgba(8, 12, 18, 0.78), transparent);
-}
-
-.card-quick-action:hover {
-  color: var(--color-focused);
-}
-
-.card-quick-action-start:hover {
-  background: linear-gradient(to right, rgba(8, 12, 18, 0.92), transparent);
-}
-
-.card-quick-action-end:hover {
-  background: linear-gradient(to left, rgba(8, 12, 18, 0.92), transparent);
-}
-
-.video-card:hover .card-quick-action,
-.card-quick-action:focus-visible {
-  opacity: 1;
-}
-
-.video-card {
+/* Touch keeps g3-ui's native swipe actions. Precise pointers get dedicated
+   edge controls over the thumbnail, so the entire faded edge is the target. */
+.video-card-frame {
   position: relative;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
+  min-height: 100%;
+  overflow: clip;
+  border-radius: 0.75rem;
+  container-type: inline-size;
+}
+
+.video-card-frame > .video-card-swipe,
+.video-card-frame > .video-card-swipe > .g3-swipe-content,
+.video-card-frame > .video-card-swipe > .g3-swipe-content > .g3-card {
+  border-radius: inherit;
+}
+
+.video-card-frame .g3-card-title {
+  height: 2.6em;
+  min-height: 2.6em;
   overflow: hidden;
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-  background: var(--color-card);
-  box-shadow: 0 8px 28px transparent;
-  cursor: pointer;
-  outline: none;
-  transition:
-    transform 180ms ease,
-    border-color 180ms ease,
-    box-shadow 180ms ease;
 }
 
-.video-card:hover,
-.video-card:focus-visible {
-  transform: translateY(-3px);
-  border-color: color-mix(in srgb, var(--color-text) 18%, var(--color-card-border));
-  box-shadow: 0 14px 34px var(--color-shadow);
-}
-
-.video-card:focus-visible {
-  outline: 2px solid var(--color-focused);
-  outline-offset: 2px;
-}
-
-.thumbnail-shell {
-  position: relative;
-  overflow: hidden;
-  aspect-ratio: 16 / 9;
-  background: var(--color-bg-secondary);
-}
-
-.video-thumbnail {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  -webkit-user-drag: none;
-  transition: transform 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.video-card:hover .video-thumbnail {
-  transform: scale(1.025);
-}
-
-.thumbnail-vignette {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, rgba(5, 8, 12, 0.25), transparent 44%);
-  pointer-events: none;
-}
-
-.duration-badge {
-  position: absolute;
-  right: 0.6rem;
-  bottom: 0.55rem;
-  z-index: 2;
-  padding: 0.2rem 0.42rem;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 7px;
-  background: rgba(4, 7, 10, 0.82);
-  color: white;
-  font-size: 0.68rem;
-  font-weight: 750;
-  backdrop-filter: blur(6px);
-}
-
-/* Inset and rounded, over a visible track, so a partly filled bar reads as
-   watch progress rather than a stray gold segment on the card's edge. */
-/* Sits on the very bottom edge of the thumbnail rather than floating inset
-   above it, which is where a reader expects to find how far through a video
-   they are. It reads as part of the image instead of a badge on top of it. */
-.watch-progress {
-  position: absolute;
-  z-index: 3;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 4px;
-  background: rgba(5, 8, 12, 0.55);
-}
-
-.watch-progress::after {
-  content: "";
-  display: block;
-  width: var(--progress);
-  height: 100%;
-  background: var(--color-focused);
-}
-
-.watched-badge {
-  position: absolute;
-  top: 0.55rem;
-  left: 0.55rem;
-  z-index: 2;
-  gap: 0.25rem;
-  padding: 0.24rem 0.45rem;
-  border-radius: 999px;
-  background: rgba(5, 8, 12, 0.76);
-  color: #fff;
-  font-size: 0.65rem;
-  font-weight: 700;
-  backdrop-filter: blur(7px);
-}
-
-.video-meta-row {
-  display: grid;
-  flex: 1;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.72rem;
-  align-items: start;
-  padding: 0.86rem 0.7rem 0.92rem 0.82rem;
-}
-
-.channel-avatar {
-  display: grid;
-  flex: 0 0 auto;
-  width: 2rem;
-  height: 2rem;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--color-focused) 26%, var(--color-card-border));
-  border-radius: 50%;
-  background: linear-gradient(145deg, var(--tawny-amber-soft), var(--color-bg-secondary));
-  color: var(--color-focused);
-  font-family: Georgia, serif;
-  font-weight: 800;
-}
-
-.channel-avatar[src] {
-  object-fit: cover;
-}
-
-.channel-avatar-medium {
-  width: 2.8rem;
-  height: 2.8rem;
-  font-size: 1.15rem;
-}
-
-.channel-avatar-large {
-  width: 4.3rem;
-  height: 4.3rem;
-  font-size: 1.65rem;
-}
-
-.video-copy {
-  min-width: 0;
-}
-
-/* A one-line title used to make its whole card shorter than its neighbours.
-   Reserving both lines keeps the grid even, and the clamp still ellipsizes a
-   title that would otherwise run to a third line. */
-.video-copy h2 {
+.video-card-frame .g3-card-title > .g3-card-action {
   display: -webkit-box;
   overflow: hidden;
-  margin: -0.1rem 0 0.28rem;
-  min-height: 2.6em;
-  font-size: 0.96rem;
-  font-weight: 690;
-  line-height: 1.3;
-  letter-spacing: -0.012em;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
-.video-copy p {
-  overflow: hidden;
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 0.76rem;
-  line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.video-stats {
-  color: var(--color-text-secondary);
-}
-
-.card-menu-button {
-  min-width: 2rem !important;
-  width: 2rem;
-  height: 2rem;
-  margin-top: -0.3rem;
-  padding: 0 !important;
-  border-radius: 50% !important;
-}
-
-.sr-action {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-}
-
-.swipe-action-content {
-  flex-direction: column;
-  justify-content: center;
-  gap: 0.3rem;
-  max-width: 5.5rem;
-  font-size: 0.66rem;
-  font-weight: 760;
-  line-height: 1.1;
-  text-align: center;
-}
-
-.channel-grid,
-.playlist-grid,
-.data-grid {
+.video-card-metadata {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1rem;
-}
-
-.channel-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.channel-card {
-  display: flex;
   min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 1.4rem 1rem 1.1rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-  background: var(--color-card);
-  text-align: center;
-  cursor: pointer;
-  transition:
-    transform 180ms ease,
-    border-color 180ms ease;
+  gap: 0.125rem;
+  color: var(--g3-color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
 }
 
-.channel-card:hover,
-.channel-card:focus-visible {
-  transform: translateY(-3px);
-  border-color: color-mix(in srgb, var(--color-focused) 48%, var(--color-card-border));
-  outline: none;
-}
-
-.channel-card-copy h3,
-.player-channel-copy h3 {
-  margin: 0;
-  font-size: 0.96rem;
-}
-
-.channel-card-copy p,
-.channel-card-copy span,
-.player-channel-copy p {
-  display: block;
-  margin: 0.16rem 0;
-  color: var(--color-text-secondary);
-  font-size: 0.76rem;
-}
-
-.section-actions,
-.subsection-heading,
-.subsection-heading h3,
-.group-summary-row,
-.group-summary,
-.channel-group-memberships {
-  display: flex;
-  align-items: center;
-}
-
-.section-actions {
-  gap: 0.7rem;
-}
-
-.subscription-groups {
-  margin: -0.25rem 0 1.2rem;
-  padding: 1rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-  background: color-mix(in srgb, var(--color-card) 70%, transparent);
-}
-
-.subsection-heading {
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.75rem;
-}
-
-.subsection-heading h3 {
-  gap: 0.5rem;
-  margin: 0;
-  font-size: 0.93rem;
-}
-
-.subsection-heading span,
-.group-empty-copy {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 0.76rem;
-}
-
-.group-summary-row {
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.group-summary {
-  gap: 0.45rem;
-  min-height: 2rem;
-  padding: 0.25rem 0.28rem 0.25rem 0.72rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 999px;
-  background: var(--color-card);
-  font-size: 0.78rem;
-}
-
-.group-summary small {
-  color: var(--color-text-secondary);
-}
-
-.group-summary button {
-  display: grid;
-  width: 1.5rem;
-  height: 1.5rem;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.group-summary button:hover {
-  background: color-mix(in srgb, var(--color-danger) 15%, transparent);
-  color: var(--color-danger);
-}
-
-.channel-group-memberships {
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.35rem;
-  width: 100%;
-  margin-top: -0.15rem;
-}
-
-.membership-chip {
-  padding: 0.28rem 0.5rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 0.66rem;
-  cursor: pointer;
-}
-
-.membership-chip.active {
-  border-color: color-mix(in srgb, var(--color-focused) 55%, var(--color-card-border));
-  background: var(--tawny-amber-soft);
-  color: var(--color-text);
-}
-
-.playlist-card {
-  overflow: hidden;
-}
-
-.playlist-card .g3-card-header {
-  gap: 0.65rem;
-}
-
-.playlist-card .g3-card-title {
-  flex: 1;
+.video-card-metadata-line {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.playlist-collage {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
-  overflow: hidden;
-  aspect-ratio: 16 / 9;
-  border-radius: 12px;
-  background: var(--color-bg-secondary);
-}
-
-.playlist-collage img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.playlist-collage img:first-child {
-  grid-row: 1 / 3;
-}
-
-.playlist-collage.count-1 img:first-child {
-  grid-column: 1 / -1;
-  grid-row: 1 / -1;
-}
-
-.playlist-collage.count-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: 1fr;
-}
-
-.playlist-collage.count-2 img:first-child {
-  grid-row: auto;
-}
-
-.playlist-empty-art {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-row: 1 / -1;
-  place-items: center;
-  color: var(--color-focused);
-  background: linear-gradient(145deg, var(--tawny-amber-soft), var(--color-bg-secondary));
-}
-
-.playlist-count {
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-/* Secondary to the total, and only shown when it differs from it: the count
-   that answers "is there anything left in here". */
-.playlist-unwatched {
-  color: var(--color-text-secondary);
-  font-size: 0.74rem;
-  opacity: 0.85;
-}
-
-.playlist-card-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
-  min-height: 1.65rem;
-  margin-top: 0.65rem;
-}
-
-.playlist-pin-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.45rem;
-  border-radius: 999px;
-  background: var(--tawny-amber-soft);
-  color: var(--color-focused);
-  font-size: 0.68rem;
-  font-weight: 750;
-}
-
-.playlist-detail-hero {
-  margin: 0.6rem 0 1.5rem;
-  padding: 1.5rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 22px;
-  background: linear-gradient(135deg, var(--tawny-amber-soft), var(--color-card));
-}
-
-/* The channel page's lead card: banner, then who the channel is, then what you
-   can do about it, each on its own row.
-
-   It used to be one three-column grid holding the avatar, the copy, the
-   Subscribe button *and* the feed filter. A subscribed channel added that
-   fourth child, which wrapped into the first column, and on a phone the copy
-   column shrank to a sliver the button then sat on top of. Rows cannot collide. */
-.channel-hero {
-  display: flex;
-  flex-direction: column;
-  margin: 0.4rem 0 1.5rem;
-  overflow: hidden;
-  border: 1px solid var(--color-card-border);
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at 0% 0%, rgba(245, 165, 36, 0.16), transparent 20rem), var(--color-card);
-}
-
-.channel-hero-banner {
-  aspect-ratio: 6 / 1;
-  background-color: var(--color-bg-secondary);
-  background-position: center;
-  background-size: cover;
-}
-
-.channel-hero-body {
-  display: grid;
-  gap: 1rem;
-  padding: clamp(0.95rem, 2.5vw, 1.6rem);
-}
-
-.channel-hero-identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.9rem;
-}
-
-.channel-avatar-hero {
-  width: clamp(3.75rem, 8vw, 5.5rem);
-  height: clamp(3.75rem, 8vw, 5.5rem);
-  font-size: clamp(1.5rem, 4vw, 2.4rem);
-}
-
-.channel-hero-copy {
-  min-width: 0;
-}
-
-.channel-hero-copy h1 {
-  margin: 0;
-  font-size: clamp(1.3rem, 3.2vw, 2.2rem);
-  line-height: 1.15;
-  letter-spacing: -0.03em;
-  overflow-wrap: anywhere;
-}
-
-.channel-hero-meta {
-  display: flex;
-  flex-wrap: wrap;
-  margin: 0.3rem 0 0;
-  color: var(--color-text-secondary);
-  font-size: 0.85rem;
-}
-
-.channel-hero-meta span + span::before {
-  content: "·";
-  margin-inline: 0.4rem;
-  opacity: 0.6;
-}
-
-.channel-hero-actions {
-  display: flex;
-  gap: 0.6rem;
-}
-
-/* Shared width on a phone, so Subscribe is a full thumb target whether or not
-   there is an About button beside it. */
-.channel-hero-actions > .g3-btn {
-  flex: 1 1 0;
-}
-
-.channel-hero .subscription-content-row {
-  margin-top: 0;
-  padding-top: 0.9rem;
-  border-top: 1px solid var(--color-card-border);
-}
-
-@container g3-app-shell (width >= 48rem) {
-  .channel-hero-body {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    column-gap: 1.5rem;
-  }
-
-  .channel-hero-actions > .g3-btn {
-    flex: 0 0 auto;
-    min-width: 8.5rem;
-  }
-
-  .channel-hero .subscription-content-row {
-    grid-column: 1 / -1;
-  }
-}
-
-.heading-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.5rem;
-}
-
-.heading-actions .g3-btn-content-start {
-  min-width: 5.5rem;
-  padding: 0.1rem 0.65rem 0.1rem 2.1rem;
-}
-
-.library-summary {
-  gap: 0.55rem;
-  margin: -0.5rem 0 1.2rem;
-  padding: 0.7rem 0.85rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 12px;
-  background: var(--color-card);
-  color: var(--color-focused);
-}
-
-.library-summary span {
-  color: var(--color-text-secondary);
-  font-size: 0.76rem;
-}
-
-.explore-search-stack {
-  max-width: 46rem;
-  margin: 0 auto 1.2rem;
-}
-
-.explore-search {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-}
-
-.explore-search > .relative {
-  flex: 1 1 auto;
-}
-
-.explore-search-stack > .g3-segment-group {
-  width: min(100%, 24rem);
-  margin-top: 0.75rem;
-}
-
-.explore-channels {
-  margin-bottom: 1.3rem;
-}
-
-.channel-result-row {
-  display: flex;
-  gap: 0.65rem;
-  overflow-x: auto;
-  padding: 0.1rem 0 0.4rem;
-  scrollbar-width: none;
-}
-
-.channel-result-row::-webkit-scrollbar {
+.video-card-edge-action {
   display: none;
 }
 
-.channel-result {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.65rem;
-  min-width: 12rem;
-  padding: 0.65rem 0.8rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 14px;
-  background: var(--color-card);
-  color: var(--color-text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+@media (hover: hover) and (pointer: fine) {
+  .video-card-frame {
+    --video-card-thumbnail-height: calc(100cqi * 0.5625);
+    overflow: hidden;
+  }
+
+  .video-card-frame.video-card-short {
+    --video-card-thumbnail-height: calc(100cqi * 1.7778);
+  }
+
+  .video-card-frame > .video-card-swipe.g3-swipe-item[data-mouse-swipe="false"] {
+    display: block;
+    overflow: hidden;
+  }
+
+  .video-card-frame > .video-card-swipe > .g3-swipe-content {
+    width: 100%;
+    background: transparent;
+    box-shadow: none;
+    border-radius: inherit;
+    transform: none;
+    z-index: auto;
+  }
+
+  .video-card-frame > .video-card-swipe > .g3-swipe-content > .g3-card {
+    overflow: hidden;
+  }
+
+  .video-card-frame > .video-card-swipe > .g3-swipe-actions {
+    display: none;
+  }
+
+  .video-card-edge-action {
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: clamp(3.5rem, 24%, 6rem);
+    height: var(--video-card-thumbnail-height);
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    color: #fff;
+    cursor: pointer;
+    opacity: 0.62;
+    transition:
+      opacity 180ms ease,
+      filter 180ms ease;
+  }
+
+  .video-card-edge-action-start {
+    left: 0;
+    background: linear-gradient(90deg, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+  }
+
+  .video-card-edge-action-end {
+    right: 0;
+    background: linear-gradient(270deg, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+  }
+
+  .video-card-edge-action:hover,
+  .video-card-edge-action:focus-visible {
+    opacity: 1;
+    filter: brightness(1.18);
+  }
+
+  .video-card-edge-action svg {
+    transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .video-card-edge-action:hover svg,
+  .video-card-edge-action:focus-visible svg {
+    transform: scale(1.16);
+  }
+
+  .video-card-edge-action:focus-visible {
+    outline: 2px solid var(--g3-color-accent);
+    outline-offset: -2px;
+  }
+
+  .video-card-remove {
+    z-index: 6;
+  }
 }
 
-.channel-result:hover {
-  border-color: color-mix(in srgb, var(--color-focused) 48%, var(--color-card-border));
-}
-
-.channel-result img,
-.channel-result .channel-avatar {
-  width: 2.3rem;
-  height: 2.3rem;
-  object-fit: cover;
-  border-radius: 999px;
-}
-
-.channel-result > span:last-child {
-  display: grid;
-  min-width: 0;
-}
-
-.channel-result strong,
-.channel-result small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.channel-result strong {
-  font-size: 0.8rem;
-}
-
-.channel-result small {
-  margin-top: 0.14rem;
-  color: var(--color-text-secondary);
-  font-size: 0.68rem;
-}
-
-.discovery-banner {
-  display: flex;
-  align-items: center;
-  gap: 1.15rem;
-  margin: 0 auto 1.5rem;
-  padding: 1.2rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-  background: var(--color-card);
-}
-
-.discovery-icon,
-.sheet-icon,
-.setting-icon {
-  display: grid;
-  flex: 0 0 auto;
-  width: 2.65rem;
-  height: 2.65rem;
-  place-items: center;
-  border-radius: 14px;
-  background: var(--tawny-amber-soft);
-  color: var(--color-focused);
-}
-
-.search-summary {
-  margin: 0 0 1rem;
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-}
-
-.empty-state {
-  display: grid;
-  min-height: 16rem;
-  place-items: center;
-  align-content: center;
-  padding: 2rem;
-  color: var(--color-text-secondary);
-  text-align: center;
-}
-
-.empty-state h3 {
-  margin: 0.7rem 0 0;
-  color: var(--color-text);
-}
-
-.empty-state p {
-  max-width: 30rem;
-}
-
-.empty-orbit {
-  color: var(--color-focused);
-  font-size: 3rem;
-}
-
-.detail-shell {
-  display: flex;
-  height: 100dvh;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--color-bg);
+.tawny-shell {
+  background:
+    radial-gradient(circle at 15% -10%, rgba(245, 165, 36, 0.075), transparent 25rem),
+    var(--g3-color-bg);
 }
 
 .player-content {
@@ -1313,197 +218,6 @@ textarea {
   margin: 0 auto;
 }
 
-.player-stage {
-  position: relative;
-  overflow: hidden;
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  /* Nothing over the video is prose. Without this, clicking the speed control
-     selects its label, and the desktop double-click-to-fullscreen gesture
-     selects whatever text sits under the pointer. */
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.player-stage iframe,
-.player-stage video {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
-
-.quick-speed-button {
-  position: absolute !important;
-  right: 0.85rem;
-  bottom: 0.85rem;
-  z-index: 3;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-  background: rgba(11, 15, 20, 0.82) !important;
-  color: white !important;
-  backdrop-filter: blur(9px);
-}
-
-/* One rhythm down the watch page. Every block used to bring its own margin -
-   chips, actions, channel, description, comments and related each a different
-   one - so the gaps drifted. The column owns the spacing instead and its
-   children carry none. Cards are named separately because g3-ui's stylesheet
-   loads after this one and its card margin would otherwise win. */
-.player-details {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.player-details > *,
-.player-details > .g3-card {
-  margin-top: 0;
-  margin-bottom: 0;
-}
-
-.player-title-block {
-  padding-top: 0.6rem;
-}
-
-.player-title-block > h1 {
-  margin: 0 0 0.35rem;
-  font-size: clamp(1.35rem, 3vw, 2.2rem);
-  line-height: 1.16;
-  letter-spacing: -0.035em;
-}
-
-.player-title-block > .video-stats {
-  margin: 0;
-}
-
-/* A heading belongs to the grid under it, so it sits closer to that grid than
-   to the comments above. */
-.player-related {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.player-related > .section-heading {
-  margin: 0;
-}
-
-.playback-status-row {
-  justify-content: space-between;
-  gap: 0.7rem;
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
-}
-
-.playback-status-row > span:nth-child(2) {
-  min-width: 0;
-  flex: 1;
-}
-
-.playback-refresh,
-.playback-refresh {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.32rem;
-  padding: 0.3rem 0.45rem;
-}
-
-.resolver-pill {
-  gap: 0.3rem;
-  padding: 0.28rem 0.48rem;
-  border-radius: 999px;
-  background: var(--tawny-amber-soft);
-  color: var(--color-focused);
-  font-weight: 720;
-}
-
-.video-engagement {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-/* A g3 Badge centres a single label; these carry an icon beside the count. */
-.video-engagement .engagement-count {
-  gap: 0.3rem;
-  min-height: 2rem;
-  padding-inline: 0.65rem;
-}
-
-.speed-strip {
-  display: flex;
-  align-items: center;
-  gap: 0.48rem;
-  margin: 1rem 0;
-  padding: 0.6rem;
-  overflow-x: auto;
-  border: 1px solid var(--color-card-border);
-  border-radius: 14px;
-  background: var(--color-card);
-}
-
-.speed-strip > span {
-  gap: 0.35rem;
-  margin: 0 0.25rem;
-  color: var(--color-text-secondary);
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.speed-chip,
-.speed-option {
-  border: 1px solid var(--color-card-border);
-  background: var(--color-control);
-  color: var(--color-text);
-  cursor: pointer;
-}
-
-.speed-chip {
-  padding: 0.38rem 0.65rem;
-  border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 700;
-}
-
-.speed-chip.selected,
-.speed-option.selected {
-  border-color: var(--color-focused);
-  background: var(--color-focused);
-  color: #241608;
-}
-
-.player-actions {
-  display: flex;
-  gap: 0.55rem;
-  overflow-x: auto;
-}
-
-.g3-btn-content-start {
-  box-sizing: border-box;
-  min-width: max-content;
-  padding: 0.1rem 0.85rem 0.1rem 2.35rem;
-}
-
-.player-actions .g3-btn {
-  flex: 0 0 auto;
-  overflow: hidden;
-}
-
-.player-actions .g3-btn-content-start {
-  max-width: 100%;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-/* Sits between the chip row and the grid, and only while a duration chip is
-   active. Without it a chip that legitimately matches 20 of 11,762 videos reads
-   as a broken filter with a missing Load more button. */
-/* g3-ui ships no spacing scale and gives .g3-field-wrapper no margin, so a
-   stacked Field, error line and Button sit flush against each other. Every form
-   in this file shares one container rather than each control carrying its own
-   margin, which is what keeps the rhythm even when a row is conditional. */
 /* Off is the resting look; on is stated rather than merely un-dimmed, because
    the two states differ only in whether the next video starts by itself. */
 .player-autoplay-button {
@@ -1512,80 +226,7 @@ textarea {
 
 .player-autoplay-button.is-on {
   opacity: 1;
-  color: var(--color-focused);
-}
-
-.account-form {
-  display: grid;
-  gap: 0.7rem;
-  margin-top: 0.25rem;
-}
-
-/* Two buttons in a row read as one control group, not as a stack. */
-.account-form .g3-btn + .g3-btn {
-  margin-top: -0.1rem;
-}
-
-.account-form .account-error,
-.account-form .account-warning {
-  margin: 0;
-}
-
-.account-setup {
-  display: grid;
-  min-height: 100dvh;
-  place-items: center;
-  padding: 1.5rem;
-}
-
-.account-setup h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.15rem;
-}
-
-.account-setup-lead,
-.account-setup-note {
-  margin: 0 0 1rem;
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.account-setup-note {
-  margin: 0.85rem 0 0;
-  font-size: 0.74rem;
-}
-
-/* A guest has no way back into this library, and a sign-in abandons it. Both
-   are worth saying in a colour that is not the body text. */
-.account-warning {
-  margin: 0.6rem 0;
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.5;
-}
-
-.account-error {
-  margin: 0.5rem 0;
-  color: var(--color-danger, #f87171);
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-
-/* SponsorBlock categories are cards so their descriptions can wrap without
-   inventing a special row treatment for each category. */
-.settings-card-stack {
-  display: grid;
-  gap: 0.55rem;
-  margin-top: 0.85rem;
-}
-
-.feed-filter-note {
-  margin: 0 0 0.75rem;
-  padding: 0 0.15rem;
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.45;
+  color: var(--g3-color-accent);
 }
 
 .persistent-player {
@@ -1675,15 +316,6 @@ textarea {
   aspect-ratio: 16 / 9;
 }
 
-.persistent-player-status {
-  display: flex;
-  min-height: 2.25rem;
-  align-items: center;
-  padding: 0.35rem 1rem;
-  border-bottom: 1px solid var(--color-card-border);
-  background: var(--color-bg);
-}
-
 .persistent-player.mini {
   position: fixed;
   z-index: 45;
@@ -1694,9 +326,9 @@ textarea {
   grid-template-columns: 7.4rem minmax(0, 1fr) 2.6rem;
   min-height: 4.15rem;
   overflow: hidden;
-  border-top: 1px solid var(--color-card-border);
-  border-bottom: 1px solid var(--color-card-border);
-  background: var(--color-card);
+  border-top: 1px solid var(--g3-color-border);
+  border-bottom: 1px solid var(--g3-color-border);
+  background: var(--g3-color-card);
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.28);
 }
 
@@ -1712,701 +344,16 @@ textarea {
   padding: 0.45rem 0.7rem;
   border: 0;
   background: transparent;
-  color: var(--color-text);
+  color: var(--g3-color-text);
   text-align: left;
   cursor: pointer;
-}
-
-.mini-player-copy strong,
-.mini-player-copy span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mini-player-copy strong {
-  font-size: 0.82rem;
-}
-
-.mini-player-copy span {
-  margin-top: 0.2rem;
-  color: var(--color-text-secondary);
-  font-size: 0.7rem;
-}
-
-.mini-player-close {
-  display: grid;
-  width: 2.4rem;
-  height: 2.4rem;
-  align-self: center;
-  place-items: center;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.mini-player-close:hover {
-  background: var(--color-control);
-  color: var(--color-text);
-}
-
-.persistent-player.mini .persistent-speed-button {
-  display: none;
 }
 
 .player-detail-content {
   padding-bottom: 2rem;
 }
 
-/* The channel and the description are g3 Cards; the card owns the surface and
-   padding, these only lay out what sits inside it. */
-.player-channel-card > .g3-card-body {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-}
-
-.player-channel-card .g3-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.player-channel-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.description-card .g3-card-header {
-  margin-bottom: 0.6rem;
-}
-
-.description-card .description-toggle {
-  margin-top: 0.4rem;
-}
-
-.chapter-strip,
-.caption-strip {
-  display: flex;
-  gap: 0.55rem;
-  overflow-x: auto;
-  padding-bottom: 0.25rem;
-  scrollbar-width: none;
-}
-
-.chapter-strip::-webkit-scrollbar,
-.caption-strip::-webkit-scrollbar {
-  display: none;
-}
-
-.chapter-card {
-  display: grid;
-  flex: 0 0 min(15rem, 75vw);
-  gap: 0.22rem;
-  padding: 0.75rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 12px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.chapter-card:hover {
-  border-color: color-mix(in srgb, var(--color-focused) 50%, var(--color-card-border));
-}
-
-.chapter-card strong {
-  color: var(--color-focused);
-  font-size: 0.74rem;
-}
-
-.chapter-card span {
-  overflow: hidden;
-  font-size: 0.8rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.caption-chip {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.48rem 0.7rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 999px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 0.74rem;
-  cursor: pointer;
-}
-
-.caption-chip small {
-  color: var(--color-focused);
-  font-size: 0.58rem;
-  text-transform: uppercase;
-}
-
-.caption-chip.active {
-  border-color: var(--color-focused);
-  background: var(--tawny-amber-soft);
-  color: var(--color-text);
-}
-
-/* Captions may be a long browsing strip, but audio is a short, deliberate
-   choice. Wrap it in the sheet so every language is visible without a
-   horizontal-scroll gesture. */
-.audio-track-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-  padding-bottom: 0.25rem;
-  touch-action: pan-y;
-}
-
-/* Inherits the plain card surface. It used to be tinted amber, which made it
-   the only panel on the page that did not match the channel row and the
-   comments button sitting right beside it. */
-
-.video-description {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
-.video-description.expanded {
-  display: block;
-  overflow: visible;
-}
-
-.comment-list {
-  display: grid;
-  gap: 0.7rem;
-}
-
-/* Each comment is a g3 Card, which owns the surface, padding and elevation for
-   the platform. Its margin is cleared because the list gap already spaces the
-   thread. */
-.comment-list > .comment-card {
-  margin-bottom: 0;
-}
-
-.comment-card > .g3-card-body {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.75rem;
-}
-
-/* The card has no border to recolour, so the pinned accent is drawn inside it. */
-.comment-card.pinned {
-  outline: 1px solid color-mix(in srgb, var(--color-focused) 38%, var(--color-card-border));
-  outline-offset: -1px;
-}
-
-.comment-card .g3-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.comment-content {
-  min-width: 0;
-}
-
-.comment-heading,
-.comment-stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.42rem;
-}
-
-.comment-heading strong {
-  font-size: 0.78rem;
-}
-
-.comment-heading > span:last-child,
-.comment-stats {
-  color: var(--color-text-secondary);
-  font-size: 0.66rem;
-}
-
-.comment-content > p {
-  margin: 0.45rem 0 0.55rem;
-  color: var(--color-text-secondary);
-  font-size: 0.8rem;
-  line-height: 1.52;
-  white-space: pre-wrap;
-}
-
-.comment-stats span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.load-comments-button {
-  width: 100%;
-  margin-top: 0.8rem;
-}
-
-.detail-muted {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: 0.8rem;
-}
-
-.loading-orbit {
-  width: 2.2rem;
-  height: 2.2rem;
-  border: 3px solid var(--color-card-border);
-  border-top-color: var(--color-focused);
-  border-radius: 999px;
-  animation: spin 0.9s linear infinite;
-}
-
-.section-heading.compact {
-  margin: 0 0 1rem;
-}
-
-.section-heading.compact h2 {
-  font-size: 1.25rem;
-}
-
-.sheet-heading {
-  gap: 0.85rem;
-  margin-bottom: 1rem;
-}
-
-.sheet-heading h2 {
-  font-size: 1.2rem;
-}
-
-.sheet-heading p {
-  display: -webkit-box;
-  overflow: hidden;
-  font-size: 0.76rem;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-}
-
-.video-action-heading {
-  display: grid;
-  grid-template-columns: minmax(5rem, 6.75rem) minmax(0, 1fr);
-  align-items: start;
-  gap: 0.8rem;
-}
-
-.video-action-heading > div {
-  min-width: 0;
-}
-
-.video-action-heading h2 {
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0.15rem 0 0.28rem;
-  font-size: 1.05rem;
-  line-height: 1.22;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.action-sheet-thumbnail {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 8px;
-  object-fit: cover;
-}
-
-/* A heading with a thumbnail and a two-line title, then six actions: taller
-   than g3_ui's generic half-height cap, and the earlier bump to 64dvh still cut
-   Share off the bottom. This sheet is a menu, so it should be as tall as it
-   needs to be - the cap is only there to keep the page it came from in view and
-   to leave the drag handle reachable.
-
-   Sizes go through g3-ui's `--g3-sheet-max-height`, set on the sheet's own
-   class. Overriding the cap with a selector had to out-rank g3-ui's rule, and
-   because its stylesheet loads after this one an equal-weight override silently
-   lost, leaving every sheet at min(50dvh, 26rem). */
-.video-actions-sheet {
-  --g3-sheet-max-height: min(86dvh, 46rem);
-}
-
-/* g3 paints the sheet panel and its list items with the same --color-card, so
-   an inset list dissolved into the sheet behind it. Recessing the panel leaves
-   the list reading as a card resting on the sheet. */
-.g3-sheet.g3-sheet-bottom {
-  background: var(--color-bg-secondary);
-}
-
-.g3-sheet.g3-sheet-bottom .g3-list-inset {
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-}
-
-.g3-sheet.g3-sheet-bottom .g3-list-inset .g3-item {
-  background: var(--color-card);
-}
-
-.playlist-picker-sheet,
-.speed-sheet {
-  padding: 1rem !important;
-}
-
-.speed-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.6rem;
-}
-
-.speed-option {
-  min-height: 3.2rem;
-  border-radius: 13px;
-  font-size: 0.9rem;
-  font-weight: 760;
-}
-
-/* The real file input stays in the DOM so the styled row above can click it,
-   but never shows: `display: none` would stop that click reaching it in some
-   engines, so it is clipped instead. */
-.visually-hidden-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
-.section-note {
-  margin: 0 0 0.85rem;
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.section-kicker-inline {
-  display: block;
-  margin: 1.1rem 0 0.6rem;
-}
-
-.export-format-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.export-format-row .g3-btn {
-  gap: 0.4rem;
-}
-
-/* Sits under the Subscribe button on the channel page. It filters the feed,
-   not this page, so it is deliberately quieter than the tab strip above it. */
-.subscription-content-row {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  margin-top: 0.85rem;
-  flex-wrap: wrap;
-}
-
-.subscription-content-label {
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-.subscription-content-segments {
-  flex: 1;
-  min-width: 13rem;
-  max-width: 22rem;
-}
-
-/* A labelled segmented control, used where a setting has three states and a
-   toggle would have to lie about one of them. */
-.setting-choice-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.85rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-  background: var(--color-card);
-}
-
-.setting-choice-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.setting-choice-copy strong {
-  font-size: 0.92rem;
-  font-weight: 660;
-}
-
-.setting-choice-copy span {
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-
-.setting-choice-segments {
-  flex: 0 1 auto;
-  min-width: 12rem;
-}
-
-@container g3-app-shell (width <= 680px) {
-  .setting-choice-row {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 0.65rem;
-  }
-
-  .setting-choice-segments {
-    min-width: 0;
-  }
-}
-
-.settings-content {
-  width: min(100%, 820px);
-  margin: 0 auto;
-}
-
-.settings-hero {
-  gap: 1rem;
-  margin: 0 0 2rem;
-  padding: 1.25rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 20px;
-  background: linear-gradient(135deg, var(--tawny-amber-soft), var(--color-card));
-}
-
-.settings-section {
-  margin-bottom: 1.6rem;
-}
-
-.settings-section > .section-kicker {
-  display: block;
-  margin: 0 0 0.55rem 0.45rem;
-}
-
-.setting-row {
-  gap: 0.75rem;
-  padding: 0.5rem 0;
-}
-
-.setting-icon {
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 11px;
-}
-
-.setting-icon.flip svg {
-  transform: scaleX(-1);
-}
-
-.setting-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
-.setting-copy strong {
-  font-size: 0.86rem;
-}
-
-.setting-copy span {
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
-}
-
-.setting-divider {
-  height: 1px;
-  margin-left: 3rem;
-  background: var(--color-card-border);
-}
-
-.data-card .g3-card-body {
-  display: flex;
-  min-height: 4rem;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 0.35rem;
-}
-
-.data-card strong {
-  color: var(--color-focused);
-  font-size: 1.65rem;
-}
-
-.data-card span {
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
-}
-
-.spin {
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Follow the responsive g3_ui shell rather than the browser viewport. This
-   keeps the content layout in sync with the rail/bottom-nav switch when the
-   app runs in a narrow desktop window or an embedded shell. */
-@container g3-app-shell (width <= 1020px) {
-  .video-grid,
-  .playlist-grid,
-  .data-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .channel-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@container g3-app-shell (width <= 680px) {
-  .page {
-    padding: 1rem;
-  }
-
-  .header-eyebrow {
-    display: none;
-  }
-
-  .feed-intro,
-  .section-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    margin-top: 0.2rem;
-  }
-
-  .feed-intro > .g3-btn,
-  .section-heading > .g3-btn {
-    align-self: stretch;
-  }
-
-  .feed-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .explore-search {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .explore-search > .g3-btn {
-    width: 100%;
-  }
-
-  .subsection-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .feed-count {
-    align-self: flex-end;
-  }
-
-  .video-grid,
-  .playlist-grid,
-  .data-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .channel-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .channel-card {
-    padding-inline: 0.7rem;
-  }
-
-  .playback-status-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .player-details {
-    padding-top: 0.9rem;
-  }
-
-  .speed-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .settings-hero {
-    align-items: flex-start;
-  }
-
-  .setting-row {
-    flex-wrap: wrap;
-  }
-
-  .setting-copy + .g3-select-btn {
-    width: 100%;
-    margin-left: 3rem;
-  }
-
-  .library-heading .heading-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .library-summary {
-    flex-wrap: wrap;
-  }
-}
-
 @container g3-app-shell (width <= 390px) {
-  .channel-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .swipe-hint {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  /* All three header actions stay available on narrow screens; they are
-     tightened instead of one being dropped. */
-  .header-actions {
-    gap: 0.1rem;
-  }
-
-  .header-actions .icon-button {
-    padding: 0.3rem;
-  }
-
-  .action-sheet-thumbnail {
-    width: 100%;
-  }
-
   .persistent-player.mini {
     grid-template-columns: 6.8rem minmax(0, 1fr) 2.5rem;
   }
@@ -2421,25 +368,24 @@ textarea {
     bottom: 1.25rem;
     left: auto;
     width: min(26rem, calc(100% - 6.5rem));
-    border: 1px solid var(--color-card-border);
+    border: 1px solid var(--g3-color-border);
     border-radius: var(--tawny-radius);
-    box-shadow: 0 18px 44px var(--color-shadow);
+    box-shadow: 0 18px 44px var(--g3-color-shadow);
   }
 
-  /* Desktop drives the card with buttons rather than a swipe, so the gesture
-     layer is removed entirely instead of lurking behind the card. */
-  .card-quick-action {
-    display: flex;
-  }
-
-  .video-swipe-row .g3-swipe-actions {
-    display: none;
+  /* The player is normally comfortable for reading around it. Theater mode is
+     an explicit choice: it uses the entire shell content width while the rail
+     remains permanent navigation outside that shell. */
+  .persistent-player.expanded.theater-mode {
+    width: 100%;
+    max-width: none;
+    margin: 0;
   }
 }
 
 /* Custom video controls, modeled after LibreTube's three-zone player layout. */
 .persistent-player-stage:focus-visible {
-  outline: 2px solid var(--color-focused);
+  outline: 2px solid var(--g3-color-accent);
   outline-offset: -2px;
 }
 
@@ -2620,6 +566,18 @@ textarea {
   cursor: default;
 }
 
+/* Theater is a desktop layout choice. Fullscreen remains the only equivalent
+   control on a phone, where the player already spans the available width. */
+.player-theater-button {
+  display: none;
+}
+
+@container g3-app-shell (width >= 48rem) {
+  .player-theater-button {
+    display: inline-grid;
+  }
+}
+
 .player-play-button {
   width: clamp(3.5rem, 8vw, 4.5rem);
   height: clamp(3.5rem, 8vw, 4.5rem);
@@ -2670,20 +628,6 @@ textarea {
   display: inline-grid;
 }
 
-.player-seek-button {
-  width: 3.4rem;
-  height: 3.4rem;
-}
-
-.player-seek-button > span {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  font-size: 0.57rem;
-  font-weight: 800;
-  transform: translate(-50%, -46%);
-}
-
 .player-controls-bottom {
   right: 0;
   bottom: 0;
@@ -2723,7 +667,7 @@ textarea {
 }
 
 .player-captions-button.selected {
-  box-shadow: inset 0 -2px 0 var(--color-focused);
+  box-shadow: inset 0 -2px 0 var(--g3-color-accent);
 }
 
 .player-caption-state-bridge {
@@ -2741,7 +685,7 @@ textarea {
   --player-buffered: 0%;
   --player-track-fallback: linear-gradient(
     to right,
-    var(--color-focused) 0 var(--player-progress),
+    var(--g3-color-accent) 0 var(--player-progress),
     rgba(255, 255, 255, 0.5) var(--player-progress) var(--player-buffered),
     rgba(255, 255, 255, 0.25) var(--player-buffered) 100%
   );
@@ -2784,6 +728,36 @@ textarea {
   opacity: 1;
 }
 
+/* The offer to skip a segment the viewer asked to see. It sits on the side
+   the timeline runs toward, clear of the control row, where YouTube's own skip
+   button sits and where a thumb is already resting in landscape. */
+.player-sponsor-skip {
+  position: absolute;
+  z-index: 5;
+  right: 0.9rem;
+  bottom: 4.6rem;
+  pointer-events: auto;
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.42rem 0.5rem 0.42rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.player-sponsor-skip[hidden] {
+  display: none;
+}
+
+.player-sponsor-skip:hover {
+  background: rgba(0, 0, 0, 0.9);
+}
+
 .player-chapter-label {
   padding: 0;
   overflow: hidden;
@@ -2803,7 +777,7 @@ textarea {
 }
 
 .player-chapter-label:hover {
-  color: var(--color-focused);
+  color: var(--g3-color-accent);
 }
 
 .player-chapter-title {
@@ -2818,63 +792,14 @@ textarea {
   opacity: 0.72;
 }
 
-.chapter-sheet-list {
-  display: flex;
-  max-height: 60vh;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.chapter-sheet-row {
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  padding: 0.7rem 0.5rem;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text);
-  cursor: pointer;
-  text-align: left;
-}
-
-.chapter-sheet-row:hover {
-  background: var(--color-control);
-}
-
-.chapter-sheet-row strong {
-  color: var(--color-focused);
-  font-variant-numeric: tabular-nums;
-}
-
-/* The sheet's own height is set by its content area, which g3_ui caps at
-   min(50dvh, 26rem) - raising the panel alone just left dead space below the
-   list. These raise the cap and let the list take whatever is left. */
-/* Doubled up on the sheet root because g3_ui's stylesheet loads after this
-   one: at equal specificity its cap would win. */
-.player-sheet {
-  --g3-sheet-max-height: 74dvh;
-}
-
 /* A fixed height, not a range: a thread of three comments should not open as a
    short sheet that then grows as more load. It reaches up to the bottom of the
    video and stops there, so the video stays in view above the thread. Where
    that edge is depends on the shell's width and the player's, so the player
    measures it when the sheet opens; the fallback only covers the first frame. */
-.comments-sheet {
-  --g3-sheet-max-height: var(--tawny-comments-sheet-height, 60dvh);
-}
-
 .comments-sheet .g3-sheet-content {
   height: var(--tawny-comments-sheet-height, 60dvh);
   min-height: 0;
-}
-
-.comments-sheet .comment-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .player-seek-preview {
@@ -2946,7 +871,7 @@ textarea {
   appearance: none;
   border: 0;
   border-radius: 999px;
-  background: var(--color-focused);
+  background: var(--g3-color-accent);
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.6);
 }
 
@@ -2959,7 +884,7 @@ textarea {
   height: 13px;
   border: 0;
   border-radius: 999px;
-  background: var(--color-focused);
+  background: var(--g3-color-accent);
 }
 
 .player-options-menu {
@@ -3016,8 +941,8 @@ textarea {
 
 .player-option-button:hover,
 .player-option-button.selected {
-  border-color: var(--color-focused);
-  background: var(--color-focused);
+  border-color: var(--g3-color-accent);
+  background: var(--g3-color-accent);
   color: #251608;
 }
 
@@ -3044,7 +969,7 @@ textarea {
   width: 2.4rem;
   height: 2.4rem;
   border: 3px solid rgba(255, 255, 255, 0.24);
-  border-top-color: var(--color-focused);
+  border-top-color: var(--g3-color-accent);
   border-radius: 50%;
   animation: player-buffering-spin 760ms linear infinite;
 }
@@ -3108,7 +1033,6 @@ textarea {
 
 .persistent-player.mini .player-controls-top,
 .persistent-player.mini .player-controls-bottom,
-.persistent-player.mini .player-seek-button,
 .persistent-player.mini .player-options-menu,
 .persistent-player.mini .player-seek-feedback {
   display: none;
@@ -3154,16 +1078,6 @@ textarea {
     gap: 0.8rem;
   }
 
-  .player-seek-button {
-    width: 3rem;
-    height: 3rem;
-  }
-
-  .player-seek-button svg {
-    width: 1.8rem;
-    height: 1.8rem;
-  }
-
   .player-controls-top {
     padding-inline: 0.35rem;
   }
@@ -3183,151 +1097,17 @@ textarea {
   }
 }
 
-/* -- Subscriptions: groups and channel lists -- */
-
-.group-card-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin-bottom: 0.75rem;
-}
-
-.group-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.55rem 0.6rem;
-  border-radius: 12px;
-  background: var(--color-card-inset);
-}
-
-.group-row-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-}
-
-.group-row-copy strong {
-  font-size: 0.9rem;
-}
-
-.group-row-copy span {
-  color: var(--color-text-secondary);
-  font-size: 0.74rem;
-}
-
-/* Overlapping faces read as "these channels", without a wall of names. */
-.group-row-faces {
-  display: flex;
-  flex-shrink: 0;
-}
-
-.group-row-faces .channel-avatar {
-  width: 1.6rem;
-  height: 1.6rem;
-  margin-left: -0.4rem;
-  border: 2px solid var(--color-card-inset);
-  font-size: 0.7rem;
-}
-
-.group-row-faces .channel-avatar:first-child {
-  margin-left: 0;
-}
-
-.group-row-delete {
-  display: flex;
-  flex-shrink: 0;
-  padding: 0.3rem;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.group-row-delete:hover {
-  background: var(--color-control);
-  color: var(--color-danger);
-}
-
-.group-editor-list {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-  flex-direction: column;
-  gap: 0.25rem;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-/* Wide enough for a channel name beside its avatar, and tall enough that the
-   list is worth scrolling - but bounded, so the modal stays a dialog rather than
-   growing into a full-screen page. */
-.group-editor-modal {
-  width: min(100%, 32rem);
-}
-
-.group-editor-modal .group-editor-list {
-  max-height: min(52dvh, 26rem);
-}
-
-/* The gap belongs on the field wrapper, not the input. A margin on the input
-   makes the field control box taller than the input inside it, and the trailing
-   slot centres on that control - which left the search icon sitting low. */
-.g3-field-wrapper:has(.group-editor-search) {
-  margin-bottom: 0.8rem;
-}
-
-.group-editor-empty {
-  margin: 1.25rem 0;
-  color: var(--color-text-secondary);
-  text-align: center;
-}
-
-.group-editor-row {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--color-text);
-  cursor: pointer;
-  text-align: left;
-}
-
-.group-editor-row span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 0.88rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.group-editor-row:hover {
-  background: var(--color-control);
-}
-
-.group-editor-row.included {
-  border-color: color-mix(in srgb, var(--color-focused) 45%, transparent);
-  color: var(--color-focused);
-}
-
 /* The sheet is the whole page - its own header included - so it stands in for
    the shell column rather than sitting inside it as one more row. The cover
    class brings a `min-height: 100dvh` meant for a standalone surface; inside
    the shell that would push the tab bar off the bottom. */
-.auxiliary-cover.route-transition-cover {
+.auxiliary-cover.route-transition-overlay-region {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
-  background: var(--color-bg);
+  background: var(--g3-color-bg);
 }
 
 /* On the desktop rail layout the shell is a grid, and g3-ui places the header
@@ -3335,7 +1115,7 @@ textarea {
    whole content column - otherwise the grid sizes it to its content and a short
    page (an empty queue) leaves the shell showing underneath it. */
 @container g3-app-shell (min-width: 48rem) {
-  .g3-navbar > .auxiliary-cover {
+  .g3-tab-layout > .auxiliary-cover {
     width: auto;
     grid-column: 2;
     grid-row: 1 / -1;
@@ -3344,20 +1124,20 @@ textarea {
 
 /* On the watch route the player scrolls away with the page instead of holding
    the top of the screen. It lives in the shell so playback survives navigation,
-   which puts it *outside* `.g3-body-content` - the element that normally
+   which puts it *outside* `.g3-content-scroll` - the element that normally
    scrolls - so it could never move. Rather than relocate it, the watch route
    moves the scroll one level up onto the shell column, so the player and the
    details below it scroll as one surface. Both axes have to be handed over
    together: leaving `overflow-x: hidden` on the body would make its `visible`
    y-axis compute to `auto` and it would go on scrolling by itself. */
-.g3-app-shell .g3-navbar.tawny-shell-cover {
+.g3-app-shell .g3-tab-layout.tawny-shell-cover {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
 }
 
-.tawny-shell-cover > .g3-body,
-.tawny-shell-cover .g3-body-content {
+.tawny-shell-cover > .g3-content,
+.tawny-shell-cover .g3-content-scroll {
   overflow: visible;
 }
 
@@ -3366,7 +1146,7 @@ textarea {
    the video out from under a sheet sized to stop at the video's bottom edge.
    The body scroll lock cannot do this: on the watch route the column above is
    what scrolls. The class is set by the player while the sheet is up. */
-html.tawny-comments-open .g3-app-shell .g3-navbar.tawny-shell-cover {
+html.tawny-comments-open .g3-app-shell .g3-tab-layout.tawny-shell-cover {
   overflow-y: hidden;
 }
 
@@ -3382,7 +1162,7 @@ html.tawny-comments-open .g3-app-shell .g3-navbar.tawny-shell-cover {
   /* The rail is permanent chrome, so it stays put while the column beside it
      scrolls - and must not be stretched to the height of a long page first.
      Carries the shell class as well, to outrank g3-ui's own placement rule. */
-  .g3-app-shell .g3-navbar.tawny-shell-cover > .g3-navbar-tab-bar {
+  .g3-app-shell .g3-tab-layout.tawny-shell-cover > .g3-nav {
     position: sticky;
     top: 0;
     height: 100dvh;
@@ -3396,16 +1176,16 @@ html.tawny-comments-open .g3-app-shell .g3-navbar.tawny-shell-cover {
    bar steps aside and must not leave a reserved strip behind it. The desktop
    rail is permanent chrome and stays put. */
 @container g3-app-shell (width < 48rem) {
-  .tawny-shell-cover > .g3-navbar-tab-bar {
+  .tawny-shell-cover > .g3-nav {
     display: none;
   }
 
-  .tawny-shell-auxiliary > .g3-navbar-tab-bar {
+  .tawny-shell-auxiliary > .g3-nav {
     display: none;
   }
 
-  .tawny-shell-cover > .g3-body,
-  .tawny-shell-auxiliary > .g3-body {
+  .tawny-shell-cover > .g3-content,
+  .tawny-shell-auxiliary > .g3-content {
     padding-bottom: 0;
   }
 
@@ -3424,27 +1204,6 @@ html.tawny-comments-open .g3-app-shell .g3-navbar.tawny-shell-cover {
       top: 0;
     }
   }
-}
-
-/* -- Player sheets -- */
-
-/* Replaces the icon-and-subtitle heading block, which pushed the actual list
-   below the fold. Just enough to name the sheet. */
-.sheet-label {
-  margin: 0 0 0.55rem;
-  color: var(--color-text-secondary);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-/* The list is the sheet, so it gets the height the heading was using. */
-.player-sheet .chapter-sheet-list {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
-  overscroll-behavior: contain;
 }
 
 /* The chapter gets all the space the transport buttons do not need, at every
@@ -3541,16 +1300,16 @@ html.tawny-comments-open .g3-app-shell .g3-navbar.tawny-shell-cover {
    top-most group, so it floated over a sheet that should have slid across it.
    Unnamed, it stays in the base snapshot, under the sheet. `to` is empty on a
    pop, which is why dismissing keys on `from`. */
-html[data-route-transition="cover-up"][data-route-transition-to^="/watch/"]
+html[data-route-transition="present-sheet"][data-route-transition-to^="/watch/"]
 .persistent-player-stage,
-html[data-route-transition="uncover-down"][data-route-transition-from^="/watch/"]
+html[data-route-transition="dismiss-sheet"][data-route-transition-from^="/watch/"]
   .persistent-player-stage {
   view-transition-name: player;
   contain: layout paint;
 }
 
-html[data-route-transition="cover-up"]::view-transition-group(player),
-html[data-route-transition="uncover-down"]::view-transition-group(player) {
+html[data-route-transition="present-sheet"]::view-transition-group(player),
+html[data-route-transition="dismiss-sheet"]::view-transition-group(player) {
   z-index: 10000;
 }
 
@@ -3567,28 +1326,28 @@ html[data-route-transition="uncover-down"]::view-transition-group(player) {
    was parked at full size before the page arrived and never looked like it
    moved at all. The image pseudos below need it for the same reason: the UA
    cross-fade otherwise survives `animation: none`. */
-html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-group(
+html[data-route-transition-platform="ios"][data-route-transition="present-sheet"]::view-transition-group(
   player
 ),
-html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-group(
+html[data-route-transition-platform="ios"][data-route-transition="dismiss-sheet"]::view-transition-group(
   player
 ) {
-  animation-duration: var(--route-transition-cover-duration) !important;
+  animation-duration: var(--route-transition-sheet-duration) !important;
   animation-timing-function: var(--route-transition-ios-ease) !important;
 }
 
-html[data-route-transition-platform="md"][data-route-transition="cover-up"]::view-transition-group(
+html[data-route-transition-platform="material"][data-route-transition="present-sheet"]::view-transition-group(
   player
 ) {
-  animation-duration: var(--route-transition-cover-duration) !important;
-  animation-timing-function: var(--route-transition-md-decelerate) !important;
+  animation-duration: var(--route-transition-sheet-duration) !important;
+  animation-timing-function: var(--route-transition-material-decelerate) !important;
 }
 
-html[data-route-transition-platform="md"][data-route-transition="uncover-down"]::view-transition-group(
+html[data-route-transition-platform="material"][data-route-transition="dismiss-sheet"]::view-transition-group(
   player
 ) {
-  animation-duration: var(--route-transition-md-sheet-dismiss-duration) !important;
-  animation-timing-function: var(--route-transition-md-accelerate) !important;
+  animation-duration: var(--route-transition-material-sheet-dismiss-duration) !important;
+  animation-timing-function: var(--route-transition-material-accelerate) !important;
 }
 
 /* The stage's own child carries a 220ms transform transition for the swipe
@@ -3596,24 +1355,24 @@ html[data-route-transition-platform="md"][data-route-transition="uncover-down"]:
    transition is a second, shorter motion running underneath the morph - it
    lands early and on a different curve. Nothing should animate inside a frame
    that is itself being animated. */
-html[data-route-transition="cover-up"] .persistent-player-stage video,
-html[data-route-transition="uncover-down"] .persistent-player-stage video,
-html[data-route-transition="cover-up"] .persistent-player-stage iframe,
-html[data-route-transition="uncover-down"] .persistent-player-stage iframe {
+html[data-route-transition="present-sheet"] .persistent-player-stage video,
+html[data-route-transition="dismiss-sheet"] .persistent-player-stage video,
+html[data-route-transition="present-sheet"] .persistent-player-stage iframe,
+html[data-route-transition="dismiss-sheet"] .persistent-player-stage iframe {
   transition: none !important;
 }
 
 /* The mini bar and the expanded stage are both 16:9, but not exactly so at every
    breakpoint. `fill` is the pseudo-element default and would stretch the
    difference across the whole morph; `cover` keeps the picture honest. */
-html[data-route-transition="cover-up"]::view-transition-new(player),
-html[data-route-transition="uncover-down"]::view-transition-old(player) {
+html[data-route-transition="present-sheet"]::view-transition-new(player),
+html[data-route-transition="dismiss-sheet"]::view-transition-old(player) {
   object-fit: cover;
   object-position: center;
 }
 
-html[data-route-transition="cover-up"]::view-transition-old(player),
-html[data-route-transition="uncover-down"]::view-transition-new(player) {
+html[data-route-transition="present-sheet"]::view-transition-old(player),
+html[data-route-transition="dismiss-sheet"]::view-transition-new(player) {
   animation: none !important;
   opacity: 0;
 }
@@ -3624,8 +1383,8 @@ html[data-route-transition="uncover-down"]::view-transition-new(player) {
    own frame was and chased it up - the jump when opening from the mini bar.
    A morph wants the outgoing frame hidden and the incoming one simply present:
    the picture is the same picture, only its box is changing. */
-html[data-route-transition="cover-up"]::view-transition-new(player),
-html[data-route-transition="uncover-down"]::view-transition-old(player) {
+html[data-route-transition="present-sheet"]::view-transition-new(player),
+html[data-route-transition="dismiss-sheet"]::view-transition-old(player) {
   animation: none !important;
   opacity: 1;
 }
@@ -3639,32 +1398,32 @@ html[data-route-transition="uncover-down"]::view-transition-old(player) {
    The cover keyframes translate by a share of their own box, which is the whole
    viewport for the sheet but only the video's height here, so these restate the
    same travel in viewport units. */
-html[data-route-transition-platform="ios"][data-route-transition="cover-up"]::view-transition-new(
+html[data-route-transition-platform="ios"][data-route-transition="present-sheet"]::view-transition-new(
   player
 ):only-child {
-  animation: tawny-player-ios-rise var(--route-transition-cover-duration)
+  animation: tawny-player-ios-rise var(--route-transition-sheet-duration)
     var(--route-transition-ios-ease) both !important;
 }
 
-html[data-route-transition-platform="ios"][data-route-transition="uncover-down"]::view-transition-old(
+html[data-route-transition-platform="ios"][data-route-transition="dismiss-sheet"]::view-transition-old(
   player
 ):only-child {
-  animation: tawny-player-ios-fall var(--route-transition-cover-duration)
+  animation: tawny-player-ios-fall var(--route-transition-sheet-duration)
     var(--route-transition-ios-ease) both !important;
 }
 
-html[data-route-transition-platform="md"][data-route-transition="cover-up"]::view-transition-new(
+html[data-route-transition-platform="material"][data-route-transition="present-sheet"]::view-transition-new(
   player
 ):only-child {
-  animation: tawny-player-md-rise var(--route-transition-cover-duration)
-    var(--route-transition-md-decelerate) both !important;
+  animation: tawny-player-md-rise var(--route-transition-sheet-duration)
+    var(--route-transition-material-decelerate) both !important;
 }
 
-html[data-route-transition-platform="md"][data-route-transition="uncover-down"]::view-transition-old(
+html[data-route-transition-platform="material"][data-route-transition="dismiss-sheet"]::view-transition-old(
   player
 ):only-child {
-  animation: tawny-player-md-fall var(--route-transition-md-sheet-dismiss-duration)
-    var(--route-transition-md-accelerate) both !important;
+  animation: tawny-player-md-fall var(--route-transition-material-sheet-dismiss-duration)
+    var(--route-transition-material-accelerate) both !important;
 }
 
 @keyframes tawny-player-ios-rise {
@@ -3729,129 +1488,13 @@ html[data-route-transition-platform="md"][data-route-transition="uncover-down"]:
   display: inline-flex;
 }
 
-/* -- Channel description -- */
-
-.channel-description-sheet {
-  --g3-sheet-max-height: 70dvh;
-}
-
-.channel-description-sheet .channel-description {
-  margin: 0;
-  color: var(--color-text-secondary);
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
 /* The cover marker ships a full-height flex column, which is what the watch
    page wants. On the sheet routes it lands on the shell's body region, which
    already sizes itself, so only the snapshot name and the opaque backdrop are
    wanted from it. */
-.g3-body.route-transition-cover {
+.g3-content.route-transition-overlay-region {
   min-height: 0;
   height: 100%;
-}
-
-/* -- The page's own bar travels with it -- */
-
-/* Each page renders its own header, so on a push the outgoing and incoming
-   bars are different elements and can cross-slide exactly like the body does.
-   The library only names the body segment, which left the bar hanging still
-   while the content moved out from under it. The tab bar is deliberately left
-   unnamed: it is app chrome and belongs to no page, so it stays put. */
-html[data-route-transition="push-left"] .tawny-header,
-html[data-route-transition="push-right"] .tawny-header {
-  view-transition-name: page-header;
-  contain: layout paint;
-}
-
-html[data-route-transition="push-left"]::view-transition-old(page-header),
-html[data-route-transition="push-left"]::view-transition-new(page-header),
-html[data-route-transition="push-right"]::view-transition-old(page-header),
-html[data-route-transition="push-right"]::view-transition-new(page-header) {
-  animation-duration: var(--route-transition-segment-duration);
-  animation-timing-function: var(--route-transition-segment-ease);
-  animation-fill-mode: both;
-  mix-blend-mode: normal;
-}
-
-/* Same clip the segment needs: the pseudo tree paints above the page and is not
-   clipped by default, so a full-width slide would otherwise run across the rest
-   of the shell. */
-html[data-route-transition="push-left"]::view-transition-group(page-header),
-html[data-route-transition="push-right"]::view-transition-group(page-header),
-html[data-route-transition="push-left"]::view-transition-image-pair(page-header),
-html[data-route-transition="push-right"]::view-transition-image-pair(page-header) {
-  overflow: hidden;
-  clip-path: inset(0);
-  isolation: isolate;
-}
-
-html[data-route-transition="push-left"]::view-transition-old(page-header) {
-  animation-name: route-transition-segment-out-left;
-}
-html[data-route-transition="push-left"]::view-transition-new(page-header) {
-  animation-name: route-transition-segment-in-left;
-}
-html[data-route-transition="push-right"]::view-transition-old(page-header) {
-  animation-name: route-transition-segment-out-right;
-}
-html[data-route-transition="push-right"]::view-transition-new(page-header) {
-  animation-name: route-transition-segment-in-right;
-}
-
-/* -- Which regions take part in which transition -- */
-
-/* The library names the base region unconditionally, which lifts the whole app
-   out of the root snapshot. Cover transitions need that; a fade animates root
-   and is left with nothing visible to cross-fade, so peer routes changed with
-   no animation at all. The `html` prefix is here to out-specify the library,
-   whose stylesheet loads after this one. */
-html .route-transition-base {
-  view-transition-name: none;
-}
-
-html[data-route-transition="cover-up"] .route-transition-base,
-html[data-route-transition="uncover-down"] .route-transition-base {
-  view-transition-name: base;
-}
-
-/* The desktop rail is permanent chrome: a sheet rises beside it, never over it.
-   Left in the base snapshot it went through the base's own motion - scaled back
-   and dimmed on iOS - then snapped to full size when the snapshot was dropped.
-   Named, it is cut out of that snapshot and held still. On compact layouts the
-   bar is hidden under a cover, so there is nothing to lift out. */
-@container g3-app-shell (min-width: 48rem) {
-  html[data-route-transition="cover-up"] .tawny-shell > .g3-navbar-tab-bar,
-  html[data-route-transition="uncover-down"] .tawny-shell > .g3-navbar-tab-bar {
-    view-transition-name: rail;
-  }
-}
-
-html::view-transition-group(rail) {
-  z-index: 3;
-  animation: none !important;
-}
-
-html::view-transition-old(rail) {
-  animation: none !important;
-  opacity: 0;
-}
-
-html::view-transition-new(rail) {
-  animation: none !important;
-  opacity: 1;
-}
-
-/* -- Android/mobile polish pass -- */
-
-/* The center title may be intentionally empty. Give the edge slots only the
-   room they actually need so a long detail title can never sit under actions. */
-.tawny-header {
-  z-index: 70;
-}
-
-html[data-android-app="true"] .tawny-header {
-  padding-top: var(--android-status-bar-inset, 0px);
 }
 
 /* Android supplies PiP chrome and native RemoteActions. Strip the WebView down
@@ -3876,8 +1519,8 @@ html[data-android-pip="true"] .tawny-shell {
 }
 
 html[data-android-pip="true"] .tawny-shell > .g3-header,
-html[data-android-pip="true"] .tawny-shell > .g3-navbar-tab-bar,
-html[data-android-pip="true"] .g3-body-content > :not(.persistent-player),
+html[data-android-pip="true"] .tawny-shell > .g3-nav,
+html[data-android-pip="true"] .g3-content-scroll > :not(.persistent-player),
 html[data-android-pip="true"] .mini-player-copy,
 html[data-android-pip="true"] .mini-player-close,
 html[data-android-pip="true"] .tawny-player-controls,
@@ -3886,8 +1529,8 @@ html[data-android-pip="true"] .player-seek-feedback {
   display: none !important;
 }
 
-html[data-android-pip="true"] .tawny-shell > .g3-body,
-html[data-android-pip="true"] .g3-body-content {
+html[data-android-pip="true"] .tawny-shell > .g3-content,
+html[data-android-pip="true"] .g3-content-scroll {
   position: fixed;
   inset: 0;
   width: 100%;
@@ -3922,318 +1565,6 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
   object-fit: contain;
 }
 
-.tawny-header .g3-header-row {
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
-  min-height: 48px;
-  padding-inline: 0.35rem;
-}
-
-.tawny-header .g3-header-title {
-  width: 100%;
-  max-width: none;
-  padding-inline: 0.35rem;
-  box-sizing: border-box;
-}
-
-.tawny-header .g3-header-title-text {
-  max-width: 100%;
-}
-
-.brand-mark {
-  width: 1.85rem;
-  height: 1.85rem;
-  border-radius: 9px;
-  font-family: inherit;
-  box-shadow: 0 3px 12px rgba(217, 120, 22, 0.2);
-}
-
-/* g3_ui centers labels by absolutely positioning start icons. That is useful
-   for full-width actions, but compact Tawny buttons need icon and text to move
-   as one unit. */
-.tawny-shell .g3-btn-content-start,
-.g3-sheet .g3-btn-content-start,
-.g3-modal .g3-btn-content-start {
-  display: inline-flex;
-  width: auto;
-  min-width: 0;
-  align-items: center;
-  gap: 0.42rem;
-  margin: 0.125rem 0.5rem;
-  padding: 0;
-}
-
-.tawny-shell .g3-btn-start,
-.g3-sheet .g3-btn-start,
-.g3-modal .g3-btn-start {
-  position: static;
-  width: auto;
-  height: auto;
-  flex: 0 0 auto;
-}
-
-.tawny-shell .g3-btn-end-spacer,
-.g3-sheet .g3-btn-end-spacer,
-.g3-modal .g3-btn-end-spacer {
-  display: none;
-}
-
-.channel-avatar {
-  overflow: hidden;
-  font-family: inherit;
-}
-
-.channel-avatar-link {
-  display: inline-flex;
-  width: 2.3rem;
-  height: 2.3rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.channel-avatar-link:focus-visible {
-  outline: 2px solid var(--color-focused);
-  outline-offset: 2px;
-}
-
-.channel-avatar-fallback {
-  color: color-mix(in srgb, var(--color-focused) 72%, var(--color-text-secondary));
-  background: color-mix(in srgb, var(--color-focused) 10%, var(--color-bg-secondary));
-}
-
-.empty-state {
-  min-height: 11rem;
-  padding: 1.5rem 1rem;
-}
-
-.empty-icon {
-  display: grid;
-  width: 3rem;
-  height: 3rem;
-  margin: 0 auto 0.8rem;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--color-focused) 24%, var(--color-card-border));
-  border-radius: 50%;
-  background: var(--tawny-amber-soft);
-  color: var(--color-focused);
-}
-
-.empty-state h3 {
-  margin: 0 0 0.35rem;
-}
-
-.group-filter-row {
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    #000 0.35rem,
-    #000 calc(100% - 1.5rem),
-    transparent 100%
-  );
-  padding-inline: 0.35rem 1.5rem;
-  margin-inline: -0.35rem;
-}
-
-.video-grid-shorts {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.85rem;
-}
-
-.video-grid-shorts .thumbnail-shell {
-  aspect-ratio: 9 / 16;
-  background: #000;
-}
-
-.video-grid-shorts .video-thumbnail {
-  height: 100%;
-  object-fit: cover;
-}
-
-.video-grid-shorts .video-meta-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.35rem;
-  padding: 0.65rem 0.45rem 0.7rem 0.6rem;
-}
-
-.video-grid-shorts .video-meta-row > .channel-avatar,
-.video-grid-shorts .video-copy > p:not(.video-stats) {
-  display: none;
-}
-
-.video-grid-shorts .video-copy h2 {
-  font-size: 0.86rem;
-}
-
-.playlist-collage img.playlist-collage-short {
-  object-fit: contain;
-  background: #05070a;
-}
-
-.search-context {
-  color: var(--color-text-secondary);
-}
-
-.subscription-groups {
-  margin: 0 0 1rem;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.subscription-heading {
-  flex-direction: row;
-  align-items: center;
-}
-
-.subscription-count {
-  display: inline-grid;
-  min-width: 1.65rem;
-  min-height: 1.45rem;
-  padding: 0 0.4rem;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--color-control);
-  color: var(--color-text-secondary);
-}
-
-/* Pinned to the foot of the card. A channel with no subscriber count yet has
-   one line less of copy, and the button used to ride up into that gap, so a
-   row of cards had its buttons at two heights. */
-.channel-subscribe-button {
-  max-width: 100%;
-  margin-top: auto;
-}
-
-.settings-content {
-  gap: 1.1rem;
-}
-
-.settings-section {
-  margin-bottom: 1.15rem;
-}
-
-.duration-settings-card {
-  margin-top: 0.8rem;
-}
-
-.settings-card-copy {
-  margin: 0 0 0.85rem;
-  color: var(--color-text-secondary);
-  font-size: 0.86rem;
-  line-height: 1.45;
-}
-
-.duration-settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.queue-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.8rem;
-  margin-bottom: 1rem;
-}
-
-.queue-count-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: var(--color-text-secondary);
-}
-
-.queue-count-label strong {
-  color: var(--color-text);
-}
-
-/* The playlist being run is one entry, not a copy of its contents, so it reads
-   as a rule sitting above the loose videos rather than as another card among
-   them. */
-.queue-playlist-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.7rem 0.85rem;
-  margin-bottom: 1rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: var(--tawny-radius);
-  background: var(--color-card-inset);
-}
-
-.queue-playlist-open {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
-}
-
-.queue-playlist-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 999px;
-  background: var(--tawny-amber-soft);
-  color: var(--tawny-amber);
-}
-
-.queue-playlist-copy {
-  display: grid;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-.queue-playlist-copy strong {
-  color: var(--color-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.queue-playlist-copy span {
-  overflow: hidden;
-  color: var(--color-text-secondary);
-  font-size: 0.78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.queue-playlist-copy em {
-  color: var(--color-text);
-  font-style: normal;
-}
-
-.queue-playlist-order {
-  opacity: 0.85;
-}
-
-.queue-playlist-note {
-  margin: -0.55rem 0 1rem;
-  padding-inline: 0.2rem;
-  color: var(--color-text-secondary);
-  font-size: 0.74rem;
-  line-height: 1.4;
-}
-
 /* Back is reachable before a stream has resolved. The real control bar only
    exists once there is a video element to attach to, and until then the
    expanded player had no way out but waiting. */
@@ -4252,91 +1583,6 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
    controls do, so a swipe down minimizes rather than scrolling the page. */
 .persistent-player.expanded .player-stage-status {
   touch-action: none;
-}
-
-.share-video-modal {
-  width: min(420px, calc(100% - 2rem));
-}
-
-.share-video-summary {
-  display: grid;
-  gap: 0.55rem;
-}
-
-.share-video-summary strong {
-  color: var(--color-text);
-  line-height: 1.35;
-}
-
-.share-video-summary code {
-  overflow: hidden;
-  padding: 0.65rem;
-  border-radius: 8px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  font-family: inherit;
-  font-size: 0.76rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.share-video-options,
-.share-time-row {
-  display: flex;
-}
-
-.share-video-options {
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.share-time-row {
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0.75rem;
-  border: 1px solid var(--color-card-border);
-  border-radius: 10px;
-  background: var(--color-bg-secondary);
-}
-
-.share-time-row > div {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 0.15rem;
-}
-
-.share-time-row span {
-  color: var(--color-text-secondary);
-  font-size: 0.76rem;
-  line-height: 1.3;
-}
-
-.setting-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(8rem, auto);
-  gap: 0.7rem;
-  align-items: center;
-}
-
-.setting-row-nested {
-  grid-template-columns: minmax(0, 1fr) minmax(8rem, auto);
-  padding-left: 2.8rem;
-}
-
-.player-actions {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  overflow: visible;
-}
-
-.player-actions .g3-btn {
-  min-width: 0;
-}
-
-.player-actions .g3-btn-content-start {
-  gap: 0.25rem;
-  margin-inline: 0.05rem;
 }
 
 .player-options-menu {
@@ -4362,138 +1608,7 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
   padding-left: max(0.7rem, env(safe-area-inset-left));
 }
 
-@container g3-app-shell (width <= 1020px) {
-  .video-grid-shorts {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
 @container g3-app-shell (width <= 680px) {
-  .page {
-    padding: 0.85rem;
-  }
-
-  .feed-intro,
-  .section-heading {
-    gap: 0.65rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .feed-intro h2,
-  .section-heading h2 {
-    font-size: 1.28rem;
-  }
-
-  .feed-intro p,
-  .section-heading p {
-    line-height: 1.4;
-  }
-
-  .video-grid {
-    gap: 0.9rem;
-  }
-
-  .video-grid-shorts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.65rem;
-  }
-
-  .video-card {
-    border-radius: 14px;
-  }
-
-  .video-meta-row {
-    padding: 0.72rem 0.55rem 0.78rem 0.68rem;
-  }
-
-  .channel-grid {
-    gap: 0.65rem;
-  }
-
-  .channel-card {
-    gap: 0.6rem;
-    padding: 0.9rem 0.55rem 0.75rem;
-  }
-
-  .channel-avatar-large {
-    width: 3.25rem;
-    height: 3.25rem;
-  }
-
-  .channel-card-copy h3 {
-    font-size: 0.86rem;
-  }
-
-  .channel-card-copy span {
-    font-size: 0.68rem;
-  }
-
-  .channel-hero {
-    margin: 0.15rem 0 1rem;
-    border-radius: 16px;
-  }
-
-  .channel-hero-banner {
-    aspect-ratio: 4 / 1;
-  }
-
-  .playlist-grid {
-    gap: 0.65rem;
-  }
-
-  .explore-search-stack {
-    margin-bottom: 0.75rem;
-  }
-
-  .setting-row,
-  .setting-row-nested {
-    grid-template-columns: auto minmax(0, 1fr);
-    padding-left: 0;
-  }
-
-  .setting-row > .g3-select-btn,
-  .setting-row-nested > .g3-select-btn,
-  .setting-copy + .g3-select-btn {
-    grid-column: 2;
-    width: auto;
-    margin-left: 0;
-  }
-
-  .duration-settings-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .data-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem;
-  }
-
-  .data-card:last-child {
-    grid-column: 1 / -1;
-  }
-
-  .data-card {
-    min-width: 0;
-  }
-
-  .data-card .g3-card-body {
-    padding: 0.7rem;
-  }
-
-  .data-card span {
-    font-size: 0.66rem;
-  }
-
-  .player-actions {
-    gap: 0.35rem;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .player-actions .g3-btn {
-    padding-inline: 0.25rem;
-    font-size: 0.72rem;
-  }
-
   .player-options-menu {
     top: 3rem;
     right: 0.4rem;
@@ -4533,39 +1648,17 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
     flex: 0 0 auto;
   }
 
-  .tawny-shell > .g3-body,
-  .auxiliary-cover > .g3-body {
+  .tawny-shell > .g3-content,
+  .auxiliary-cover > .g3-content {
     position: relative;
     z-index: 1;
     min-height: 0;
   }
 
-  .tawny-shell > .g3-navbar-tab-bar {
-    position: relative;
-    z-index: 60;
-    flex: 0 0 auto;
-    padding-top: 0.1rem;
-    padding-bottom: max(0.08rem, env(safe-area-inset-bottom));
-  }
-
-  .tawny-shell .g3-navbar-md .g3-navbar-tab,
-  .tawny-shell.g3-navbar-md .g3-navbar-tab {
-    min-height: 3.35rem;
-    padding: 0.25rem 0 0.08rem;
-  }
-
-  .tawny-shell .g3-navbar-tab-label {
-    font-size: 0.64rem;
-    line-height: 0.85rem;
-  }
-
-  .tawny-shell .g3-navbar-md .g3-navbar-tab-selected::after,
-  .tawny-shell.g3-navbar-md .g3-navbar-tab-selected::after {
-    bottom: 0.18rem;
-  }
-
+  /* Rests on the bottom navigation bar: g3's bar is a 3.25rem item with
+     0.375rem of padding above it and at least that below, plus its hairline. */
   .persistent-player.mini {
-    bottom: calc(3.55rem + env(safe-area-inset-bottom));
+    bottom: calc(3.625rem + 1px + max(0.375rem, env(safe-area-inset-bottom)));
     grid-template-columns: 6.45rem minmax(0, 1fr) 2.5rem;
     min-height: 3.65rem;
   }
@@ -4574,7 +1667,7 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
     height: 3.65rem;
   }
 
-  .has-mini-player .g3-body-content {
+  .has-mini-player .g3-content-scroll {
     padding-bottom: 4.25rem !important;
     scroll-padding-bottom: 4.25rem;
   }

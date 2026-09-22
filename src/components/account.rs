@@ -12,7 +12,10 @@
 //!    (keeping its library) or abandoned by signing in to another one.
 
 use dioxus::prelude::*;
-use g3_ui::{Button, ButtonStyle, Card, Field, StatusColor};
+use g3_ui::{
+    Button, ButtonExpand, ButtonFill, Card, Color, Content, ContentWidth, Input, InputType, Space,
+    Stack, Text, TextTone, TextVariant,
+};
 
 use crate::{
     api::{register_account, sign_in_to_account, sign_out_of_account},
@@ -89,26 +92,24 @@ fn BackendSetupScreen(problem: Option<String>, on_saved: EventHandler<()>) -> El
     let mut error = use_signal(|| problem.clone().unwrap_or_default());
 
     rsx! {
-        main { class: "page account-setup",
+        Content { width: ContentWidth::Readable,
             Card {
-                h1 { "Connect to a Tawny server" }
-                p { class: "account-setup-lead",
-                    "Tawny stores your subscriptions and history on a server you or someone you trust runs. Enter its address to begin."
-                }
-                div { class: "account-form",
-                    Field {
-                        label: "Server address".to_string(),
+                title: "Connect to a Tawny server",
+                heading_level: 1,
+                Stack {
+                    Text { tone: TextTone::Secondary,
+                        "Tawny stores your subscriptions and history on a server you or someone you trust runs. Enter its address to begin."
+                    }
+                    Input {
+                        label: "Server address",
                         value: url,
-                        r#type: "url".to_string(),
-                        placeholder: "https://tawny.example".to_string(),
+                        input_type: InputType::Url,
+                        placeholder: "https://tawny.example",
+                        error: Some(error()).filter(|message| !message.is_empty()),
                         oninput: move |_| error.set(String::new()),
                     }
-                    if !error().is_empty() {
-                        p { class: "account-error", "{error}" }
-                    }
                     Button {
-                        style: ButtonStyle::Solid,
-                        expand: true,
+                        expand: ButtonExpand::Block,
                         onclick: move |_| {
                             match config::set_backend_url(&url()) {
                                 Some(_) => on_saved.call(()),
@@ -119,9 +120,9 @@ fn BackendSetupScreen(problem: Option<String>, on_saved: EventHandler<()>) -> El
                         },
                         "Connect"
                     }
-                }
-                p { class: "account-setup-note",
-                    "Changing this restarts the app. On a packaged build, close and reopen it."
+                    Text { variant: TextVariant::Caption,
+                        "Changing this restarts the app. On a packaged build, close and reopen it."
+                    }
                 }
             }
         }
@@ -145,7 +146,9 @@ pub fn AccountSettings() -> Element {
 
     let Some(account) = account else {
         return rsx! {
-            Card { p { class: "detail-muted", "Connecting to your server…" } }
+            Card { title: "Account",
+                Text { tone: TextTone::Secondary, "Connecting to your server…" }
+            }
         };
     };
 
@@ -154,120 +157,112 @@ pub fn AccountSettings() -> Element {
 
     rsx! {
         Card {
-            h2 { "Account" }
-            if !account.is_recoverable() {
-                p { class: "account-warning",
-                    "You are signed in as a guest. This library lives only on this device's session - add an email and password to be able to sign back in, here or anywhere else."
+            title: "Account",
+            subtitle: account.is_recoverable().then(|| format!("Signed in as {}", account.label())),
+            Stack {
+                if !account.is_recoverable() {
+                    Text { color: Color::Warning,
+                        "You are signed in as a guest. This library lives only on this device's session - add an email and password to be able to sign back in, here or anywhere else."
+                    }
                 }
-            } else {
-                p { class: "detail-muted", "Signed in as {account.label()}" }
-            }
-
-            if is_guest || signing_in() {
-                div { class: "account-form",
-                Field {
-                    label: "Email".to_string(),
-                    value: email,
-                    r#type: "email".to_string(),
-                    autocomplete: "username",
-                    oninput: move |_| error.set(String::new()),
-                }
-                Field {
-                    label: "Password".to_string(),
-                    value: password,
-                    r#type: "password".to_string(),
-                    // Tells a password manager to offer a new suggestion when
-                    // this is a sign-up and the stored one when it is not.
-                    autocomplete: if upgrade { "new-password" } else { "current-password" },
-                    oninput: move |_| error.set(String::new()),
-                }
-                if !error().is_empty() {
-                    p { class: "account-error", "{error}" }
-                }
-                Button {
-                    style: ButtonStyle::Solid,
-                    expand: true,
-                    disabled: busy(),
-                    onclick: move |_| {
-                        // Validated here first so the field-level rules in
-                        // `models` mark the input rather than arriving as
-                        // server prose. The server checks them again; this is
-                        // for the message, not for trust.
-                        if upgrade {
-                            if let Err(problem) = validate_email(&email()) {
-                                error.set(problem.message().into());
-                                return;
-                            }
-                            if let Err(problem) = validate_password(&password()) {
-                                error.set(problem.message().into());
-                                return;
-                            }
-                        }
-                        let credentials = Credentials { email: email(), password: password() };
-                        busy.set(true);
-                        spawn(async move {
-                            let result = if upgrade {
-                                register_account(credentials).await
-                            } else {
-                                sign_in_to_account(credentials).await
-                            };
-                            match result {
-                                Ok(account) => {
-                                    let switched = !upgrade;
-                                    session.adopt(account);
-                                    password.set(String::new());
-                                    signing_in.set(false);
-                                    app_state.show_toast(
-                                        if switched { "Signed in" } else { "Account created" },
-                                        StatusColor::Success,
-                                    );
-                                    // A different account has a different
-                                    // library, and this process is holding the
-                                    // previous one in memory.
-                                    if switched {
-                                        reload_client();
-                                    }
-                                }
-                                Err(server_error) => error.set(readable(&server_error.to_string())),
-                            }
-                            busy.set(false);
-                        });
-                    },
-                    if upgrade { "Create account" } else { "Sign in" }
-                }
-                if is_guest {
+                if is_guest || signing_in() {
+                    Input {
+                        label: "Email",
+                        value: email,
+                        input_type: InputType::Email,
+                        autocomplete: "username",
+                        oninput: move |_| error.set(String::new()),
+                    }
+                    Input {
+                        label: "Password",
+                        value: password,
+                        input_type: InputType::Password,
+                        // Tells a password manager to offer a new suggestion
+                        // when this is a sign-up and the stored one when it is not.
+                        autocomplete: if upgrade { "new-password" } else { "current-password" },
+                        error: Some(error()).filter(|message| !message.is_empty()),
+                        oninput: move |_| error.set(String::new()),
+                    }
                     Button {
-                        style: ButtonStyle::Neutral,
-                        expand: true,
+                        expand: ButtonExpand::Block,
+                        loading: busy(),
                         onclick: move |_| {
-                            signing_in.toggle();
-                            error.set(String::new());
+                            // Validated here first so the field-level rules in
+                            // `models` mark the input rather than arriving as
+                            // server prose. The server checks them again; this
+                            // is for the message, not for trust.
+                            if upgrade {
+                                if let Err(problem) = validate_email(&email()) {
+                                    error.set(problem.message().into());
+                                    return;
+                                }
+                                if let Err(problem) = validate_password(&password()) {
+                                    error.set(problem.message().into());
+                                    return;
+                                }
+                            }
+                            let credentials = Credentials { email: email(), password: password() };
+                            busy.set(true);
+                            spawn(async move {
+                                let result = if upgrade {
+                                    register_account(credentials).await
+                                } else {
+                                    sign_in_to_account(credentials).await
+                                };
+                                match result {
+                                    Ok(account) => {
+                                        let switched = !upgrade;
+                                        session.adopt(account);
+                                        password.set(String::new());
+                                        signing_in.set(false);
+                                        app_state.show_toast(
+                                            if switched { "Signed in" } else { "Account created" },
+                                            Color::Success,
+                                        );
+                                        // A different account has a different
+                                        // library, and this process is holding
+                                        // the previous one in memory.
+                                        if switched {
+                                            reload_client();
+                                        }
+                                    }
+                                    Err(server_error) => error.set(readable(&server_error.to_string())),
+                                }
+                                busy.set(false);
+                            });
                         },
+                        if upgrade { "Create account" } else { "Sign in" }
+                    }
+                    if is_guest {
+                        Button {
+                            fill: ButtonFill::Clear,
+                            expand: ButtonExpand::Block,
+                            onclick: move |_| {
+                                signing_in.toggle();
+                                error.set(String::new());
+                            },
+                            if signing_in() { "Back to creating an account" } else { "I already have an account" }
+                        }
                         if signing_in() {
-                            "Back to creating an account"
-                        } else {
-                            "I already have an account"
+                            Text { color: Color::Warning,
+                                "Signing in to another account leaves this guest library behind. It is not merged."
+                            }
                         }
                     }
-                    if signing_in() {
-                        p { class: "account-warning",
-                            "Signing in to another account leaves this guest library behind. It is not merged."
-                        }
+                } else {
+                    Button {
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        expand: ButtonExpand::Block,
+                        onclick: move |_| {
+                            spawn(async move {
+                                let _ = sign_out_of_account().await;
+                                session.forget();
+                                reload_client();
+                            });
+                        },
+                        "Sign out"
                     }
-                }
-                }
-            } else {
-                Button {
-                    style: ButtonStyle::Neutral,
-                    expand: true,
-                    onclick: move |_| {
-                        spawn(async move {
-                            let _ = sign_out_of_account().await;
-                            session.forget();
-                            reload_client();
-                        });
-                    },
-                    "Sign out"
                 }
             }
         }
@@ -282,42 +277,39 @@ pub fn BackendSettings() -> Element {
     let mut saved = use_signal(|| false);
 
     rsx! {
-        Card {
-            h2 { "Server" }
-            div { class: "account-form",
-            Field {
-                label: "Server address".to_string(),
-                value: url,
-                r#type: "url".to_string(),
-                oninput: move |_| {
-                    error.set(String::new());
-                    saved.set(false);
-                },
-            }
-            if !error().is_empty() {
-                p { class: "account-error", "{error}" }
-            }
-            if saved() {
-                p { class: "account-warning",
-                    "Saved. Restarting to connect to it - on a packaged build, close and reopen the app."
+        Card { title: "Server",
+            Stack { gap: Space::Md,
+                Input {
+                    label: "Server address",
+                    value: url,
+                    input_type: InputType::Url,
+                    error: Some(error()).filter(|message| !message.is_empty()),
+                    helper: saved().then(|| {
+                        "Saved. Restarting to connect to it - on a packaged build, close and reopen the app."
+                            .to_string()
+                    }),
+                    oninput: move |_| {
+                        error.set(String::new());
+                        saved.set(false);
+                    },
                 }
-            }
-            Button {
-                style: ButtonStyle::Neutral,
-                expand: true,
-                onclick: move |_| {
-                    match config::set_backend_url(&url()) {
-                        Some(_) => {
-                            saved.set(true);
-                            reload_client();
+                Button {
+                    fill: ButtonFill::Outline,
+                    color: Color::Neutral,
+                    expand: ButtonExpand::Block,
+                    onclick: move |_| {
+                        match config::set_backend_url(&url()) {
+                            Some(_) => {
+                                saved.set(true);
+                                reload_client();
+                            }
+                            None => error.set(
+                                "Enter a full address, including http:// or https://.".into(),
+                            ),
                         }
-                        None => error.set(
-                            "Enter a full address, including http:// or https://.".into(),
-                        ),
-                    }
-                },
-                "Save and reconnect"
-            }
+                    },
+                    "Save and reconnect"
+                }
             }
         }
     }

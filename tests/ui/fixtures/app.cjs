@@ -61,13 +61,13 @@ async function expectNoHorizontalScroll(page) {
 
 async function expectResponsiveNavigation(page, labels) {
   const viewport = page.viewportSize();
-  const tablist = page.getByRole("tablist", { name: "Primary navigation" });
+  const tablist = page.getByRole("navigation", { name: "Primary navigation" });
   await expect(tablist).toBeVisible();
 
   const tablistBox = await tablist.boundingBox();
   const boxes = [];
   for (const label of labels) {
-    const tab = page.getByRole("tab", { name: label, exact: true });
+    const tab = tablist.getByRole("button", { name: label, exact: true });
     await expect(tab).toBeVisible();
     boxes.push(await tab.boundingBox());
   }

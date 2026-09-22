@@ -7,8 +7,9 @@ use dioxus::prelude::*;
 use dioxus_icons::lucide::{CheckCheck, ListPlus, Play, Plus, Shuffle, Trash2};
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
-    Body, Button, ButtonSize, ButtonStyle, Card, Field, Modal, RightSlot, SegmentButton,
-    SegmentGroup, StatusColor,
+    Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
+    DividerOrientation, EmptyState, Grid, GridColumns, Img, Input, Modal, SegmentButton,
+    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
 };
 
 use super::{PageHeader, VideoGrid, duration_candidates, use_duration_hydration};
@@ -66,7 +67,7 @@ fn play_run(app_state: AppState, ids: Vec<String>, verb: &str) {
     let count = ids.len();
     app_state.show_toast(
         format!("{verb} {count} video{}", if count == 1 { "" } else { "s" }),
-        StatusColor::Success,
+        Color::Success,
     );
     let first = first.clone();
     spawn(async move {
@@ -84,7 +85,7 @@ fn play_from_playlist(app_state: AppState, playlist_id: &str, video_id: String, 
     if announce {
         // Says that the *playlist* is now what plays next, which opening one
         // video does not. Tapping a card is its own answer, so it stays quiet.
-        app_state.show_toast("Playing this playlist", StatusColor::Success);
+        app_state.show_toast("Playing this playlist", Color::Success);
     }
     spawn(async move {
         animated_navigate(Route::VideoDetail { id: video_id }).await;
@@ -101,14 +102,41 @@ struct PlaylistRow {
     name: String,
     count: usize,
     unwatched: usize,
-    thumbnails: Vec<(String, bool)>,
+    thumbnails: Vec<String>,
 }
 
-fn chip_class(active: bool) -> &'static str {
-    if active {
-        "group-filter active"
+/// "1 video", "3 videos".
+fn video_count(count: usize) -> String {
+    if count == 1 {
+        "1 video".to_string()
     } else {
-        "group-filter"
+        format!("{count} videos")
+    }
+}
+
+/// Up to three thumbnails from a playlist: the first large, the next two
+/// stacked beside it.
+#[component]
+fn PlaylistCollage(thumbnails: Vec<String>) -> Element {
+    rsx! {
+        if thumbnails.is_empty() {
+            div {
+                class: "grid aspect-video place-items-center",
+                style: "background: var(--g3-color-control); color: var(--g3-color-text-tertiary);",
+                ListPlus { size: 30 }
+            }
+        } else {
+            div { class: "grid aspect-video grid-cols-3 grid-rows-2 gap-0.5",
+                for (index, thumbnail) in thumbnails.into_iter().enumerate() {
+                    Img {
+                        key: "{index}",
+                        src: thumbnail,
+                        alt: "",
+                        class: if index == 0 { "col-span-2 row-span-2 h-full" } else { "h-full" },
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -141,7 +169,7 @@ pub fn Playlists() -> Element {
                         unwatched += 1;
                     }
                     if thumbnails.len() < 3 {
-                        thumbnails.push((video.thumbnail_url.clone(), video.is_short));
+                        thumbnails.push(video.thumbnail_url.clone());
                     }
                 }
                 PlaylistRow {
@@ -159,104 +187,85 @@ pub fn Playlists() -> Element {
         .unwrap_or_else(|| "This playlist".into());
 
     rsx! {
-        PageHeader {}
-        Body { padding: false,
-            main { class: "page playlists-page",
-                div { class: "page-actions-row",
-                    Button {
-                        start: rsx! { Plus { size: 17 } },
-                        onclick: move |_| create_open.set(true),
-                        "New playlist"
-                    }
+        PageHeader {
+            end_slot: rsx! {
+                Button {
+                    fill: ButtonFill::Clear,
+                    aria_label: "New playlist",
+                    onclick: move |_| create_open.set(true),
+                    Plus { size: 22 }
                 }
-                div { class: "playlist-grid",
-                    for row in rows {
-                        {
-                            let playlist_id = row.id.clone();
-                            let remove_id = row.id.clone();
-                            let remove_name = row.name.clone();
-                            let collage_class = format!("playlist-collage count-{}", row.thumbnails.len());
-                            let video_count = row.count;
-                            let unwatched = row.unwatched;
-                            rsx! {
-                                Card {
-                                    key: "{row.id}",
-                                    class: "playlist-card",
-                                    title: row.name.clone(),
-                                    right_slot: RightSlot::Element(rsx! {
-                                        div { class: "playlist-card-actions",
-                                            button {
-                                                class: "playlist-card-action danger",
-                                                aria_label: "Delete playlist".to_string(),
-                                                title: "Delete playlist".to_string(),
-                                                onclick: move |event: MouseEvent| {
-                                                    event.stop_propagation();
-                                                    delete_target.set(Some((remove_id.clone(), remove_name.clone())));
-                                                    delete_open.set(true);
-                                                },
-                                                Trash2 { size: 15 }
-                                            }
-                                        }
-                                    }),
-                                    onclick: move |_| { { let v = playlist_id.clone(); spawn(async move { animated_navigate(Route::PlaylistDetail { id: v }).await; }); }; },
-                                    div { class: collage_class,
-                                        if row.thumbnails.is_empty() {
-                                            div { class: "playlist-empty-art", ListPlus { size: 30 } }
-                                        } else {
-                                            for (thumbnail, is_short) in row.thumbnails {
-                                                img {
-                                                    class: if is_short { "playlist-collage-short" } else { "" },
-                                                    src: "{thumbnail}",
-                                                    alt: "",
-                                                    loading: "lazy"
-                                                }
-                                            }
-                                        }
+            },
+        }
+        Content {
+            if rows.is_empty() {
+                EmptyState {
+                    title: "No playlists yet",
+                    icon: rsx! { ListPlus { size: 40 } },
+                    action: rsx! {
+                        Button { start: rsx! { Plus { size: 17 } }, onclick: move |_| create_open.set(true), "New playlist" }
+                    },
+                    "Swipe a video, or use its menu, to save it to one."
+                }
+            }
+            Grid { columns: GridColumns::Fit(16.0),
+                for row in rows {
+                    {
+                        let playlist_id = row.id.clone();
+                        let remove_id = row.id.clone();
+                        let remove_name = row.name.clone();
+                        // The count that answers "is there anything left in
+                        // here", which is the reason to open one.
+                        let subtitle = if row.unwatched > 0 && row.unwatched < row.count {
+                            format!("{} · {} unwatched", video_count(row.count), row.unwatched)
+                        } else {
+                            video_count(row.count)
+                        };
+                        rsx! {
+                            Card {
+                                key: "{row.id}",
+                                title: row.name.clone(),
+                                subtitle,
+                                media: rsx! { PlaylistCollage { thumbnails: row.thumbnails } },
+                                onclick: move |_| { spawn(animated_navigate(Route::PlaylistDetail { id: playlist_id.clone() })); },
+                                end: rsx! {
+                                    Button {
+                                        fill: ButtonFill::Clear,
+                                        color: Color::Danger,
+                                        size: ButtonSize::Sm,
+                                        aria_label: "Delete {row.name}",
+                                        onclick: move |_| {
+                                            delete_target.set(Some((remove_id.clone(), remove_name.clone())));
+                                            delete_open.set(true);
+                                        },
+                                        Trash2 { size: 16 }
                                     }
-                                    div { class: "playlist-card-meta",
-                                        span { class: "playlist-count",
-                                            if video_count == 1 { "1 video" } else { "{video_count} videos" }
-                                        }
-                                        // The count that answers "is there
-                                        // anything left in here", which is the
-                                        // reason to open one.
-                                        if unwatched > 0 && unwatched < video_count {
-                                            span { class: "playlist-unwatched", "{unwatched} unwatched" }
-                                        }
-                                    }
-                                }
+                                },
                             }
                         }
                     }
                 }
             }
-            Modal {
+            ConfirmModal {
                 open: delete_open,
-                title: "Delete playlist?".to_string(),
-                description: rsx! { p { "{delete_name} will be removed from this device and your sync server." } },
-                actions: rsx! {
-                    Button { style: ButtonStyle::Clear, onclick: move |_| delete_open.set(false), "Cancel" }
-                    Button {
-                        style: ButtonStyle::Danger,
-                        onclick: move |_| {
-                            if let Some((id, _)) = delete_target()
-                                && let Some(name) = app_state.delete_playlist(&id)
-                            {
-                                app_state.show_toast(format!("Deleted {name}"), StatusColor::Neutral);
-                            }
-                            delete_target.set(None);
-                            delete_open.set(false);
-                        },
-                        "Delete"
+                title: "Delete playlist?",
+                message: "{delete_name} will be removed from this device and your sync server.",
+                confirm_label: "Delete",
+                destructive: true,
+                on_confirm: move |_| {
+                    if let Some((id, _)) = delete_target()
+                        && let Some(name) = app_state.delete_playlist(&id)
+                    {
+                        app_state.show_toast(format!("Deleted {name}"), Color::Neutral);
                     }
+                    delete_target.set(None);
                 },
             }
             Modal {
                 open: create_open,
-                title: "New playlist".to_string(),
-                description: rsx! { p { "It will be cached on this device immediately." } },
+                title: "New playlist",
                 actions: rsx! {
-                    Button { style: ButtonStyle::Clear, onclick: move |_| create_open.set(false), "Cancel" }
+                    Button { fill: ButtonFill::Clear, onclick: move |_| create_open.set(false), "Cancel" }
                     Button {
                         disabled: playlist_name().trim().is_empty(),
                         onclick: move |_| {
@@ -265,15 +274,16 @@ pub fn Playlists() -> Element {
                             app_state.create_playlist(name.clone());
                             playlist_name.set(String::new());
                             create_open.set(false);
-                            app_state.show_toast(format!("Created {name}"), StatusColor::Success);
+                            app_state.show_toast(format!("Created {name}"), Color::Success);
                         },
                         "Create"
                     }
                 },
-                Field {
-                    label: "Playlist name".to_string(),
+                Input {
+                    label: "Playlist name",
                     value: playlist_name,
-                    placeholder: "Sunday watchlist".to_string(),
+                    placeholder: "Sunday watchlist",
+                    helper: "It will be cached on this device immediately.",
                     autofocus: true,
                 }
             }
@@ -288,15 +298,15 @@ pub fn PlaylistDetail(id: String) -> Element {
     // run resolved out of the queue has to be able to read it long after this
     // page is gone. See `PlaylistView`.
     let view = app_state.playlist_view(&id);
-    // The segmented control owns an index, so the persisted kind is mirrored into
-    // one. Settings hydrate from local storage after the first render, hence the
-    // effect rather than an initial value alone.
-    let mut kind_index = use_signal(|| view.kind.index());
+    // The segmented control follows the persisted kind. Settings hydrate from
+    // local storage after the first render, hence the effect rather than an
+    // initial value alone.
+    let mut kind = use_signal(|| view.kind);
     let persisted_kind_id = id.clone();
     use_effect(move || {
-        let persisted = app_state.playlist_view(&persisted_kind_id).kind.index();
-        if kind_index() != persisted {
-            kind_index.set(persisted);
+        let persisted = app_state.playlist_view(&persisted_kind_id).kind;
+        if *kind.peek() != persisted {
+            kind.set(persisted);
         }
     });
 
@@ -342,9 +352,11 @@ pub fn PlaylistDetail(id: String) -> Element {
         // a dead end.
         return rsx! {
             PageHeader { title: "Playlist".to_string(), back_to: Route::Playlists {} }
-            Body { padding: false,
-                main { class: "page",
-                    div { class: "empty-state", p { "This playlist is not in the local cache." } }
+            Content {
+                EmptyState {
+                    title: "Playlist not found",
+                    icon: rsx! { ListPlus { size: 40 } },
+                    "This playlist is not in the local cache."
                 }
             }
         };
@@ -392,81 +404,29 @@ pub fn PlaylistDetail(id: String) -> Element {
         PageHeader {
             title: playlist.name.clone(),
             back_to: Route::Playlists {},
-            end_slot: rsx! {
-                span { class: "playlist-header-count",
-                    if saved_count == 1 { "1 video" } else { "{saved_count} videos" }
-                }
-            },
             // The same control the feed carries, in the same place, because it
             // answers the same question: which kind of upload am I looking at.
             toolbar: rsx! {
                 SegmentGroup {
-                    active: kind_index,
-                    on_change: move |index: usize| {
+                    value: kind,
+                    aria_label: "Show",
+                    onchange: move |picked: PlaylistKind| {
                         let mut updated = kind_view.clone();
-                        updated.kind = PlaylistKind::from_index(index);
+                        updated.kind = picked;
                         app_state.set_playlist_view(&kind_id, updated);
                     },
-                    for kind in PlaylistKind::ALL {
-                        SegmentButton { index: kind.index(), "{kind.label()}" }
+                    for option in PlaylistKind::ALL {
+                        SegmentButton { key: "{option.label()}", value: option, "{option.label()}" }
                     }
                 }
             },
         }
-        Body { padding: false,
-            main { class: "page playlist-detail-page",
-                // One row of actions: the two ways to start watching, and the
-                // tidying that acts on the same list. Cleanup stays quiet, and on
-                // the trailing edge, so it is never the thing a thumb lands on.
-                header { class: "playlist-lead",
-                    div { class: "playlist-lead-actions",
-                        Button {
-                            style: ButtonStyle::Solid,
-                            class: "playlist-play-all".to_string(),
-                            disabled: run.is_empty(),
-                            start: rsx! { Play { size: 17, fill: "currentColor" } },
-                            onclick: move |_| {
-                                if let Some(first) = play_all_first.clone() {
-                                    play_from_playlist(app_state, &play_all_id, first, true);
-                                }
-                            },
-                            "Play all"
-                        }
-                        Button {
-                            style: ButtonStyle::Neutral,
-                            disabled: shuffle_run.len() < 2,
-                            start: rsx! { Shuffle { size: 17 } },
-                            onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
-                            "Shuffle"
-                        }
-                        if watched_count > 0 {
-                            Button {
-                                style: ButtonStyle::Clear,
-                                size: ButtonSize::Sm,
-                                class: "playlist-remove-watched".to_string(),
-                                // The label is hidden on narrow screens.
-                                aria_label: "Remove watched".to_string(),
-                                start: rsx! { CheckCheck { size: 15 } },
-                                onclick: move |_| {
-                                    let removed = app_state.remove_watched_from_playlist(&clear_id);
-                                    if removed > 0 {
-                                        app_state.show_toast(
-                                            format!("Removed {removed} watched video{}", if removed == 1 { "" } else { "s" }),
-                                            StatusColor::Success,
-                                        );
-                                    }
-                                },
-                                span { class: "playlist-remove-watched-label", "Remove watched" }
-                            }
-                        }
-                    }
-                }
+        Content {
+            Stack { gap: Space::Md,
                 if saved_count > 1 {
-                    nav { class: "group-filter-row", aria_label: "Playlist filters and order",
-                        span { class: "group-filter-label", "Show" }
-                        button {
-                            class: chip_class(unwatched_view.only_unwatched),
-                            aria_pressed: unwatched_view.only_unwatched.to_string(),
+                    Shelf { aria_label: "Playlist filters and order", gap: Space::Sm,
+                        Chip {
+                            selected: unwatched_view.only_unwatched,
                             onclick: move |_| {
                                 let mut updated = unwatched_view.clone();
                                 updated.only_unwatched = !updated.only_unwatched;
@@ -480,10 +440,9 @@ pub fn PlaylistDetail(id: String) -> Element {
                                 let chip_view = chip_view.clone();
                                 let chip_id = chip_id.clone();
                                 rsx! {
-                                    button {
+                                    Chip {
                                         key: "{duration.label()}",
-                                        class: if active { "group-filter duration-filter active" } else { "group-filter duration-filter" },
-                                        aria_pressed: active.to_string(),
+                                        selected: active,
                                         onclick: move |_| {
                                             let mut updated = chip_view.clone();
                                             updated.duration = if active { None } else { Some(duration) };
@@ -494,8 +453,7 @@ pub fn PlaylistDetail(id: String) -> Element {
                                 }
                             }
                         }
-                        span { class: "filter-divider", aria_hidden: "true" }
-                        span { class: "group-filter-label", "Sort" }
+                        Divider { orientation: DividerOrientation::Vertical }
                         for option in PlaylistSort::ALL {
                             {
                                 let active = sort_view.sort == option;
@@ -503,11 +461,10 @@ pub fn PlaylistDetail(id: String) -> Element {
                                 let sort_view = sort_view.clone();
                                 let sort_id = sort_id.clone();
                                 rsx! {
-                                    button {
+                                    Chip {
                                         key: "{option:?}",
-                                        class: chip_class(active),
-                                        aria_pressed: active.to_string(),
-                                        title: if active { "Tap again to reverse" } else { "" },
+                                        selected: active,
+                                        // Tapping the current order again reverses it.
                                         onclick: move |_| {
                                             let mut updated = sort_view.clone();
                                             if active {
@@ -525,8 +482,52 @@ pub fn PlaylistDetail(id: String) -> Element {
                         }
                     }
                 }
+                // Keep playlist-wide actions below the filters they operate on.
+                // Cleanup remains neutral and outlined, with the same full tap
+                // height as the playback controls.
+                Stack { class: "playlist-actions", horizontal: true, gap: Space::Sm, align: StackAlign::Center,
+                    Button {
+                        class: "playlist-play",
+                        aria_label: "Play all",
+                        disabled: run.is_empty(),
+                        start: rsx! { Play { size: 17, fill: "currentColor" } },
+                        onclick: move |_| {
+                            if let Some(first) = play_all_first.clone() {
+                                play_from_playlist(app_state, &play_all_id, first, true);
+                            }
+                        },
+                        span { class: "playlist-collapse-label", "Play all" }
+                    }
+                    Button {
+                        class: "playlist-icon-only",
+                        aria_label: "Shuffle",
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        disabled: shuffle_run.len() < 2,
+                        start: rsx! { Shuffle { size: 17 } },
+                        onclick: move |_| play_run(app_state, shuffled(shuffle_run.clone()), "Shuffling"),
+                    }
+                    if watched_count > 0 {
+                        Button {
+                            class: "playlist-remove-watched",
+                            fill: ButtonFill::Outline,
+                            color: Color::Neutral,
+                            start: rsx! { CheckCheck { size: 15 } },
+                            onclick: move |_| {
+                                let removed = app_state.remove_watched_from_playlist(&clear_id);
+                                if removed > 0 {
+                                    app_state.show_toast(
+                                        format!("Removed {removed} watched video{}", if removed == 1 { "" } else { "s" }),
+                                        Color::Success,
+                                    );
+                                }
+                            },
+                            "Remove watched"
+                        }
+                    }
+                }
                 if without_duration > 0 {
-                    p { class: "feed-filter-note",
+                    Text { tone: TextTone::Secondary,
                         "{without_duration} more "
                         if without_duration == 1 { "video has" } else { "videos have" }
                         " no length yet, so a duration filter cannot speak for them. They are being filled in now."

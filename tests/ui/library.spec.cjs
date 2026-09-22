@@ -3,9 +3,9 @@ const { test, expect, openApp, expectNoHorizontalScroll } = require("./fixtures/
 test.describe("Tawny library interactions", () => {
   test("validates and creates a local playlist", async ({ appPage }) => {
     await openApp(appPage, "/playlists");
-    await appPage.getByRole("button", { name: "New playlist", exact: true }).click();
+    await appPage.getByRole("button", { name: "New playlist", exact: true }).first().click();
 
-    const dialog = appPage.getByRole("alertdialog");
+    const dialog = appPage.getByRole("dialog");
     const create = dialog.getByRole("button", { name: "Create", exact: true });
     await expect(dialog.getByRole("heading", { name: "New playlist", exact: true })).toBeVisible();
     await expect(create).toBeDisabled();
@@ -18,8 +18,7 @@ test.describe("Tawny library interactions", () => {
     await expect(appPage.getByText("UI test playlist", { exact: true })).toBeVisible();
 
     await appPage.getByText("UI test playlist", { exact: true }).click();
-    await expect(appPage.locator(".playlist-header-count")).toHaveText("0 videos");
-    await expect(appPage.locator(".playlist-detail-count")).toHaveCount(0);
+    await expect(appPage.locator("header").getByText("0 videos", { exact: true })).toBeVisible();
     await expectNoHorizontalScroll(appPage);
   });
 
@@ -31,23 +30,25 @@ test.describe("Tawny library interactions", () => {
     await expect(appPage.getByLabel("Video · Short max (minutes)")).toHaveValue("10");
     await expect(appPage.getByLabel("Video · Medium max (minutes)")).toHaveValue("35");
 
-    await appPage.getByRole("tab", { name: "Light", exact: true }).click();
+    await appPage.getByRole("radio", { name: "Light", exact: true }).click();
     await expect
       .poll(() =>
         appPage
           .locator(".g3-app-shell")
-          .evaluate((element) => getComputedStyle(element).getPropertyValue("--color-bg").trim()),
+          .evaluate((element) =>
+            getComputedStyle(element).getPropertyValue("--g3-color-bg").trim(),
+          ),
       )
       .toBe("#d8c5a8");
 
     const themeLayers = await appPage.locator(".g3-app-shell").evaluate((element) => {
       const styles = getComputedStyle(element);
       return [
-        "--color-bg",
-        "--color-bg-secondary",
-        "--color-card",
-        "--color-card-inset",
-        "--color-surface",
+        "--g3-color-bg",
+        "--g3-color-bg-secondary",
+        "--g3-color-card",
+        "--g3-color-surface",
+        "--g3-color-control",
       ].map((token) => styles.getPropertyValue(token).trim());
     });
     expect(new Set(themeLayers).size).toBe(themeLayers.length);
@@ -56,7 +57,7 @@ test.describe("Tawny library interactions", () => {
     const sponsorCard = appPage.locator(".g3-card").filter({ hasText: "SponsorBlock" }).first();
     const surfaces = await sponsorCard.evaluate((card) => ({
       card: getComputedStyle(card).backgroundColor,
-      item: getComputedStyle(card.querySelector(".g3-list-inset .g3-item")).backgroundColor,
+      item: getComputedStyle(card.querySelector(".g3-list .g3-item")).backgroundColor,
     }));
     expect(surfaces.item).not.toBe(surfaces.card);
     await expectNoHorizontalScroll(appPage);
@@ -68,19 +69,24 @@ test.describe("Tawny library interactions", () => {
     test.skip(testInfo.project.name !== "desktop-chromium", "desktop pointer behavior");
     await openApp(appPage);
 
-    const row = appPage.locator(".video-swipe-row").first();
-    const quickAction = row.locator(".card-quick-action-start");
-    await expect(quickAction).toBeVisible();
+    // A mouse reaches the swipe actions through the row's actions button.
+    const row = appPage.locator(".g3-swipe-item").first();
+    const showActions = row.getByRole("button", { name: "Show actions" });
+    const action = row.locator(".g3-swipe-actions-end .g3-swipe-action");
     await expect
       .poll(() => row.evaluate((element) => element.style.getPropertyValue("--g3-swipe-offset")))
       .toBe("0px");
 
-    await quickAction.click();
+    await row.hover();
+    await showActions.click();
+    await action.click();
     const toast = appPage.locator(".g3-toast");
     await expect(toast).toHaveAttribute("data-state", "open");
     const firstToast = await toast.elementHandle();
 
-    await quickAction.click();
+    await row.hover();
+    await showActions.click();
+    await action.click();
     await expect.poll(() => firstToast.evaluate((element) => element.isConnected)).toBe(false);
 
     const box = await row.boundingBox();
@@ -97,7 +103,7 @@ test.describe("Tawny library interactions", () => {
     test.skip(testInfo.project.name !== "desktop-chromium", "desktop pointer behavior");
     await openApp(appPage);
 
-    const thumbnails = appPage.locator(".video-card .video-thumbnail");
+    const thumbnails = appPage.locator(".g3-card .g3-card-media img");
     const thumbnail = thumbnails.first();
     await expect(thumbnail).toBeVisible();
     await expect
@@ -122,7 +128,7 @@ test.describe("Tawny library interactions", () => {
     test.skip(testInfo.project.name !== "desktop-chromium", "desktop pointer behavior");
     await openApp(appPage);
 
-    await appPage.locator(".video-card .thumbnail-shell").first().click();
+    await appPage.locator(".g3-card .g3-card-action").first().click();
     const player = appPage.locator("#tawny-player");
     const media = appPage.locator("#tawny-player-media");
     await expect(player).toBeVisible();
@@ -211,7 +217,7 @@ test.describe("Tawny library interactions", () => {
     await openApp(appPage, "/explore");
     await expect(appPage.getByPlaceholder("Search videos and channels")).toBeVisible();
     for (const label of ["All", "Videos", "Channels"]) {
-      await expect(appPage.getByRole("tab", { name: label, exact: true })).toBeVisible();
+      await expect(appPage.getByRole("radio", { name: label, exact: true })).toBeVisible();
     }
     await expectNoHorizontalScroll(appPage);
   });

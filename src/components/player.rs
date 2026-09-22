@@ -11,13 +11,17 @@ use crate::{
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{
     Captions, Check, ChevronLeft, ChevronRight, Clock, EyeOff, Heart, Languages, ListVideo,
-    Maximize2, MessageSquare, Minimize2, Pause, PictureInPicture, Play, RotateCcw, RotateCw,
-    Settings2, Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight, Volume2, VolumeX, X,
+    Maximize2, MessageSquare, Minimize2, PanelTopClose, PanelTopOpen, Pause, PictureInPicture,
+    Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight,
+    Volume2, VolumeX, X,
 };
-use g3_route_transitions::{animated_go_back, animated_navigate};
+use g3_route_transitions::{
+    ROUTE_TRANSITION_OVERLAY_REGION_CLASS, animated_back_or_navigate, animated_navigate,
+};
 use g3_ui::{
-    Avatar, AvatarSize, Badge, Body, Button, ButtonSize, ButtonStyle, Card, Chip, RightSlot, Sheet,
-    SheetBackdrop, StatusColor,
+    Avatar, AvatarSize, Badge, BottomSheet, Button, ButtonExpand, ButtonFill, ButtonSize, Card,
+    CardVariant, Chip, Color, Content, EmptyState, Item, List, ListLines, SheetBackdrop, Shelf,
+    Skeleton, SkeletonShape, Space, Spinner, Stack, StackAlign, Text, TextTone, TextVariant,
 };
 
 use super::VideoGrid;
@@ -36,15 +40,20 @@ fn playback_server_url() -> &'static str {
 }
 
 fn sync_player_metadata(
+    video_id: String,
     tracks: Vec<CaptionTrack>,
     selected_caption: Option<usize>,
     captions_enabled: bool,
     chapters: Vec<VideoChapter>,
     preview_frames: Option<VideoPreviewFrames>,
     sponsor_segments: Vec<SponsorTimelineSegment>,
+    sponsor_enabled: bool,
     sponsor_notify: bool,
     autoplay: bool,
 ) {
+    let Ok(video_id) = serde_json::to_string(&video_id) else {
+        return;
+    };
     let Ok(tracks) = serde_json::to_string(&tracks) else {
         return;
     };
@@ -70,6 +79,7 @@ fn sync_player_metadata(
             const chapters = {chapters};
             const previewFrames = {preview_frames};
             const sponsorSegments = {sponsor_segments};
+            const sponsorEnabled = {sponsor_enabled};
             const sponsorNotify = {sponsor_notify};
             const autoplay = {autoplay};
             const serverUrl = {server_url};
@@ -92,12 +102,14 @@ fn sync_player_metadata(
                     }}
                 }});
                 window.TawnyPlayerControls.setMetadata(media, {{
+                    videoId: {video_id},
                     captions: tracks,
                     selectedCaption: {selected_caption},
                     captionsEnabled: {captions_enabled},
                     chapters,
                     previewFrames,
                     sponsorSegments,
+                    sponsorEnabled,
                     sponsorNotify,
                     autoplay,
                 }});
@@ -148,7 +160,29 @@ fn NativePlayerBridges(title: String) -> Element {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+/// iOS keeps only the playback bridges: its picture-in-picture goes through
+/// WebKit's own presentation mode, and nothing asks it to lock orientation.
+/// Starting playback claims the `.playback` audio session that keeps audio
+/// running once the app leaves the foreground.
+#[cfg(target_os = "ios")]
+#[component]
+fn NativePlayerBridges(title: String) -> Element {
+    let mut plugins = use_context::<g3_native_plugins::NativePlugins>();
+    rsx! {
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-playback-start": "",
+            onclick: move |_| { let _ = plugins.media.write().set_playback_active(true, title.clone()); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-playback-stop": "",
+            onclick: move |_| { let _ = plugins.media.write().set_playback_active(false, String::new()); },
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[component]
 fn NativePlayerBridges(title: String) -> Element {
     let _ = title;
@@ -468,6 +502,13 @@ window[key] = {
 #[component]
 pub fn PersistentPlayer(expanded: bool) -> Element {
     let app_state = use_context::<AppState>();
+    // Remembered per viewer rather than per video: chosen once, every desktop
+    // video opens on the wider stage. The setting is the state rather than
+    // something copied into a signal at mount - the stored settings are read
+    // back a moment after the first render, so a copy would be the default
+    // and a reload would forget the choice.
+    let mut settings_for_theater = app_state.settings;
+    let theater_mode = app_state.settings().theater_mode;
     let mut playback_attempt = use_signal(|| 0_u8);
     // The privacy-enhanced iframe is a manual escape hatch, never an automatic
     // one. Silently swapping to it hides extraction regressions behind a player
@@ -661,22 +702,31 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let sponsor_segments_to_sync = app_state.active_sponsor_segments;
     let sponsor_settings_state = app_state;
     let autoplay_to_sync = app_state.settings().autoplay_for(is_short);
-    use_effect(move || {
-        // Re-send metadata when a failed stream creates a replacement video
-        // element. The chapter/controller state is attached per element.
+    // Metadata belongs to the media element, so a replacement element starts
+    // with none: no chapters, no segments, a bare timeline. Both things that
+    // build a new one - a retried stream, and the audio-only switch, which
+    // remounts the element on purpose - are read here so the metadata follows
+    // it over.
+    let audio_only_to_sync = audio_only_active;
+    let sync_video_id = video.id.clone();
+    use_effect(use_reactive!(|audio_only_to_sync| {
+        let _ = audio_only_to_sync;
         let _ = playback_attempt_to_sync();
         let sponsor_settings = sponsor_settings_state.settings().sponsor_block;
+        let sponsor_enabled = !sponsor_settings.requested_categories().is_empty();
         sync_player_metadata(
+            sync_video_id.clone(),
             captions_to_sync(),
             selected_caption_to_sync(),
             captions_enabled_to_sync(),
             chapters_to_sync(),
             preview_frames_to_sync(),
             timeline_segments(&sponsor_segments_to_sync(), &sponsor_settings),
+            sponsor_enabled,
             sponsor_settings.notify_on_skip,
             autoplay_to_sync,
         )
-    });
+    }));
     let mut captions_enabled = app_state.captions_enabled;
     let captions_for_toggle = app_state.active_captions;
     let caption_tracks_to_render = (app_state.active_captions)();
@@ -718,7 +768,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let playback_title = video.title.clone();
 
     rsx! {
-        div { class: if expanded { "persistent-player expanded" } else { "persistent-player mini" },
+        div { class: if expanded {
+                if theater_mode { "persistent-player expanded theater-mode" } else { "persistent-player expanded" }
+            } else { "persistent-player mini" },
             section {
                 id: "tawny-player",
                 // Dropping the video AdaptationSets covers the adaptive path, but a
@@ -789,6 +841,21 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     div { class: "player-seek-feedback player-seek-feedback-right", aria_hidden: "true",
                         RotateCw { size: 30 }
                         span { "10 seconds" }
+                    }
+                    // A segment set to "show" is left for the viewer to decide
+                    // about, which until now meant colour on the timeline and
+                    // no way to act on it. The offer stands while the playhead
+                    // is inside the segment, and lives outside the control bar:
+                    // that bar takes no pointer events and fades on its own
+                    // schedule, which would have made this the one control with
+                    // a deadline that you cannot press.
+                    button {
+                        r#type: "button",
+                        class: "player-sponsor-skip",
+                        "data-player-sponsor-skip": "",
+                        hidden: true,
+                        span { "Skip" }
+                        ChevronRight { size: 16 }
                     }
                     div {
                         class: "tawny-player-controls controls-visible",
@@ -1035,7 +1102,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     // opened the video from Subscriptions or a playlist to the
                                     // wrong page, and left the watch route ahead in history.
                                     // Feed is only the deep-link fallback.
-                                    onclick: move |_| { spawn(async move { animated_go_back(Route::Feed {}).await; }); },
+                                    onclick: move |_| { spawn(animated_back_or_navigate(Route::Feed {})); },
                                 }
                                 button {
                                     r#type: "button",
@@ -1056,6 +1123,24 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     title: "Change playback speed",
                                     "data-player-action": "speed",
                                     span { "data-player-speed-label": "", "{current_speed}×" }
+                                }
+                                if expanded {
+                                    button {
+                                        r#type: "button",
+                                        class: "player-control-button player-theater-button",
+                                        aria_label: if theater_mode { "Exit theater mode" } else { "Enter theater mode" },
+                                        title: if theater_mode { "Exit theater mode" } else { "Theater mode" },
+                                        aria_pressed: theater_mode.to_string(),
+                                        onclick: move |event: Event<MouseData>| {
+                                            event.stop_propagation();
+                                            settings_for_theater.write().theater_mode = !theater_mode;
+                                        },
+                                        if theater_mode {
+                                            PanelTopClose { size: 21 }
+                                        } else {
+                                            PanelTopOpen { size: 21 }
+                                        }
+                                    }
                                 }
                                 // Both icons ship; CSS shows whichever matches
                                 // the current state, the same way play/pause does.
@@ -1119,11 +1204,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             let (dx, dy) = (point.x - x, point.y - y);
                             // Same threshold as the attached controller's flick.
                             if dy > 55.0 && dy.abs() > dx.abs() {
-                                spawn(async move { animated_go_back(Route::Feed {}).await; });
+                                spawn(animated_back_or_navigate(Route::Feed {}));
                             }
                         },
                         onpointercancel: move |_| stage_swipe_start.set(None),
-                        div { class: "loading-orbit" }
+                        Spinner {}
                     }
                 } else {
                     div { class: "player-stage-status player-stage-error",
@@ -1137,7 +1222,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                         }
                         div { class: "player-stage-actions",
                             Button {
-                                style: ButtonStyle::Solid,
+                                fill: ButtonFill::Solid,
                                 onclick: move |_| {
                                     playback_failed.set(false);
                                     // Rewinding to zero both re-runs the
@@ -1147,7 +1232,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 "Try again"
                             }
                             Button {
-                                style: ButtonStyle::Neutral,
+                                fill: ButtonFill::Outline,
+                                color: Color::Neutral,
                                 size: ButtonSize::Sm,
                                 onclick: move |_| use_embed.set(true),
                                 "Use YouTube embed"
@@ -1164,7 +1250,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                         class: "player-control-button player-stage-back",
                         aria_label: "Back",
                         title: "Back",
-                        onclick: move |_| { spawn(async move { animated_go_back(Route::Feed {}).await; }); },
+                        onclick: move |_| { spawn(animated_back_or_navigate(Route::Feed {})); },
                         ChevronLeft { size: 26 }
                     }
                 }
@@ -1173,12 +1259,14 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                 button {
                     class: "mini-player-copy",
                     aria_label: "Open {video.title}",
-                    onclick: move |_| { { let v = open_video_id.clone(); spawn(async move { animated_navigate(Route::VideoDetail { id: v }).await; }); }; },
-                    strong { "{video.title}" }
-                    span { "{video.channel_name}" }
+                    onclick: move |_| { spawn(animated_navigate(Route::VideoDetail { id: open_video_id.clone() })); },
+                    Text { variant: TextVariant::Label, class: "truncate", "{video.title}" }
+                    Text { variant: TextVariant::Caption, class: "truncate", "{video.channel_name}" }
                 }
-                button {
-                    class: "mini-player-close",
+                Button {
+                    class: "mini-player-close self-center",
+                    fill: ButtonFill::Clear,
+                    color: Color::Neutral,
                     aria_label: "Close player",
                     onclick: move |_| app_state.stop_playback(),
                     X { size: 20 }
@@ -1481,10 +1569,14 @@ fn VideoDetailInner(id: String) -> Element {
             }
             // A failure here is not worth a toast: SponsorBlock being
             // unreachable means the video plays exactly as it would have.
-            let fetched = get_sponsor_segments(video_id, categories)
-                .await
-                .unwrap_or_default();
-            sponsor_segments.set(fetched);
+            // It does not mean the segments already on the timeline are
+            // wrong, though, so a failed request leaves them alone. This
+            // effect runs again on every settings change, and answering each
+            // failure with "no segments" is what wiped the colours part way
+            // through a video.
+            if let Ok(fetched) = get_sponsor_segments(video_id, categories).await {
+                sponsor_segments.set(fetched);
+            }
         });
     });
     let mut comments = use_signal(Vec::<VideoComment>::new);
@@ -1622,20 +1714,21 @@ fn VideoDetailInner(id: String) -> Element {
     let Some(details) = details else {
         let failed = details_resource.read().as_ref().is_some();
         return rsx! {
-            // Carries the cover marker too: the sheet has to exist in the
-            // new DOM when the snapshot is taken, and details arrive later than
-            // that. Without it the route committed first and the animation then
-            // played over the page it had already swapped to.
-            Body { padding: false,
-            main { class: "page player-loading route-transition-cover",
-                    div { class: "empty-state",
-                        if failed {
-                            p { "This video is unavailable from both the local cache and configured source." }
-                        } else {
-                            div { class: "loading-orbit" }
-                        }
+            // Carries the overlay region too: the sheet has to exist in the new
+            // DOM when the snapshot is taken, and details arrive later than
+            // that. Without it the route committed first and the animation
+            // then played over the page it had already swapped to.
+            Content {
+                class: "player-loading {ROUTE_TRANSITION_OVERLAY_REGION_CLASS}",
+                if failed {
+                    EmptyState {
+                        title: "Video unavailable",
+                        color: Color::Danger,
+                        "This video is unavailable from both the local cache and configured source."
                     }
-            }
+                } else {
+                    Spinner { center: true }
+                }
             }
         };
     };
@@ -1689,188 +1782,205 @@ fn VideoDetailInner(id: String) -> Element {
         details.comments.comments.len()
     };
     let details_remote_available = details.remote_available;
-    let description_class = if description_expanded() {
-        "video-description expanded"
-    } else {
-        "video-description"
-    };
 
     rsx! {
         // The sheet itself: this is what slides up over the shell and back
-        // down off it, so it is what carries the cover snapshot.
-        Body { padding: false,
-        main { class: "player-content player-detail-content route-transition-cover",
-                    section { class: "player-details page",
-                        // Title and stats are one unit: the page's section gap
-                        // belongs between blocks, not between a title and its
-                        // own byline.
-                        header { class: "player-title-block",
-                            h1 { "{video.title}" }
-                            p { class: "video-stats", "{video.stats_label()}" }
-                        }
+        // down off it, so it is the overlay region.
+        Content { class: "player-content player-detail-content {ROUTE_TRANSITION_OVERLAY_REGION_CLASS}",
+            Stack { gap: Space::Lg, class: "player-details",
+                // Title and stats are one unit: the page's section gap belongs
+                // between blocks, not between a title and its own byline.
+                Stack { gap: Space::Xs,
+                    Text { variant: TextVariant::Title, "{video.title}" }
+                    Text { tone: TextTone::Secondary, "{video.stats_label()}" }
+                }
 
-                        // Captions and chapters are chips that open their own
-                        // sheet, so the page is not padded out with two panels
-                        // that are mostly idle. The counts are not actions, so
-                        // they are badges rather than chips that do nothing.
-                        if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() || audio_tracks().len() > 1 {
-                            div { class: "video-engagement",
-                                if details.like_count > 0 {
-                                    Badge { color: StatusColor::Neutral, class: "engagement-count",
-                                        ThumbsUp { size: 14 }
-                                        "{compact_number(details.like_count)}"
-                                    }
-                                }
-                                if details.dislike_count > 0 {
-                                    Badge { color: StatusColor::Neutral, class: "engagement-count",
-                                        ThumbsDown { size: 14 }
-                                        "{compact_number(details.dislike_count)}"
-                                    }
-                                }
-                                if !caption_tracks.is_empty() {
-                                    Chip {
-                                        start: rsx! { Captions { size: 15 } },
-                                        onclick: move |_| captions_open.set(true),
-                                        "{caption_tracks.len()} captions"
-                                    }
-                                }
-                                // Only a dubbed upload offers a choice here, and only
-                                // then is the chip worth a slot in this row.
-                                if audio_tracks().len() > 1 {
-                                    Chip {
-                                        start: rsx! { Languages { size: 15 } },
-                                        onclick: move |_| audio_open.set(true),
-                                        "{audio_track_label(&audio_tracks(), &selected_audio())}"
-                                    }
-                                }
-                                if !chapters.is_empty() {
-                                    Chip {
-                                        start: rsx! { ListVideo { size: 15 } },
-                                        onclick: move |_| chapters_open.set(true),
-                                        "{chapters.len()} chapters"
-                                    }
-                                }
+                // Captions and chapters are chips that open their own sheet,
+                // so the page is not padded out with two panels that are mostly
+                // idle. The counts are not actions, so they are badges rather
+                // than chips that do nothing.
+                if details.like_count > 0 || details.dislike_count > 0 || !caption_tracks.is_empty() || !chapters.is_empty() || audio_tracks().len() > 1 {
+                    Stack { horizontal: true, wrap: true, gap: Space::Sm, align: StackAlign::Center,
+                        if details.like_count > 0 {
+                            Chip { start: rsx! { ThumbsUp { size: 15 } },
+                                "{compact_number(details.like_count)}"
                             }
                         }
-
-                        div { class: "player-actions",
-                            Button {
-                                style: ButtonStyle::Neutral,
-                                size: ButtonSize::Sm,
-                                start: watched_icon,
-                                onclick: move |_| {
-                                    app_state.mark_watched(&watched_id, !is_watched);
-                                    app_state.show_toast(
-                                        if is_watched { "Marked as unwatched" } else { "Marked as watched" },
-                                        StatusColor::Success,
-                                    );
-                                },
-                                if is_watched { "Unwatched" } else { "Watched" }
-                            }
-                            Button {
-                                style: ButtonStyle::Neutral,
-                                size: ButtonSize::Sm,
-                                start: rsx! { Clock { size: 17 } },
-                                onclick: move |_| {
-                                    app_state.playlist_picker_video.set(Some(playlist_video.clone()));
-                                    app_state.playlist_picker_open.set(true);
-                                },
-                                "Save"
-                            }
-                            Button {
-                                style: ButtonStyle::Neutral,
-                                size: ButtonSize::Sm,
-                                start: rsx! { Share2 { size: 17 } },
-                                onclick: move |_| app_state.open_share(share_video.clone()),
-                                "Share"
-                            }
-                            Button {
-                                style: ButtonStyle::Neutral,
-                                size: ButtonSize::Sm,
-                                start: rsx! { PictureInPicture { size: 17 } },
-                                onclick: move |_| toggle_picture_in_picture(),
-                                "PiP"
+                        if details.dislike_count > 0 {
+                            Chip { start: rsx! { ThumbsDown { size: 15 } },
+                                "{compact_number(details.dislike_count)}"
                             }
                         }
-
-                        if let Some(channel) = channel {
-                            Card {
-                                class: "player-channel-card",
-                                onclick: move |_| { { let v = open_channel_id.clone(); spawn(async move { animated_navigate(Route::ChannelDetail { id: v }).await; }); }; },
-                                Avatar {
-                                    src: channel.avatar_url.clone(),
-                                    alt: channel.name.clone(),
-                                    fallback: channel.name.chars().next().map(|initial| initial.to_uppercase().to_string()),
-                                    size: AvatarSize::Lg,
-                                }
-                                div { class: "player-channel-copy",
-                                    h3 { "{channel.name}" }
-                                    if !channel.subscriber_count.trim().is_empty() {
-                                        p { "{channel.subscriber_count} subscribers" }
-                                    }
-                                }
-                                Button {
-                                    size: ButtonSize::Sm,
-                                    style: if is_subscribed { ButtonStyle::Neutral } else { ButtonStyle::Solid },
-                                    onclick: move |event: MouseEvent| {
-                                        event.stop_propagation();
-                                        app_state.toggle_subscription(&channel_id);
-                                    },
-                                    if is_subscribed { "Subscribed" } else { "Subscribe" }
-                                }
+                        if !caption_tracks.is_empty() {
+                            Chip {
+                                start: rsx! { Captions { size: 15 } },
+                                onclick: move |_| captions_open.set(true),
+                                "{caption_tracks.len()} captions"
                             }
                         }
-
-                        if !details.description.is_empty() {
-                            Card {
-                                class: "description-card",
-                                title: "Description".to_string(),
-                                right_slot: if details_remote_available { None } else { Some(RightSlot::Text("Cached".to_string())) },
-                                p { class: "{description_class}", "{details.description}" }
-                                Button {
-                                    style: ButtonStyle::Clear,
-                                    size: ButtonSize::Sm,
-                                    class: "description-toggle",
-                                    onclick: move |_| description_expanded.toggle(),
-                                    if description_expanded() { "Show less" } else { "Show more" }
-                                }
+                        // Only a dubbed upload offers a choice here, and only
+                        // then is the chip worth a slot in this row.
+                        if audio_tracks().len() > 1 {
+                            Chip {
+                                start: rsx! { Languages { size: 15 } },
+                                onclick: move |_| audio_open.set(true),
+                                "{audio_track_label(&audio_tracks(), &selected_audio())}"
                             }
                         }
-
-                        Button {
-                            class: "comments-open-button",
-                            style: ButtonStyle::Neutral,
-                            expand: true,
-                            disabled: comments_disabled,
-                            start: rsx! { MessageSquare { size: 17 } },
-                            onclick: move |_| comments_open.set(true),
-                            if comments_disabled {
-                                "Comments are disabled"
-                            } else {
-                                "Comments · {comments_count}"
-                            }
-                        }
-
-                        // Heading and grid are one block, held closer together
-                        // than the sections above them.
-                        section { class: "player-related",
-                            div { class: "section-heading compact",
-                                div {
-                                    h2 { if details.remote_available { "Related videos" } else { "From your library" } }
-                                }
-                            }
-                            if transition_settled() {
-                                VideoGrid { videos: related }
+                        if !chapters.is_empty() {
+                            Chip {
+                                start: rsx! { ListVideo { size: 15 } },
+                                onclick: move |_| chapters_open.set(true),
+                                "{chapters.len()} chapters"
                             }
                         }
                     }
+                }
+
+                Shelf { aria_label: "Video actions", gap: Space::Sm,
+                    Button {
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        size: ButtonSize::Sm,
+                        start: watched_icon,
+                        onclick: move |_| {
+                            app_state.mark_watched(&watched_id, !is_watched);
+                            app_state.show_toast(
+                                if is_watched { "Marked as unwatched" } else { "Marked as watched" },
+                                Color::Success,
+                            );
+                        },
+                        if is_watched { "Unwatched" } else { "Watched" }
+                    }
+                    Button {
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        size: ButtonSize::Sm,
+                        start: rsx! { Clock { size: 17 } },
+                        onclick: move |_| {
+                            app_state.playlist_picker_video.set(Some(playlist_video.clone()));
+                            app_state.playlist_picker_open.set(true);
+                        },
+                        "Save"
+                    }
+                    Button {
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        size: ButtonSize::Sm,
+                        start: rsx! { Share2 { size: 17 } },
+                        onclick: move |_| app_state.open_share(share_video.clone()),
+                        "Share"
+                    }
+                    Button {
+                        fill: ButtonFill::Outline,
+                        color: Color::Neutral,
+                        size: ButtonSize::Sm,
+                        start: rsx! { PictureInPicture { size: 17 } },
+                        onclick: move |_| toggle_picture_in_picture(),
+                        "PiP"
+                    }
+                }
+
+                // The cached copy of a video knows neither its channel nor its
+                // description, so both cards were absent until the details
+                // request answered and then inserted themselves, growing the
+                // page under whatever the reader was already looking at. A
+                // placeholder of the same height holds their place instead.
+                if channel.is_none() && !details_remote_available {
+                    Card {
+                        start: rsx! { Skeleton { shape: SkeletonShape::Avatar } },
+                        Stack { gap: Space::Sm,
+                            Skeleton { width: "45%" }
+                            Skeleton { width: "28%" }
+                        }
+                    }
+                }
+                if let Some(channel) = channel {
+                    Card {
+                        title: channel.name.clone(),
+                        subtitle: (!channel.subscriber_count.trim().is_empty())
+                            .then(|| format!("{} subscribers", channel.subscriber_count.trim())),
+                        start: rsx! {
+                            Avatar { name: channel.name.clone(), src: channel.avatar_url.clone(), size: AvatarSize::Md }
+                        },
+                        onclick: move |_| { spawn(animated_navigate(Route::ChannelDetail { id: open_channel_id.clone() })); },
+                        end: rsx! {
+                            Button {
+                                size: ButtonSize::Sm,
+                                fill: if is_subscribed { ButtonFill::Outline } else { ButtonFill::Solid },
+                                color: if is_subscribed { Color::Neutral } else { Color::Accent },
+                                "aria-pressed": if is_subscribed { "true" } else { "false" },
+                                onclick: move |_| {
+                                    app_state.toggle_subscription(&channel_id);
+                                },
+                                if is_subscribed { "Subscribed" } else { "Subscribe" }
+                            }
+                        },
+                    }
+                }
+
+                if details.description.is_empty() && !details_remote_available {
+                    Card { title: "Description",
+                        Stack { gap: Space::Sm,
+                            // Four lines: the same as the clamp the real
+                            // description opens at.
+                            Skeleton { width: "100%" }
+                            Skeleton { width: "96%" }
+                            Skeleton { width: "88%" }
+                            Skeleton { width: "60%" }
+                            // The 'Show more' button below the text is part of
+                            // the height being held.
+                            Skeleton { class: "h-8 mt-1", width: "5.5rem" }
+                        }
+                    }
+                }
+                if !details.description.is_empty() {
+                    Card {
+                        title: "Description",
+                        end: (!details_remote_available).then(|| rsx! { Badge { "Cached" } }),
+                        Text {
+                            class: if description_expanded() { "whitespace-pre-line break-words" } else { "line-clamp-4 whitespace-pre-line break-words" },
+                            "{details.description}"
+                        }
+                        Button {
+                            fill: ButtonFill::Clear,
+                            size: ButtonSize::Sm,
+                            onclick: move |_| description_expanded.toggle(),
+                            if description_expanded() { "Show less" } else { "Show more" }
+                        }
+                    }
+                }
+
+                Button {
+                    fill: ButtonFill::Outline,
+                    color: Color::Neutral,
+                    expand: ButtonExpand::Block,
+                    disabled: comments_disabled,
+                    start: rsx! { MessageSquare { size: 17 } },
+                    onclick: move |_| comments_open.set(true),
+                    if comments_disabled {
+                        "Comments are disabled"
+                    } else {
+                        "Comments · {comments_count}"
+                    }
+                }
+
+                // Heading and grid are one block, held closer together than
+                // the sections above them.
+                Stack { gap: Space::Sm,
+                    Text { variant: TextVariant::Title,
+                        if details.remote_available { "Related videos" } else { "From your library" }
+                    }
+                    if transition_settled() {
+                        VideoGrid { videos: related }
+                    }
+                }
+            }
         }
 
-        // A small label, not a masthead: the list is the content, and a full
-        // heading block was taking half the sheet before a chapter was visible.
-        Sheet { is_open: chapters_open, class: "player-sheet",
-            p { class: "sheet-label", "Chapters" }
-            div { class: "chapter-sheet-list",
+        BottomSheet { open: chapters_open, title: "Chapters", class: "player-sheet",
+            max_height: "74dvh",
+            List { lines: ListLines::Inset,
                 // A closed sheet still renders its list. This one cannot be
                 // open while the route that owns it is animating in, so it is
                 // pure cost there - and a long upload has a hundred rows.
@@ -1878,15 +1988,14 @@ fn VideoDetailInner(id: String) -> Element {
                     {
                         let start_seconds = chapter.start_seconds;
                         rsx! {
-                            button {
-                                class: "chapter-sheet-row",
+                            Item {
                                 key: "{chapter.start_seconds}",
+                                label: chapter.title.clone(),
+                                metadata: chapter.timestamp_label(),
                                 onclick: move |_| {
                                     seek_player(start_seconds);
                                     chapters_open.set(false);
                                 },
-                                strong { "{chapter.timestamp_label()}" }
-                                span { "{chapter.title}" }
                             }
                         }
                     }
@@ -1894,16 +2003,16 @@ fn VideoDetailInner(id: String) -> Element {
             }
         }
 
-        Sheet { is_open: captions_open, class: "player-sheet",
-            p { class: "sheet-label", "Captions" }
+        BottomSheet { open: captions_open, title: "Captions", class: "player-sheet",
+            max_height: "74dvh",
             CaptionPicker {
                 tracks: caption_tracks.clone(),
                 selected: app_state.selected_caption,
             }
         }
 
-        Sheet { is_open: audio_open, class: "player-sheet",
-            p { class: "sheet-label", "Audio track" }
+        BottomSheet { open: audio_open, title: "Audio track", class: "player-sheet",
+            max_height: "74dvh",
             AudioTrackPicker {
                 tracks: audio_tracks(),
                 selected: selected_audio(),
@@ -1915,17 +2024,20 @@ fn VideoDetailInner(id: String) -> Element {
         // end of the scrolled list rather than pinned above it.
         // No backdrop: the video above stays untinted and usable while the
         // thread is open, and dragging the handle down is how it closes.
-        Sheet {
-            is_open: comments_open,
+        BottomSheet {
+            open: comments_open,
+            aria_label: "Comments",
             backdrop: SheetBackdrop::None,
             class: "player-sheet comments-sheet",
+            max_height: "var(--tawny-comments-sheet-height, 60dvh)",
             // Same as the chapter list, and the heaviest of the two: twenty
             // cards, each with an avatar, built while the player is trying to
             // grow.
             if !transition_settled() {
-                p { class: "detail-muted", "Loading comments…" }
+                Spinner { center: true }
             } else if comments().is_empty() {
-                p { class: "detail-muted",
+                EmptyState {
+                    title: "No comments",
                     if comments_initialized() && !details.comments.remote_available {
                         "Comments need a connected video source."
                     } else {
@@ -1933,16 +2045,16 @@ fn VideoDetailInner(id: String) -> Element {
                     }
                 }
             } else {
-                div { class: "comment-list",
+                Stack { gap: Space::Sm,
                     for comment in comments() {
                         CommentCard { comment }
                     }
                     if let Some(next_page) = comments_next_page() {
                         Button {
-                            class: "load-comments-button",
-                            style: ButtonStyle::Neutral,
-                            expand: true,
-                            disabled: comments_loading(),
+                            fill: ButtonFill::Outline,
+                            color: Color::Neutral,
+                            expand: ButtonExpand::Block,
+                            loading: comments_loading(),
                             onclick: move |_| {
                                 let video_id = video.id.clone();
                                 let token = next_page.clone();
@@ -1955,18 +2067,17 @@ fn VideoDetailInner(id: String) -> Element {
                                         }
                                         Err(_) => app_state.show_toast(
                                             "Could not load more comments",
-                                            StatusColor::Warning,
+                                            Color::Warning,
                                         ),
                                     }
                                     comments_loading.set(false);
                                 });
                             },
-                            if comments_loading() { "Loading…" } else { "Load more comments" }
+                            "Load more comments"
                         }
                     }
                 }
             }
-        }
         }
     }
 }
@@ -1986,11 +2097,11 @@ fn audio_track_label(tracks: &[AudioTrackOption], selected: &Option<String>) -> 
 #[component]
 fn AudioTrackPicker(tracks: Vec<AudioTrackOption>, selected: Option<String>) -> Element {
     rsx! {
-        div { class: "audio-track-strip",
+        Stack { horizontal: true, wrap: true, gap: Space::Sm,
             for track in tracks {
-                button {
+                Chip {
                     key: "{track.language}",
-                    class: if selected.as_deref() == Some(track.language.as_str()) { "caption-chip active" } else { "caption-chip" },
+                    selected: selected.as_deref() == Some(track.language.as_str()),
                     onclick: {
                         let language = track.language.clone();
                         move |_| set_player_audio_track(language.clone())
@@ -2004,18 +2115,15 @@ fn AudioTrackPicker(tracks: Vec<AudioTrackOption>, selected: Option<String>) -> 
 
 #[component]
 fn CaptionPicker(tracks: Vec<CaptionTrack>, mut selected: Signal<Option<usize>>) -> Element {
-    // Chips only. The sheet's own label already names this, and the section
-    // heading it used to carry repeated that under a second title.
     rsx! {
-        div { class: "caption-strip",
+        Stack { horizontal: true, wrap: true, gap: Space::Sm,
             for (index, track) in tracks.into_iter().enumerate() {
-                button {
-                    class: if selected() == Some(index) { "caption-chip active" } else { "caption-chip" },
-                    onclick: move |_| {
-                        selected.set(Some(index));
-                    },
+                Chip {
+                    key: "{index}",
+                    selected: selected() == Some(index),
+                    onclick: move |_| selected.set(Some(index)),
                     "{track.label}"
-                    if track.auto_generated { small { "Auto" } }
+                    if track.auto_generated { " · Auto" }
                 }
             }
         }
@@ -2024,27 +2132,29 @@ fn CaptionPicker(tracks: Vec<CaptionTrack>, mut selected: Signal<Option<usize>>)
 
 #[component]
 fn CommentCard(comment: VideoComment) -> Element {
-    let initial = comment.author.chars().next().unwrap_or('T').to_string();
     rsx! {
-        Card { class: if comment.pinned { "comment-card pinned" } else { "comment-card" },
-            Avatar {
-                src: comment.author_avatar_url.clone(),
-                alt: comment.author.clone(),
-                fallback: initial,
-                size: AvatarSize::Md,
-            }
-            div { class: "comment-content",
-                div { class: "comment-heading",
-                    strong { "{comment.author}" }
-                    if comment.creator { Badge { color: StatusColor::Accent, "Creator" } }
-                    if comment.pinned { Badge { color: StatusColor::Neutral, "Pinned" } }
-                    span { "{comment.published_at}" }
-                }
-                p { "{comment.text}" }
-                div { class: "comment-stats",
-                    span { ThumbsUp { size: 13 } "{compact_number(comment.like_count)}" }
-                    if comment.reply_count > 0 { span { "{comment.reply_count} replies" } }
-                    if comment.hearted { span { Heart { size: 13 } "Hearted" } }
+        Card {
+            variant: if comment.pinned { CardVariant::Flat } else { CardVariant::Filled },
+            title: comment.author.clone(),
+            heading_level: 3,
+            subtitle: comment.published_at.clone(),
+            start: rsx! {
+                Avatar { name: comment.author.clone(), src: comment.author_avatar_url.clone(), size: AvatarSize::Sm }
+            },
+            end: rsx! {
+                if comment.creator { Badge { color: Color::Accent, "Creator" } }
+                if comment.pinned { Badge { "Pinned" } }
+            },
+            Stack { gap: Space::Xs,
+                Text { class: "whitespace-pre-line break-words", "{comment.text}" }
+                Stack { horizontal: true, gap: Space::Md, align: StackAlign::Center,
+                    Text { variant: TextVariant::Caption, class: "inline-flex items-center gap-1", ThumbsUp { size: 13 } "{compact_number(comment.like_count)}" }
+                    if comment.reply_count > 0 {
+                        Text { variant: TextVariant::Caption, "{comment.reply_count} replies" }
+                    }
+                    if comment.hearted {
+                        Text { variant: TextVariant::Caption, class: "inline-flex items-center gap-1", Heart { size: 13 } "Hearted" }
+                    }
                 }
             }
         }

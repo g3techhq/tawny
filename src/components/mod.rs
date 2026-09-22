@@ -14,7 +14,7 @@ mod video_card;
 pub use account::{AccountGate, AccountSettings, BackendSettings};
 pub use durations::{DURATION_LOOKAHEAD, duration_candidates, use_duration_hydration};
 pub use explore::Explore;
-pub use feed::Feed;
+pub use feed::{Feed, FeedFilterSegments};
 pub use library::{ChannelDetail, HistoryPage, QueuePage};
 pub use overlays::AppOverlays;
 pub use player::{PersistentPlayer, VideoDetail};

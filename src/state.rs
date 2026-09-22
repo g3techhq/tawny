@@ -3,19 +3,27 @@ use crate::{
     api::{get_library, push_library_state, sync_library},
     cache::use_persistent_signal,
     models::{
-        AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, HistoryEntry,
-        LibrarySnapshot, LibraryUserState, Playlist, PlaylistView, SearchResults, SponsorSegment,
-        SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
+        AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, FeedFilter,
+        HistoryEntry, LibrarySnapshot, LibraryUserState, Playlist, PlaylistView, SearchResults,
+        SponsorSegment, SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
         VideoPreviewFrames, playlist_queue_entry, queued_playlist_id,
     },
     session::use_session_provider,
 };
 use dioxus::prelude::*;
-use g3_ui::StatusColor;
+use g3_ui::{Color, ToastOptions, Toaster};
 
 /// How close to the end counts as finished. YouTube stops short of the exact
 /// duration often enough that an exact match would rarely fire.
 const PROGRESS_WATCHED_TAIL_SECONDS: u64 = 15;
+
+/// What saving a video to a playlist did. A swipe that lands on a video the
+/// playlist already holds has changed nothing, and saying so in the same
+/// green as a save reads as though it saved again.
+pub enum PlaylistSave {
+    Saved(String),
+    AlreadyThere(String),
+}
 
 /// A snapshot of the playlist run, resolved the same way autoplay resolves it.
 pub struct PlaylistRunStatus {
@@ -38,11 +46,10 @@ pub struct PlaylistRunStatus {
 pub struct AppState {
     pub library: Signal<LibrarySnapshot>,
     pub settings: Signal<AppSettings>,
-    pub toast_open: Signal<bool>,
-    pub toast: Signal<(String, StatusColor)>,
-    /// A new notice must remount the transient banner, even if the prior one is
-    /// still open, so its visible countdown starts over with its new message.
-    pub toast_revision: Signal<u64>,
+    /// g3-ui's toast queue. It belongs to the `AppWrapper`, which sits below
+    /// this state, so a component inside the wrapper hands it over once it
+    /// mounts. Until then a notice has nowhere to show and is dropped.
+    pub toaster: Signal<Option<Toaster>>,
     pub playlist_picker_video: Signal<Option<Video>>,
     pub playlist_picker_open: Signal<bool>,
     pub video_actions_video: Signal<Option<Video>>,
@@ -77,9 +84,9 @@ pub struct AppState {
     /// to the front of history, so stepping back through history immediately
     /// starts bouncing between two videos.
     pub run_back_stack: Signal<Vec<String>>,
-    pub feed_filter_index: Signal<usize>,
-    pub explore_filter_index: Signal<usize>,
-    pub channel_tab_index: Signal<usize>,
+    pub feed_filter: Signal<FeedFilter>,
+    pub explore_filter: Signal<crate::models::ExploreFilter>,
+    pub channel_tab: Signal<FeedFilter>,
 }
 
 impl AppState {
@@ -101,10 +108,6 @@ impl AppState {
 
     pub fn settings(self) -> AppSettings {
         (self.settings)()
-    }
-
-    pub fn toast(self) -> (String, StatusColor) {
-        (self.toast)()
     }
 
     pub fn playlist_picker_video(self) -> Option<Video> {
@@ -141,18 +144,34 @@ impl AppState {
         self.active_video.set(Some(video));
     }
 
+    /// Fill in what is known about the video that is playing.
+    ///
+    /// Only ever adds. The same player is handed two descriptions of a video:
+    /// the copy cached in the library, which carries no chapters, captions or
+    /// preview frames because the library does not store them, and the one the
+    /// details request returns, which carries all three. They arrive in either
+    /// order and more than once, so applying an empty field on top of a full
+    /// one would strip the timeline of its divisions and its segment colours
+    /// part way through a video. Changing video is what clears this - see
+    /// [`Self::play`] and [`Self::stop_playback`].
     pub fn set_player_metadata(
         mut self,
         captions: Vec<CaptionTrack>,
         chapters: Vec<VideoChapter>,
         preview_frames: Option<VideoPreviewFrames>,
     ) {
-        if (self.selected_caption)().is_none() && !captions.is_empty() {
-            self.selected_caption.set(Some(0));
+        if !captions.is_empty() {
+            if (self.selected_caption)().is_none() {
+                self.selected_caption.set(Some(0));
+            }
+            self.active_captions.set(captions);
         }
-        self.active_captions.set(captions);
-        self.active_chapters.set(chapters);
-        self.active_preview_frames.set(preview_frames);
+        if !chapters.is_empty() {
+            self.active_chapters.set(chapters);
+        }
+        if preview_frames.is_some() {
+            self.active_preview_frames.set(preview_frames);
+        }
     }
 
     pub fn stop_playback(mut self) {
@@ -244,13 +263,15 @@ impl AppState {
         true
     }
 
-    pub fn show_toast(mut self, message: impl Into<String>, color: StatusColor) {
-        self.toast.set((message.into(), color));
-        self.toast_revision.with_mut(|revision| *revision += 1);
-        self.toast_open.set(true);
+    pub fn show_toast(self, message: impl Into<String>, color: Color) {
+        if let Some(toaster) = *self.toaster.peek() {
+            // Most notices confirm an action that can be repeated at once -
+            // a swipe, a toggle - so the latest replaces rather than queues.
+            toaster.show(ToastOptions::new(message).color(color).replace());
+        }
     }
 
-    pub fn add_to_playlist(mut self, video_id: &str, playlist_id: &str) -> Option<String> {
+    pub fn add_to_playlist(mut self, video_id: &str, playlist_id: &str) -> Option<PlaylistSave> {
         let mut library = self.library.write();
         let playlist_name = {
             let playlist = library
@@ -258,7 +279,7 @@ impl AppState {
                 .iter_mut()
                 .find(|playlist| playlist.id == playlist_id)?;
             if playlist.video_ids.iter().any(|id| id == video_id) {
-                return Some(format!("Already in {}", playlist.name));
+                return Some(PlaylistSave::AlreadyThere(playlist.name.clone()));
             }
             playlist.video_ids.insert(0, video_id.to_string());
             playlist.name.clone()
@@ -266,7 +287,7 @@ impl AppState {
         library.cache_revision += 1;
         drop(library);
         self.sync_in_background();
-        Some(format!("Added to {playlist_name}"))
+        Some(PlaylistSave::Saved(playlist_name))
     }
 
     pub fn create_playlist(mut self, name: String) -> String {
@@ -744,22 +765,26 @@ impl AppState {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };
         match kind {
-            SwipeActionKind::AddToPlaylist => {
-                if let Some(message) = self.add_to_playlist(video_id, &playlist_id) {
-                    self.show_toast(message, StatusColor::Success);
+            SwipeActionKind::AddToPlaylist => match self.add_to_playlist(video_id, &playlist_id) {
+                Some(PlaylistSave::Saved(name)) => {
+                    self.show_toast(format!("Added to {name}"), Color::Success)
                 }
-            }
+                Some(PlaylistSave::AlreadyThere(name)) => {
+                    self.show_toast(format!("Already in {name}"), Color::Warning)
+                }
+                None => {}
+            },
             SwipeActionKind::AddToQueue => {
                 let message = self.add_to_queue(video_id, false);
-                self.show_toast(message, StatusColor::Success);
+                self.show_toast(message, Color::Success);
             }
             SwipeActionKind::PlayNext => {
                 let message = self.add_to_queue(video_id, true);
-                self.show_toast(message, StatusColor::Success);
+                self.show_toast(message, Color::Success);
             }
             SwipeActionKind::MarkWatched => {
                 self.mark_watched(video_id, true);
-                self.show_toast("Marked watched", StatusColor::Neutral);
+                self.show_toast("Marked watched", Color::Neutral);
             }
             SwipeActionKind::Share => {
                 if let Some(video) = self
@@ -797,7 +822,25 @@ impl AppState {
     }
 
     /// The label a swipe direction should show on its action panel.
-    pub fn swipe_action_label(self, start_side: bool) -> String {
+    /// Which action a swipe on this side is set to, so a card can show the
+    /// icon for what it will actually do.
+    pub fn swipe_action_kind(self, start_side: bool) -> crate::models::SwipeActionKind {
+        let settings = self.settings();
+        if start_side {
+            settings.swipe_right_action
+        } else {
+            settings.swipe_left_action
+        }
+    }
+
+    /// The few words a swipe action wears under its icon.
+    ///
+    /// A swipe reveals about a thumb's travel, which is no room for a
+    /// sentence. A playlist action carries the playlist's own name, since
+    /// that is the part that differs between the two directions; the rest
+    /// name themselves in a word. The full phrase stays in
+    /// [`Self::swipe_action_label`], which is what a screen reader hears.
+    pub fn swipe_action_caption(self, start_side: bool) -> String {
         use crate::models::SwipeActionKind;
 
         let settings = self.settings();
@@ -816,7 +859,39 @@ impl AppState {
                     .iter()
                     .find(|playlist| playlist.id == playlist_id)
                     .map(|playlist| playlist.name.clone())
-                    .unwrap_or_else(|| "Playlist".into())
+                    .unwrap_or_else(|| SwipeActionKind::AddToPlaylist.trigger_label().to_string())
+            }),
+            other => other.trigger_label().to_string(),
+        }
+    }
+
+    /// What a swipe on this side says it will do, named in full: a playlist
+    /// action carries the playlist's own name, and the rest speak for
+    /// themselves. This is the accessible name; the card shows the shorter
+    /// [`Self::swipe_action_caption`].
+    pub fn swipe_action_label(self, start_side: bool) -> String {
+        use crate::models::SwipeActionKind;
+
+        let settings = self.settings();
+        let (kind, playlist_id) = if start_side {
+            (
+                settings.swipe_right_action,
+                settings.swipe_right_playlist_id,
+            )
+        } else {
+            (settings.swipe_left_action, settings.swipe_left_playlist_id)
+        };
+        match kind {
+            SwipeActionKind::AddToPlaylist => self.with_library(|library| {
+                let name = library
+                    .playlists
+                    .iter()
+                    .find(|playlist| playlist.id == playlist_id)
+                    .map(|playlist| playlist.name.clone());
+                match name {
+                    Some(name) => format!("Add to {name}"),
+                    None => SwipeActionKind::AddToPlaylist.label().to_string(),
+                }
             }),
             other => other.label().to_string(),
         }
@@ -1251,9 +1326,7 @@ pub fn AppStateProvider(children: Element) -> Element {
     use_context_provider(|| AppState {
         library,
         settings,
-        toast_open: Signal::new(false),
-        toast: Signal::new((String::new(), StatusColor::Neutral)),
-        toast_revision: Signal::new(0),
+        toaster: Signal::new(None),
         playlist_picker_video: Signal::new(None),
         playlist_picker_open: Signal::new(false),
         video_actions_video: Signal::new(None),
@@ -1274,9 +1347,9 @@ pub fn AppStateProvider(children: Element) -> Element {
         syncing: initial_syncing,
         chapters_sheet_open: Signal::new(false),
         run_back_stack: Signal::new(Vec::new()),
-        feed_filter_index: Signal::new(0),
-        explore_filter_index: Signal::new(0),
-        channel_tab_index: Signal::new(0),
+        feed_filter: Signal::new(FeedFilter::All),
+        explore_filter: Signal::new(crate::models::ExploreFilter::All),
+        channel_tab: Signal::new(FeedFilter::All),
     });
 
     rsx! { {children} }

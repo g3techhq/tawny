@@ -514,6 +514,58 @@ pub enum FeedFilter {
     Live,
 }
 
+impl FeedFilter {
+    pub const ALL: [Self; 4] = [Self::All, Self::Videos, Self::Shorts, Self::Live];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Videos => "Videos",
+            Self::Shorts => "Shorts",
+            Self::Live => "Live",
+        }
+    }
+
+    /// Whether a video belongs under this filter.
+    pub fn accepts(self, video: &Video) -> bool {
+        match self {
+            Self::All => true,
+            Self::Videos => !video.is_live && !video.is_short,
+            Self::Shorts => video.is_short && !video.is_live,
+            Self::Live => video.is_live,
+        }
+    }
+}
+
+/// What a search looks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExploreFilter {
+    All,
+    Videos,
+    Channels,
+}
+
+impl ExploreFilter {
+    pub const ALL: [Self; 3] = [Self::All, Self::Videos, Self::Channels];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Videos => "Videos",
+            Self::Channels => "Channels",
+        }
+    }
+
+    /// The server's name for the filter.
+    pub fn query(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Videos => "videos",
+            Self::Channels => "channels",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DurationFilter {
     Short,
@@ -645,23 +697,6 @@ impl PlaylistKind {
             Self::All => "All",
             Self::Videos => "Videos",
             Self::Shorts => "Shorts",
-        }
-    }
-
-    /// Position in the segmented control, which speaks in indices.
-    pub fn index(self) -> usize {
-        match self {
-            Self::All => 0,
-            Self::Videos => 1,
-            Self::Shorts => 2,
-        }
-    }
-
-    pub fn from_index(index: usize) -> Self {
-        match index {
-            1 => Self::Videos,
-            2 => Self::Shorts,
-            _ => Self::All,
         }
     }
 
@@ -853,6 +888,10 @@ pub struct AppSettings {
     pub shorts_autoplay: bool,
     #[serde(default = "default_true")]
     pub auto_landscape_fullscreen: bool,
+    /// Whether a desktop player opens in theater mode. A viewer who chose the
+    /// wider stage once meant it for watching, not for this one video.
+    #[serde(default)]
+    pub theater_mode: bool,
     #[serde(default = "default_video_short_max_seconds")]
     pub video_short_max_seconds: u64,
     #[serde(default = "default_video_medium_max_seconds")]
@@ -939,8 +978,16 @@ impl SwipeActionKind {
         }
     }
 
-    pub fn from_label(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.label() == label)
+    /// Compact text for the closed selector; the full label remains in the
+    /// menu where it has room to explain the action.
+    pub fn trigger_label(self) -> &'static str {
+        match self {
+            Self::AddToPlaylist => "Playlist",
+            Self::AddToQueue => "Queue",
+            Self::PlayNext => "Play next",
+            Self::Share => "Share",
+            Self::MarkWatched => "Watched",
+        }
     }
 }
 
@@ -994,6 +1041,7 @@ impl Default for AppSettings {
             autoplay: true,
             shorts_autoplay: true,
             auto_landscape_fullscreen: true,
+            theater_mode: false,
             video_short_max_seconds: default_video_short_max_seconds(),
             video_medium_max_seconds: default_video_medium_max_seconds(),
             shorts_short_max_seconds: default_shorts_short_max_seconds(),
@@ -1744,11 +1792,12 @@ impl SponsorAction {
         }
     }
 
-    pub fn from_label(label: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|action| action.label() == label)
-            .unwrap_or_default()
+    pub fn trigger_label(self) -> &'static str {
+        match self {
+            Self::Skip => "Skip",
+            Self::Show => "Show",
+            Self::Off => "Off",
+        }
     }
 }
 
@@ -2090,9 +2139,6 @@ mod tests {
     #[test]
     fn a_default_view_hides_nothing() {
         assert!(!PlaylistView::default().is_filtered());
-        for kind in PlaylistKind::ALL {
-            assert_eq!(PlaylistKind::from_index(kind.index()), kind, "{kind:?}");
-        }
     }
 
     #[test]

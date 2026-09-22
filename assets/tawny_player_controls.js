@@ -2,7 +2,8 @@
   "use strict";
 
   const controllers = new WeakMap();
-  const pendingMetadata = new WeakMap();
+  /// The last metadata given for a media element, applied again on re-attach.
+  const lastMetadata = new WeakMap();
   const speedSteps = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
   const quickSpeedSteps = [1, 1.25, 1.5, 2];
 
@@ -85,7 +86,10 @@
     const signal = abort.signal;
     const progress = controls.querySelector("[data-player-progress]");
     const sponsorNotice = controls.querySelector("[data-player-sponsor-notice]");
+    // On the stage rather than in the control bar - see the markup.
+    const sponsorSkip = root.querySelector("[data-player-sponsor-skip]");
     let sponsorNoticeTimer = null;
+    let sponsorSkipOffer = null;
     const chapterLabel = controls.querySelector("[data-player-chapter-label]");
     const seekPreview = controls.querySelector("[data-player-seek-preview]");
     const previewImage = controls.querySelector("[data-player-preview-image]");
@@ -325,7 +329,12 @@
       const spans = [
         [0, 100, "rgba(255, 255, 255, 0.25)"],
         [0, buffered, "rgba(255, 255, 255, 0.5)"],
-        [0, played, "var(--color-focused)"],
+        // A defined token: an unknown custom property makes the whole
+        // background invalid at computed-value time, and the browser then
+        // paints no track at all rather than falling back - which is why the
+        // chapters and segments vanished the moment the playhead left zero,
+        // where a played span of no width keeps this stop out of the gradient.
+        [0, played, "var(--g3-color-accent)"],
       ];
 
       for (const segment of sponsorSegments) {
@@ -400,7 +409,44 @@
      * Only `skip` segments move the playhead, and only once each: a viewer who
      * seeks back into one is doing it on purpose.
      */
+    /**
+     * Offer to skip the segment the playhead is inside, for segments set to
+     * "show" rather than "skip".
+     *
+     * A viewer who asked to see a segment marked on the timeline still wants a
+     * way past it; the alternative is scrubbing by eye. The offer is withdrawn
+     * as soon as the playhead leaves the segment, and a segment skipped or
+     * declined does not ask again.
+     */
+    function offerSponsorSkip(position) {
+      if (!sponsorSkip) return;
+      const offer =
+        scrubbing || !sponsorSegments.length
+          ? null
+          : sponsorSegments.find(
+              (segment) =>
+                segment.action === "show" &&
+                !sponsorHandled.has(segment.uuid) &&
+                position >= Number(segment.start_seconds) &&
+                position < Number(segment.end_seconds),
+            ) || null;
+      if ((offer?.uuid || null) === (sponsorSkipOffer?.uuid || null)) return;
+      sponsorSkipOffer = offer;
+      sponsorSkip.hidden = !offer;
+      // "Skip" alone on the button. A segment set to "show" is as often an
+      // intro, an endcard or a recap as it is a sponsor, and naming the
+      // category on the button was wrong more often than it was right. The
+      // category still goes to a screen reader, which has room for it.
+      if (offer) {
+        sponsorSkip.setAttribute(
+          "aria-label",
+          offer.label ? `Skip ${offer.label}` : "Skip this section",
+        );
+      }
+    }
+
     function applySponsorSegments() {
+      offerSponsorSkip(currentPosition());
       if (!sponsorSegments.length || scrubbing) return;
       const position = currentPosition();
       for (const segment of sponsorSegments) {
@@ -838,12 +884,17 @@
     let swallowNextClick = false;
     let surfaceClickTimer = null;
     let surfaceClickCommitted = false;
+    let tapOpensControls = false;
     let surfacePressSequence = null;
     let lastPointerTapAt = 0;
     let lastClickSequenceActionAt = 0;
     const SWIPE_DISTANCE = 55;
     const DOUBLE_PRESS_MS = 500;
     const TAP_SLOP = 14;
+
+    // A pointer that can hover has already raised the bar by the time it is
+    // pressed; one that cannot has to tap for it.
+    const canHover = () => matchMedia("(hover: hover) and (pointer: fine)").matches;
 
     const surfaceZoneAt = (clientX) => {
       const bounds = video.getBoundingClientRect();
@@ -891,6 +942,24 @@
       root.classList.remove("player-swiping");
     };
 
+    // Capture, so this runs before any control's own handler: by the time the
+    // click is dispatched the bar has come up, and the browser hit-tests
+    // again, so a tap on the middle of the video arrives at the play button
+    // that has just appeared there. What matters is whether the bar was up
+    // when the finger went down, which is what this was told.
+    listen(
+      root,
+      "click",
+      (event) => {
+        if (!tapOpensControls) return;
+        tapOpensControls = false;
+        event.preventDefault();
+        event.stopPropagation();
+        showControls(false);
+      },
+      { capture: true },
+    );
+
     listen(root, "pointerdown", (event) => {
       swallowNextClick = false;
       // Capture retargets the later click to `root`. Every interactive piece
@@ -908,6 +977,14 @@
         at: Date.now(),
         committed: event.pointerType === "mouse",
       };
+      // A finger has no hover, so a tap is the only way to reach the controls
+      // - and taking that tap as play/pause stopped the video every time
+      // someone went looking for the seek bar. The bar answers the first tap,
+      // the video answers the next. Read here rather than at the click,
+      // because the press itself raises the bar on the way through.
+      tapOpensControls =
+        (event.pointerType !== "mouse" || !canHover()) &&
+        !controls.classList.contains("controls-visible");
       if (gestureStart.committed) {
         // A mouse drag never competes with scrolling, so capture immediately;
         // a release outside the player still has to report back here.
@@ -981,7 +1058,15 @@
       lastClickSequenceActionAt = now;
       handleSurfaceClickSequenceAction(event.clientX, 2);
     });
-    listen(root, "pointermove", () => showControls(false));
+    listen(root, "pointermove", (event) => {
+      // Hovering is a mouse idea. A finger never holds perfectly still, so a
+      // touch press sends one of these too - and raising the bar mid-press
+      // put a control under the finger that was not there when it went down.
+      // The tap then landed on whichever button had appeared, which is how
+      // reaching for the controls paused the video.
+      if (event.pointerType !== "mouse" || !canHover()) return;
+      showControls(false);
+    });
     listen(root, "pointerleave", () => {
       timelineHovering = false;
       hideScrubPreview();
@@ -1056,6 +1141,25 @@
       beginPipTransition();
       recoverIntendedPlayback(0);
     });
+    if (sponsorSkip) {
+      // The stage toggles playback on a pointer press, and a press that lands
+      // on this button is not a press on the video.
+      for (const name of ["pointerdown", "pointerup", "mousedown", "mouseup"]) {
+        listen(sponsorSkip, name, (event) => event.stopPropagation());
+      }
+      listen(sponsorSkip, "click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const offer = sponsorSkipOffer;
+        if (!offer) return;
+        sponsorHandled.add(offer.uuid);
+        const end = Number(offer.end_seconds);
+        // Never past the end, for the same reason an automatic skip is not.
+        const target = Math.min(end, (video.duration || end) - 0.05);
+        if (target > currentPosition()) video.currentTime = target;
+        offerSponsorSkip(currentPosition());
+      });
+    }
     listen(video, "durationchange", updateTimeline);
     listen(video, "durationchange", renderTimeline);
     listen(window, "resize", renderTimeline);
@@ -1117,11 +1221,13 @@
       },
     };
     controllers.set(video, controller);
-    const pending = pendingMetadata.get(video);
-    if (pending) {
-      pendingMetadata.delete(video);
-      controller.setMetadata(pending);
-    }
+    // The metadata is kept rather than consumed. A controller is rebuilt
+    // whenever this element is attached again - a retried stream, a quality
+    // change - and a fresh one starts with no chapters and no segments, so
+    // the timeline lost its divisions and its colours until something
+    // upstream happened to send them a second time.
+    const known = lastMetadata.get(video);
+    if (known) controller.setMetadata(known);
   }
 
   function detach(video) {
@@ -1131,10 +1237,40 @@
     controllers.delete(video);
   }
 
+  /**
+   * Fold an answer about the current video into what is already known.
+   *
+   * For one video this only ever adds. The page describes a video from more
+   * than one source - the copy cached in the library, the details request,
+   * the SponsorBlock lookup - and they answer at different times, more than
+   * once, and sometimes not at all. An answer carrying nothing is not news
+   * that the video has no chapters; it is a source that has not spoken yet,
+   * or could not reach anyone. Letting one of those through is what kept
+   * taking the timeline's divisions and colours away part way through a
+   * video, whichever source happened to be the quiet one that time.
+   *
+   * Changing video replaces everything, including with nothing. So does
+   * turning SponsorBlock off, which is an answer rather than a silence.
+   */
+  function mergeMetadata(known, incoming) {
+    const next = incoming || {};
+    if (!known || !next.videoId || next.videoId !== known.videoId) return next;
+    const spoken = (answer, heard) => (answer && answer.length ? answer : heard || []);
+    return {
+      ...next,
+      captions: spoken(next.captions, known.captions),
+      chapters: spoken(next.chapters, known.chapters),
+      previewFrames: next.previewFrames || known.previewFrames || null,
+      sponsorSegments:
+        next.sponsorEnabled === false ? [] : spoken(next.sponsorSegments, known.sponsorSegments),
+    };
+  }
+
   function setMetadata(video, metadata) {
+    const merged = mergeMetadata(lastMetadata.get(video), metadata);
+    lastMetadata.set(video, merged);
     const controller = controllers.get(video);
-    if (controller) controller.setMetadata(metadata);
-    else pendingMetadata.set(video, metadata);
+    if (controller) controller.setMetadata(merged);
   }
 
   window.TawnyPlayerControls = { attach, detach, setMetadata };
