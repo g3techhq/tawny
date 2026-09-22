@@ -106,11 +106,10 @@ data: copy it across first, or the containers come up empty. The init container
 chowns whichever target it is given, so a fresh host directory needs no manual
 permission setup.
 
-These two are the only knobs for placing data under Docker. `TAWNY_DATA_DIR` is
-a different setting despite the similar name: it is the path the server writes
-to *inside* its own process, and the Compose stack pins it to `/data`, so
-setting it in `.env` changes nothing for a container. It applies only when
-running the server directly on the host.
+These two are the only knobs for placing data under Docker. The container path
+they are mounted at is fixed by the image, which sets `TAWNY_DATA_DIR=/data`;
+that is the server's own setting for where it writes, and it is not worth
+overriding for a container.
 
 Versions are pinned through `.env` defaults (`SURREALDB_VERSION`,
 `YTDLP_VERSION`, and `POT_PROVIDER_VERSION`). Update one pin at a time, rebuild,
