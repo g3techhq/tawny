@@ -43,6 +43,13 @@ DEFINE TABLE IF NOT EXISTS app_user TYPE NORMAL SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD IF NOT EXISTS display_name ON app_user TYPE string;
 DEFINE FIELD IF NOT EXISTS created_at ON app_user TYPE datetime DEFAULT time::now();
 
+-- axum_session's store (src/auth/session_store.rs). It must exist up front:
+-- SurrealDB 3.x errors when selecting from an undefined table, and session ID
+-- generation selects before the first upsert could ever create it.
+DEFINE TABLE IF NOT EXISTS sessions TYPE NORMAL SCHEMALESS PERMISSIONS NONE;
+
+DEFINE INDEX IF NOT EXISTS sessions_sessionid_idx ON sessions FIELDS sessionid UNIQUE;
+
 DEFINE TABLE IF NOT EXISTS subscription TYPE RELATION IN app_user OUT channel SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD IF NOT EXISTS created_at ON subscription TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS subscription_user_channel_idx ON subscription FIELDS in, out UNIQUE;
