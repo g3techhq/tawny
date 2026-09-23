@@ -2,9 +2,10 @@ name: tawny
 
 # Pull-only deployment, for Portainer or any `docker compose up -d` host.
 #
-# Mirrors g3-ui/deploy/compose.yaml: `latest` images, `pull_policy: always` so a
-# stack redeploy actually picks up a new build, and container names so the
-# Portainer UI is readable.
+# `latest` images, `pull_policy: always` so a stack redeploy actually picks up
+# a new build, and container names so the Portainer UI is readable. Sits beside
+# compose.yaml rather than in a deploy/ directory, matching the other apps in
+# this stack; g3-ui still keeps its equivalent under deploy/.
 #
 # The difference from compose.yaml is that nothing is built here: both images
 # come from GHCR, published by .github/workflows/publish-images.yml. A host
@@ -21,7 +22,7 @@ services:
     user: "0:0"
     command: ["chown", "-R", "65532:65532", "/data"]
     volumes:
-      - surrealdb-data:/data
+      - ${TAWNY_SURREALDB_VOLUME:-surrealdb-data}:/data
     restart: "no"
 
   surrealdb:
@@ -41,7 +42,7 @@ services:
       - surrealkv:///data/surrealkv
     working_dir: /data
     volumes:
-      - surrealdb-data:/data
+      - ${TAWNY_SURREALDB_VOLUME:-surrealdb-data}:/data
     depends_on:
       surrealdb-init:
         condition: service_completed_successfully
@@ -102,20 +103,22 @@ services:
       SURREALDB_NAME: ${SURREALDB_NAME:-main}
       SURREALDB_USER: ${SURREALDB_USER:-root}
       SURREALDB_PASSWORD: ${SURREALDB_PASSWORD:?set SURREALDB_PASSWORD to something private}
-      TAWNY_DATA_DIR: /data
       TAWNY_YTDLP_SERVICE_URL: http://extractor:8080
       # The origin browsers will actually reach this instance on. It is what
       # proxy URLs and WebSub lease callbacks are built from, so a wrong value
       # shows up as broken playback rather than as a configuration error.
       TAWNY_PUBLIC_URL: ${TAWNY_PUBLIC_URL:?set TAWNY_PUBLIC_URL to the origin this is served on}
       TAWNY_WEBSUB_CALLBACK_URL: ${TAWNY_WEBSUB_CALLBACK_URL:-}
-      # Optional. Left empty, Tawny generates one and keeps it under
-      # TAWNY_DATA_DIR, which is fine as long as that volume survives.
+      # Optional. Left empty, Tawny generates one and keeps it on the app
+      # volume. That is fine only as long as that volume survives: replace the
+      # volume and every existing YouTube subscription fails its signature
+      # check until it renews. Set it explicitly if the data may ever move.
       TAWNY_WEBSUB_SECRET: ${TAWNY_WEBSUB_SECRET:-}
     ports:
       - "${TAWNY_PORT:-8080}:8080"
     volumes:
-      - tawny-data:/data
+      - ${TAWNY_APP_VOLUME:-tawny-data}:/data
+    networks: [default, proxy]
     depends_on:
       surrealdb:
         condition: service_healthy
@@ -132,3 +135,21 @@ services:
 volumes:
   surrealdb-data:
   tawny-data:
+
+# Only Tawny joins `proxy`, because only Tawny is worth reaching from outside
+# the stack. By default it is an ordinary network this stack owns, so a plain
+# `up` needs no setup and no knowledge of anyone's proxy. Point it at an
+# existing network to put Tawny on one, which lets a reverse proxy in that
+# network reach it as `tawny:8080` and lets you drop the published port:
+#
+#   TAWNY_PROXY_NETWORK=npm_default
+#   TAWNY_PROXY_NETWORK_EXTERNAL=true
+#
+# `external` says the network already exists and this stack must not create or
+# remove it. Both variables move together; naming an existing network without
+# setting `external` makes Compose try to create it and fail.
+networks:
+  default:
+  proxy:
+    name: ${TAWNY_PROXY_NETWORK:-tawny-proxy}
+    external: ${TAWNY_PROXY_NETWORK_EXTERNAL:-false}

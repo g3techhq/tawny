@@ -48,9 +48,13 @@ repository secrets only when the unsigned workflows are consistently green.
 1. In Portainer, open the target environment and select **Stacks** → **Add stack**.
 2. Give the stack a name such as `tawny`.
 3. Choose **Web editor** and paste the contents of
-   [`compose.yaml`](compose.yaml), or choose **Git repository** and point
-   Portainer at this repository with `deploy/compose.yaml` as the Compose path.
+   [`compose.prod.yml`](../compose.prod.yml), or choose **Git repository** and
+   point Portainer at this repository with `compose.prod.yml` as the Compose
+   path.
 4. Set the stack environment variables below.
+   [`.env.prod.template`](../.env.prod.template) lists every one the stack
+   reads, with the same comments; copy it to `.env.prod` on a plain Docker host
+   instead of pasting into Portainer.
 5. Deploy the stack.
 
 ### Environment
@@ -70,8 +74,12 @@ Optional:
 | `TAWNY_IMAGE_TAG` | `latest` | Pin to `sha-<commit>` to hold a known-good build. |
 | `TAWNY_PORT` | `8080` | Host port. Only Tawny publishes one. |
 | `TAWNY_WEBSUB_CALLBACK_URL` | derived | Set when the public URL is not where YouTube should call back. |
-| `TAWNY_WEBSUB_SECRET` | generated | Generated and kept under the data volume if unset, which is fine as long as that volume survives. |
+| `TAWNY_WEBSUB_SECRET` | generated | Generated and kept on the app volume if unset. Fine only while that volume survives: replace it and every existing subscription fails its signature check until it renews. |
 | `YTDLP_CONCURRENCY` | `2` | Simultaneous extractions. |
+| `TAWNY_SURREALDB_VOLUME` | `surrealdb-data` | Where the database volume lives. A bare name is a Docker named volume; an absolute path is a bind mount. |
+| `TAWNY_APP_VOLUME` | `tawny-data` | The same, for the app's own data. |
+| `TAWNY_PROXY_NETWORK` | `tawny-proxy` | An existing Docker network to put Tawny on, so a reverse proxy in it reaches Tawny as `tawny:8080`. |
+| `TAWNY_PROXY_NETWORK_EXTERNAL` | `false` | Set `true` alongside the above. Naming an existing network without this makes Compose try to create it and fail. |
 
 Unlike the development `compose.yaml`, only Tawny publishes a port. SurrealDB,
 the PO-token provider and the extractor reach each other over the stack's network;
@@ -88,8 +96,8 @@ updater to trigger a redeploy after GitHub publishes.
 From a shell instead:
 
 ```sh
-docker compose -f deploy/compose.yaml pull
-docker compose -f deploy/compose.yaml up -d
+docker compose -f compose.prod.yml pull
+docker compose -f compose.prod.yml up -d
 ```
 
 ## State
@@ -102,8 +110,46 @@ Two named volumes hold everything worth keeping:
 Back up `surrealdb-data`. Losing `tawny-data` costs a re-warmed cache and a new
 WebSub secret, which resubscribes on the next renewal.
 
+`TAWNY_SURREALDB_VOLUME` and `TAWNY_APP_VOLUME` place each one. A bare name is
+a Docker named volume, which Docker keeps under `/var/lib/docker/volumes`; an
+absolute path makes it a bind mount instead, which is what you want when the
+stack directory is managed for you, as it is under Portainer, or when the data
+belongs on a specific disk. Switching an existing stack between the two does
+not move anything: copy the contents across first, or the containers come up
+empty.
+
 ## Reverse proxy
 
-Put TLS in front of the published port. `TAWNY_PUBLIC_URL` must be the public
-HTTPS origin: WebSub stays disabled on a loopback URL, and playback proxy URLs
-are built from it.
+Put TLS in front of Tawny. `TAWNY_PUBLIC_URL` must be the public HTTPS origin:
+WebSub stays disabled on a loopback URL, and playback proxy URLs are built from
+it. Tawny speaks plain HTTP and needs no WebSocket upgrade; the only `ws://` in
+the stack is SurrealDB, which never leaves it.
+
+There are two ways to connect a proxy, and the stack does not care which:
+
+**Over the published port.** Leave the networking alone and point the proxy at
+the Docker host on `TAWNY_PORT`. Nothing to configure here, and it works with a
+proxy that is not in Docker at all.
+
+**Over a shared network.** Put Tawny on the proxy's own network and it becomes
+reachable as `tawny:8080`, with no host port to expose:
+
+```dotenv
+TAWNY_PROXY_NETWORK=npm_default
+TAWNY_PROXY_NETWORK_EXTERNAL=true
+```
+
+Both variables move together, and the network must already exist. Left unset,
+the stack owns an ordinary network of its own and needs no knowledge of anyone's
+proxy, so this costs a consumer nothing.
+
+Attaching the container by hand after the stack is up works for one container
+lifetime only. A recreated container gets the networks in its Compose
+configuration and nothing else, and `pull_policy: always` recreates on every
+redeploy, so it would come back off the proxy network each time.
+
+If the WebSub callback is on a second hostname, it must reach
+`/api/v1/websub/youtube`, which answers **GET** for the hub's subscription
+verification and **POST** for notifications. Behind a CDN that filters
+non-browser traffic, exempt that path or the subscription silently never
+verifies.
