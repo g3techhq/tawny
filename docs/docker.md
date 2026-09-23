@@ -76,9 +76,9 @@ callback variable is omitted, Tawny derives it from a non-loopback public URL.
 The compose file above builds from source, which a home lab has no reason to do.
 `.github/workflows/publish-images.yml` builds the two images a deployment needs
 and pushes them to GHCR, following the same shape as g3-ui's playground image
-workflow. `deploy/compose.yaml` pulls them and builds nothing.
+workflow. `compose.prod.yml` pulls them and builds nothing.
 
-See [deploy/README.md](../deploy/README.md) for the Portainer stack, the
+See [docs/deploy.md](deploy.md) for the Portainer stack, the
 environment variables it requires, and the one-time package visibility step.
 
 ## State, updates, and backups

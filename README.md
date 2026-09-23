@@ -48,6 +48,8 @@ docker compose --profile production up -d --build
 
 That command builds and runs Tawny plus the same three dependencies. The production image builds the Dioxus full-stack web bundle, includes the project-local Shaka asset, stores app state in `tawny-data`, and talks to the other containers over the Compose network. See [docs/docker.md](docs/docker.md) for configuration, health checks, updates, and volume backups.
 
+To deploy without building, use [`compose.prod.yml`](compose.prod.yml), which pulls both images from GHCR instead. Copy [`.env.prod.template`](.env.prod.template) to `.env.prod`, or paste the same variables into a Portainer stack. See [docs/deploy.md](docs/deploy.md).
+
 The pinned Shaka Player package supplies the cross-platform DASH/HLS Media Source transport. Dioxus packages its compiled browser runtime as a local app asset; playback never depends on a third-party CDN.
 
 Tawny's server connects to the SurrealDB endpoint in `SURREALDB_HOST`. The checked-in Compose stack supplies a persistent SurrealDB container for development and production, while server tests use an in-memory database. `TAWNY_DATA_DIR` controls Tawny's extractor cache and other app-owned server data. See [database/README.md](database/README.md) for scoped local SurrealKit operator commands.
