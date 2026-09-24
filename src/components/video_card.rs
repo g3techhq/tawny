@@ -10,8 +10,8 @@ use dioxus_icons::lucide::{
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Avatar, AvatarSize, Badge, Button, ButtonFill, ButtonSize, Card, CardVariant, Color,
-    EmptyState, Grid, GridColumns, Img, Progress, Space, SwipeAction, SwipeBehavior, SwipeItem,
-    SwipeSide, SwipeState,
+    EmptyState, Grid, GridColumns, Img, Progress, Skeleton, SkeletonShape, Space, SwipeAction,
+    SwipeBehavior, SwipeItem, SwipeSide, SwipeState,
 };
 
 /// The icon for a swipe action. A swipe can be set to any of five things, so
@@ -53,6 +53,26 @@ pub fn VideoGrid(
                 gap: Space::Lg,
                 for video in videos {
                     VideoCard { key: "{video.id}", video, playlist_id: playlist_id.clone(), short: shorts }
+                }
+            }
+        }
+    }
+}
+
+/// Where a [`VideoGrid`] will be, laid out the same way, while the page works
+/// out what goes in it.
+#[component]
+pub fn VideoGridSkeleton(count: usize) -> Element {
+    rsx! {
+        Grid {
+            columns: GridColumns::Count(1),
+            wide_columns: GridColumns::Count(4),
+            gap: Space::Lg,
+            for index in 0..count {
+                div { key: "{index}", class: "flex flex-col gap-2",
+                    Skeleton { shape: SkeletonShape::Block, class: "aspect-video rounded-lg" }
+                    Skeleton { width: "85%" }
+                    Skeleton { width: "50%" }
                 }
             }
         }

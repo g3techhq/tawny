@@ -1,7 +1,7 @@
 use crate::{
     api::{search_catalog, search_catalog_page},
     app::Route,
-    models::{ExploreFilter, SearchResults},
+    models::{Channel, ExploreFilter, LibrarySnapshot, SearchResults, Video},
     state::AppState,
 };
 use dioxus::prelude::*;
@@ -12,7 +12,7 @@ use g3_ui::{
 };
 use std::collections::{HashMap, HashSet};
 
-use super::{PageHeader, VideoGrid};
+use super::{PageHeader, VideoGrid, VideoGridSkeleton, use_after_first_paint};
 
 /// How many recent videos stand in for a query on an empty search page.
 const SUGGESTION_COUNT: usize = 24;
@@ -42,120 +42,34 @@ pub fn Explore() -> Element {
             visible_count.set(RESULT_PAGE_SIZE);
         }));
     }
-    // Read through a borrow and copy out only what survives the query. A
-    // real library holds tens of thousands of videos, and cloning the whole
-    // snapshot on the way to a page of matches ran that copy on every
-    // keystroke.
-    let (mut videos, mut channels) = app_state.with_library(|library| {
-        if !needle.is_empty() {
-            let videos = library
-                .videos
-                .iter()
-                .filter(|video| {
-                    video.title.to_lowercase().contains(&needle)
-                        || video.channel_name.to_lowercase().contains(&needle)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let channels = library
-                .channels
-                .iter()
-                .filter(|channel| {
-                    channel.name.to_lowercase().contains(&needle)
-                        || channel.handle.to_lowercase().contains(&needle)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            return (videos, channels);
-        }
-
-        let subscribed_ids = library
-            .channels
-            .iter()
-            .filter(|channel| channel.subscribed)
-            .map(|channel| channel.id.as_str())
-            .collect::<HashSet<_>>();
-        let mut videos = library
-            .videos
-            .iter()
-            .filter(|video| subscribed_ids.contains(video.channel_id.as_str()) && !video.watched)
-            .cloned()
-            .collect::<Vec<_>>();
-        videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
-
-        // Keep the page fresh, then mix in missed uploads from channels the
-        // viewer actually returns to. History only records distinct videos,
-        // so this is affinity rather than a replay-count feedback loop.
-        let video_channels = library
-            .videos
-            .iter()
-            .map(|video| (video.id.as_str(), video.channel_id.as_str()))
-            .collect::<HashMap<_, _>>();
-        let mut affinity = HashMap::<&str, usize>::new();
-        for entry in &library.history {
-            if let Some(channel_id) = video_channels.get(entry.video_id.as_str()) {
-                *affinity.entry(channel_id).or_default() += 1;
-            }
-        }
-        let recent = videos
-            .iter()
-            .take(SUGGESTION_COUNT)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut familiar = videos;
-        familiar.sort_by_cached_key(|video| {
-            (
-                std::cmp::Reverse(*affinity.get(video.channel_id.as_str()).unwrap_or(&0)),
-                std::cmp::Reverse(video.published_epoch()),
-            )
-        });
-        let mut ranked = Vec::with_capacity(SUGGESTION_COUNT);
-        let mut seen = HashSet::new();
-        for index in 0..SUGGESTION_COUNT {
-            let candidate = if index % 3 == 2 {
-                familiar.get(index / 3)
-            } else {
-                recent.get(index - index / 3)
-            };
-            if let Some(video) = candidate
-                && seen.insert(video.id.clone())
-            {
-                ranked.push(video.clone());
-            }
-        }
-        for video in recent.into_iter().chain(familiar) {
-            if ranked.len() >= SUGGESTION_COUNT {
-                break;
-            }
-            if seen.insert(video.id.clone()) {
-                ranked.push(video);
-            }
-        }
-        (ranked, Vec::new())
-    });
-
-    if let Some(remote) = results()
-        && remote.query.trim().eq_ignore_ascii_case(search().trim())
-    {
-        videos = remote.videos;
-        channels = remote.channels;
-    }
-    match filter {
-        ExploreFilter::Videos => channels.clear(),
-        ExploreFilter::Channels => videos.clear(),
-        ExploreFilter::All => {}
-    }
-    // Counted before paging, so the line above the results reports what the
-    // query found rather than how much of it is on screen.
-    let result_count = videos.len() + channels.len();
+    // Ranking the library is the slow part of this page, so the search bar
+    // and placeholders go up first.
+    let painted = use_after_first_paint();
     let page = visible_count();
-    let remaining = videos.len().saturating_sub(page) + channels.len().saturating_sub(page);
-    videos.truncate(page);
-    channels.truncate(page);
+    let remote =
+        results().filter(|remote| remote.query.trim().eq_ignore_ascii_case(search().trim()));
+    let loading = remote.is_none() && !painted();
+    // Read through a borrow, rank references, and copy out only the page on
+    // screen. A real library holds tens of thousands of videos, and cloning
+    // every match on the way to a page of them ran that copy on every
+    // keystroke.
+    let (videos, channels, result_count, remaining) = if let Some(remote) = &remote {
+        paged(
+            remote.videos.iter().collect(),
+            remote.channels.iter().collect(),
+            filter,
+            page,
+        )
+    } else if loading {
+        (Vec::new(), Vec::new(), 0, 0)
+    } else {
+        app_state.with_library(|library| {
+            let (videos, channels) = local_matches(library, &needle);
+            paged(videos, channels, filter, page)
+        })
+    };
     let search_value = search();
-    let next_page = results()
-        .filter(|results| results.query.trim().eq_ignore_ascii_case(search().trim()))
-        .and_then(|results| results.next_page);
+    let next_page = remote.and_then(|results| results.next_page);
     // Enter runs the remote search; typing filters the cache as it goes.
     let run_search = move |query: String| {
         let query = query.trim().to_string();
@@ -266,7 +180,11 @@ pub fn Explore() -> Element {
                         }
                     }
                 }
-                VideoGrid { videos, empty_message: "No matches yet. Check the source connection or try another search.".to_string() }
+                if loading {
+                    VideoGridSkeleton { count: 8 }
+                } else {
+                    VideoGrid { videos, empty_message: "No matches yet. Check the source connection or try another search.".to_string() }
+                }
                 InfiniteScroll {
                     loading: false,
                     complete: remaining == 0,
@@ -290,4 +208,119 @@ pub fn Explore() -> Element {
             }
         }
     }
+}
+
+/// What the cache has for `needle`: matching videos and channels, or with no
+/// query, suggestions to stand in for one.
+fn local_matches<'a>(
+    library: &'a LibrarySnapshot,
+    needle: &str,
+) -> (Vec<&'a Video>, Vec<&'a Channel>) {
+    if !needle.is_empty() {
+        let videos = library
+            .videos
+            .iter()
+            .filter(|video| {
+                video.title.to_lowercase().contains(needle)
+                    || video.channel_name.to_lowercase().contains(needle)
+            })
+            .collect::<Vec<_>>();
+        let channels = library
+            .channels
+            .iter()
+            .filter(|channel| {
+                channel.name.to_lowercase().contains(needle)
+                    || channel.handle.to_lowercase().contains(needle)
+            })
+            .collect::<Vec<_>>();
+        return (videos, channels);
+    }
+
+    let subscribed_ids = library
+        .channels
+        .iter()
+        .filter(|channel| channel.subscribed)
+        .map(|channel| channel.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut videos = library
+        .videos
+        .iter()
+        .filter(|video| subscribed_ids.contains(video.channel_id.as_str()) && !video.watched)
+        .collect::<Vec<_>>();
+    videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
+
+    // Keep the page fresh, then mix in missed uploads from channels the
+    // viewer actually returns to. History only records distinct videos,
+    // so this is affinity rather than a replay-count feedback loop.
+    let video_channels = library
+        .videos
+        .iter()
+        .map(|video| (video.id.as_str(), video.channel_id.as_str()))
+        .collect::<HashMap<_, _>>();
+    let mut affinity = HashMap::<&str, usize>::new();
+    for entry in &library.history {
+        if let Some(channel_id) = video_channels.get(entry.video_id.as_str()) {
+            *affinity.entry(channel_id).or_default() += 1;
+        }
+    }
+    let recent = videos
+        .iter()
+        .take(SUGGESTION_COUNT)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut familiar = videos;
+    familiar.sort_by_cached_key(|video| {
+        (
+            std::cmp::Reverse(*affinity.get(video.channel_id.as_str()).unwrap_or(&0)),
+            std::cmp::Reverse(video.published_epoch()),
+        )
+    });
+    let mut ranked = Vec::with_capacity(SUGGESTION_COUNT);
+    let mut seen = HashSet::new();
+    for index in 0..SUGGESTION_COUNT {
+        let candidate = if index % 3 == 2 {
+            familiar.get(index / 3)
+        } else {
+            recent.get(index - index / 3)
+        };
+        if let Some(video) = candidate
+            && seen.insert(video.id.as_str())
+        {
+            ranked.push(*video);
+        }
+    }
+    for video in recent.into_iter().chain(familiar) {
+        if ranked.len() >= SUGGESTION_COUNT {
+            break;
+        }
+        if seen.insert(video.id.as_str()) {
+            ranked.push(video);
+        }
+    }
+    (ranked, Vec::new())
+}
+
+/// The first `page` of each list under `filter`, copied out, with the total
+/// the filter left and how many of those are still off the page.
+fn paged(
+    mut videos: Vec<&Video>,
+    mut channels: Vec<&Channel>,
+    filter: ExploreFilter,
+    page: usize,
+) -> (Vec<Video>, Vec<Channel>, usize, usize) {
+    match filter {
+        ExploreFilter::Videos => channels.clear(),
+        ExploreFilter::Channels => videos.clear(),
+        ExploreFilter::All => {}
+    }
+    // Counted before paging, so the line above the results reports what the
+    // query found rather than how much of it is on screen.
+    let result_count = videos.len() + channels.len();
+    let remaining = videos.len().saturating_sub(page) + channels.len().saturating_sub(page);
+    (
+        videos.into_iter().take(page).cloned().collect(),
+        channels.into_iter().take(page).cloned().collect(),
+        result_count,
+        remaining,
+    )
 }

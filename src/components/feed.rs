@@ -8,9 +8,11 @@ use g3_ui::{
     Chip, Color, Content, Divider, DividerOrientation, InfiniteScroll, SegmentButton, SegmentGroup,
     Shelf, Space, Stack, Text, TextTone,
 };
+use std::collections::{HashMap, HashSet};
 
 use super::{
-    DURATION_LOOKAHEAD, PageHeader, VideoGrid, duration_candidates, use_duration_hydration,
+    DURATION_LOOKAHEAD, PageHeader, VideoGrid, VideoGridSkeleton, duration_candidates,
+    use_after_first_paint, use_duration_hydration,
 };
 
 /// How many videos the feed renders before asking for more.
@@ -40,68 +42,78 @@ pub fn Feed() -> Element {
     let mut selected_duration = use_signal(|| None::<DurationFilter>);
     let mut visible_count = use_signal(|| FEED_PAGE_SIZE);
     let filter = (app_state.feed_filter)();
-    // Read through a borrow and copy out only the videos that survive the
-    // subscription filter. Cloning the whole snapshot first meant every render
-    // copied the entire cache - tens of thousands of videos - to show a page of
-    // them, which is what stalled the swipe release animation.
-    let (groups, mut videos) = app_state.with_library(|library| {
-        // Each subscription carries its own Videos/Shorts/both preference, so
-        // the feed keeps a video only when its channel is subscribed *and* that
-        // channel still wants that kind of upload.
-        let subscribed_channels = library
-            .channels
-            .iter()
-            .filter(|channel| channel.subscribed)
-            .map(|channel| (channel.id.as_str(), channel.subscription_content))
-            .collect::<std::collections::HashMap<_, _>>();
-        let videos = library
-            .videos
-            .iter()
-            .filter(|video| {
-                subscribed_channels
-                    .get(video.channel_id.as_str())
-                    .is_some_and(|content| content.accepts(video.is_short))
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        (library.subscription_groups.clone(), videos)
-    });
-    videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
+    // Sorting and filtering the whole subscription history is the slow part
+    // of this page, so the header and placeholders go up first.
+    let painted = use_after_first_paint();
+    let groups = app_state.with_library(|library| library.subscription_groups.clone());
+    let settings = app_state.settings();
     let active_group = selected_group();
-    if active_group == "ungrouped" {
-        let grouped_ids = groups
-            .iter()
-            .flat_map(|group| group.channel_ids.iter())
-            .collect::<Vec<_>>();
-        videos.retain(|video| !grouped_ids.contains(&&video.channel_id));
-    } else if active_group != "all"
-        && let Some(group) = groups.iter().find(|group| group.id == active_group)
-    {
-        videos.retain(|video| group.channel_ids.contains(&video.channel_id));
-    }
-    videos.retain(|video| filter.accepts(video));
-    if app_state.settings().hide_watched {
-        videos.retain(|video| !video.watched);
-    }
+    let duration_filter = selected_duration();
+    let page = visible_count();
     // Asked for before the duration filter runs - see `duration_candidates`.
-    let duration_window = if selected_duration().is_some() {
-        visible_count().max(DURATION_LOOKAHEAD)
+    let duration_window = if duration_filter.is_some() {
+        page.max(DURATION_LOOKAHEAD)
     } else {
-        visible_count()
+        page
     };
-    use_duration_hydration(duration_candidates(&videos, duration_window));
-    let mut without_duration = 0usize;
-    if let Some(duration) = selected_duration() {
-        let settings = app_state.settings();
-        without_duration = videos
-            .iter()
-            .filter(|video| !video.is_live && video.duration_seconds == 0)
-            .count();
-        videos.retain(|video| duration.matches(video, &settings));
-    }
-    // Paged last, so the count reflects what the filters actually left.
-    let remaining = videos.len().saturating_sub(visible_count());
-    videos.truncate(visible_count());
+    // Read through a borrow, filter and sort references, and copy out only the
+    // page on screen. Cloning every match first meant each render copied tens
+    // of thousands of videos to show two dozen of them.
+    let (videos, remaining, without_duration, candidates) = if painted() {
+        app_state.with_library(|library| {
+            // Each subscription carries its own Videos/Shorts/both preference,
+            // so the feed keeps a video only when its channel is subscribed
+            // *and* that channel still wants that kind of upload.
+            let subscribed_channels = library
+                .channels
+                .iter()
+                .filter(|channel| channel.subscribed)
+                .map(|channel| (channel.id.as_str(), channel.subscription_content))
+                .collect::<HashMap<_, _>>();
+            let grouped_ids = library
+                .subscription_groups
+                .iter()
+                .flat_map(|group| group.channel_ids.iter().map(String::as_str))
+                .collect::<HashSet<_>>();
+            let group = library
+                .subscription_groups
+                .iter()
+                .find(|group| group.id == active_group);
+            let mut videos = library
+                .videos
+                .iter()
+                .filter(|video| {
+                    subscribed_channels
+                        .get(video.channel_id.as_str())
+                        .is_some_and(|content| content.accepts(video.is_short))
+                })
+                .filter(|video| match active_group.as_str() {
+                    "all" => true,
+                    "ungrouped" => !grouped_ids.contains(video.channel_id.as_str()),
+                    _ => group.is_none_or(|group| group.channel_ids.contains(&video.channel_id)),
+                })
+                .filter(|video| filter.accepts(video))
+                .filter(|video| !(settings.hide_watched && video.watched))
+                .collect::<Vec<_>>();
+            videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
+            let candidates = duration_candidates(videos.iter().copied(), duration_window);
+            let mut without_duration = 0usize;
+            if let Some(duration) = duration_filter {
+                without_duration = videos
+                    .iter()
+                    .filter(|video| !video.is_live && video.duration_seconds == 0)
+                    .count();
+                videos.retain(|video| duration.matches(video, &settings));
+            }
+            // Paged last, so the count reflects what the filters actually left.
+            let remaining = videos.len().saturating_sub(page);
+            let videos = videos.into_iter().take(page).cloned().collect::<Vec<_>>();
+            (videos, remaining, without_duration, candidates)
+        })
+    } else {
+        (Vec::new(), 0, 0, Vec::new())
+    };
+    use_duration_hydration(candidates);
 
     let refresh = move |_| {
         app_state.syncing.set(true);
@@ -198,15 +210,19 @@ pub fn Feed() -> Element {
                     }
                 }
 
-                VideoGrid {
-                    videos,
-                    empty_message: "Try another filter or refresh when you are back online.".to_string(),
-                }
+                if !painted() {
+                    VideoGridSkeleton { count: 8 }
+                } else {
+                    VideoGrid {
+                        videos,
+                        empty_message: "Try another filter or refresh when you are back online.".to_string(),
+                    }
 
-                InfiniteScroll {
-                    loading: false,
-                    complete: remaining == 0,
-                    on_load: load_next_page,
+                    InfiniteScroll {
+                        loading: false,
+                        complete: remaining == 0,
+                        on_load: load_next_page,
+                    }
                 }
             }
         }

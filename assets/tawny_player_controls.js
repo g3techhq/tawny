@@ -36,17 +36,14 @@
     return enterFullscreenFor(root);
   }
 
-  /// Go fullscreen and, when enabled, rotate horizontal video to landscape.
-  /// Orientation locking only exists on
-  /// mobile and rejects when unsupported, so failures are ignored.
+  /// Go fullscreen. Rotating to landscape is not decided here but by the
+  /// controller once the player *is* fullscreen - see `applyFullscreenOrientation`.
   ///
   /// iOS Safari never implemented fullscreen on ordinary elements, so the video
   /// element's own presentation mode is the fallback there. Without it the
   /// button did nothing at all on a handset.
   function enterFullscreenFor(root) {
     const media = root.querySelector("video");
-    const horizontal = media && media.videoWidth > media.videoHeight;
-    const autoLandscape = root.dataset.autoLandscape !== "false";
     const request =
       root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
     const started = request
@@ -54,23 +51,13 @@
           Promise.resolve(request.call(root)).catch(() => Promise.reject()),
         )
       : Promise.reject();
-    return started
-      .then(() => {
-        if (horizontal && autoLandscape) {
-          root.querySelector("[data-player-native-landscape]")?.click();
-          const orientation = screen.orientation;
-          if (orientation && typeof orientation.lock === "function") {
-            return orientation.lock("landscape").catch(() => {});
-          }
-        }
-      })
-      .catch(() => {
-        if (media && typeof media.webkitEnterFullscreen === "function") {
-          try {
-            media.webkitEnterFullscreen();
-          } catch (_) {}
-        }
-      });
+    return started.catch(() => {
+      if (media && typeof media.webkitEnterFullscreen === "function") {
+        try {
+          media.webkitEnterFullscreen();
+        } catch (_) {}
+      }
+    });
   }
 
   function attach(video) {
@@ -951,7 +938,10 @@
       root,
       "click",
       (event) => {
-        if (!tapOpensControls) return;
+        // The swipe-down reaches the minimize bridge with a scripted click.
+        // Taken as the tap that raises the bar, it was stopped here before the
+        // bridge heard it, so the controls flashed and the player stayed put.
+        if (!tapOpensControls || !event.isTrusted) return;
         tapOpensControls = false;
         event.preventDefault();
         event.stopPropagation();
@@ -1025,6 +1015,9 @@
         lastPointerTapAt = now;
         return;
       }
+      // Only a tap raises the bar. A drag produces no click to consume this,
+      // so left set it would swallow whatever the next real tap was for.
+      if (Math.abs(dx) > TAP_SLOP || Math.abs(dy) > TAP_SLOP) tapOpensControls = false;
       // Deliberate, mostly-vertical, and quick enough to be a flick.
       if (elapsed > 800 || Math.abs(dy) < SWIPE_DISTANCE || Math.abs(dy) <= Math.abs(dx)) {
         return;
@@ -1046,6 +1039,7 @@
     listen(root, "pointerup", endGesture);
     listen(root, "pointercancel", () => {
       gestureStart = null;
+      tapOpensControls = false;
       resetGestureVisuals();
     });
     // Native dblclick is an additional fallback. Ignore the synthesized event
@@ -1125,6 +1119,18 @@
         controls.querySelector("[data-player-autoplay-next]")?.click();
       }
     });
+    // The system media controls extrapolate position from the last report, so
+    // a seek or speed change has to be reported too. Uses the intent rather
+    // than `paused`, which Shaka flips briefly while buffering a seek.
+    const reportPlaybackState = () => {
+      const bridge = playbackIntent
+        ? "[data-player-native-playback-start]"
+        : "[data-player-native-playback-stop]";
+      root.querySelector(bridge)?.click();
+    };
+    listen(video, "seeked", reportPlaybackState);
+    listen(video, "ratechange", reportPlaybackState);
+    listen(video, "durationchange", reportPlaybackState);
     listen(window, "tawnynativepiprequest", beginPipTransition);
     listen(window, "tawnynativepictureinpicturechange", () => {
       // Entering and leaving PiP can each pause the WebView after the native
@@ -1175,12 +1181,50 @@
     });
     listen(video, "tawnytransportchange", () => setTimeout(refreshQualities, 0));
     listen(video, "tawnyqualitychange", refreshQualities);
-    const syncFullscreen = () => {
-      // The iOS fallback puts the video element itself fullscreen, not the
-      // root, so anything inside this player counts.
+    // The iOS fallback puts the video element itself fullscreen, not the
+    // root, so anything inside this player counts.
+    const isPlayerFullscreen = () => {
       const active = fullscreenElement();
-      const fullscreen = Boolean(active && (active === root || root.contains(active)));
-      if (!fullscreen) root.querySelector("[data-player-native-orientation-unlock]")?.click();
+      return Boolean(active && (active === root || root.contains(active)));
+    };
+    // Rotation used to be requested only from the fullscreen request's own
+    // success callback, using the dimensions read before it. So it was skipped
+    // whenever the player got to fullscreen any other way - the video-element
+    // fallback after a refused request - or before the first frame had given
+    // the video a size. Once per fullscreen, from whatever state the player
+    // is actually in, and again when the size arrives.
+    let landscapeRequested = false;
+    const applyFullscreenOrientation = () => {
+      if (landscapeRequested || !isPlayerFullscreen()) return;
+      if (root.dataset.autoLandscape === "false") return;
+      if (!(video.videoWidth > video.videoHeight)) return;
+      landscapeRequested = true;
+      root.querySelector("[data-player-native-landscape]")?.click();
+      // Orientation locking only exists on mobile and rejects when
+      // unsupported, so failures are ignored.
+      try {
+        screen.orientation?.lock?.("landscape")?.catch?.(() => {});
+      } catch (_) {}
+    };
+    let systemBarsHidden = false;
+    const syncFullscreen = () => {
+      const fullscreen = isPlayerFullscreen();
+      if (fullscreen !== systemBarsHidden) {
+        systemBarsHidden = fullscreen;
+        root
+          .querySelector(
+            fullscreen
+              ? "[data-player-native-system-bars-hide]"
+              : "[data-player-native-system-bars-show]",
+          )
+          ?.click();
+      }
+      if (fullscreen) {
+        applyFullscreenOrientation();
+      } else {
+        landscapeRequested = false;
+        root.querySelector("[data-player-native-orientation-unlock]")?.click();
+      }
       root.classList.toggle("is-fullscreen", fullscreen);
       controls.classList.toggle("is-fullscreen", fullscreen);
       fullscreenButton?.setAttribute(
@@ -1193,6 +1237,9 @@
     listen(document, "fullscreenchange", syncFullscreen);
     listen(document, "webkitfullscreenchange", syncFullscreen);
     listen(video, "webkitendfullscreen", syncFullscreen);
+    // `resize` is the media element's own event for a change of intrinsic size.
+    listen(video, "resize", applyFullscreenOrientation);
+    listen(video, "loadedmetadata", applyFullscreenOrientation);
 
     root.tabIndex = 0;
     setPlaybackIntent(playbackIntent);

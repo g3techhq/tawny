@@ -67,6 +67,8 @@ pub struct AppServerState {
     websub_secret: String,
     proxy_targets: Arc<tokio::sync::RwLock<HashMap<String, ProxyTarget>>>,
     proxy_counter: Arc<AtomicU64>,
+    /// Resolved playback, keyed by video id. See [`AppServerState::playback_session`].
+    playback_sessions: Arc<std::sync::Mutex<HashMap<String, CachedPlayback>>>,
     sync_lock: Arc<tokio::sync::Mutex<()>>,
     search_lock: Arc<tokio::sync::Mutex<()>>,
     search_cache: Arc<tokio::sync::RwLock<HashMap<(String, String), CachedSearch>>>,
@@ -85,6 +87,40 @@ struct ProxyTarget {
     request_headers: Vec<crate::models::PlaybackRequestHeader>,
     expires_at: std::time::Instant,
 }
+
+/// One video's playback resolve, shared by everyone who asks for it.
+///
+/// The session is held *before* it is proxied: proxy registrations are minted
+/// per hand-out, so a session taken from here gets their full lifetime however
+/// long it sat waiting.
+#[derive(Clone)]
+struct CachedPlayback {
+    started_at: std::time::Instant,
+    resolve: SharedPlaybackResolve,
+}
+
+type SharedPlaybackResolve = futures_util::future::Shared<
+    futures_util::future::BoxFuture<'static, Result<ResolvedPlayback, String>>,
+>;
+
+#[derive(Clone)]
+struct ResolvedPlayback {
+    session: PlaybackSession,
+    /// Whether this is worth handing out again. Only a yt-dlp source is:
+    /// without one the session is either the embed or extractor URLs that stop
+    /// serving part way through, and a later ask deserves a fresh attempt.
+    reusable: bool,
+}
+
+/// How long a resolved session is handed out again.
+///
+/// Long enough that the video queued behind an ordinary upload is still warm
+/// when it comes up. The bound is the googlevideo URLs, which expire after
+/// roughly six hours; proxy registrations are minted per hand-out and do not
+/// count against it.
+const PLAYBACK_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
+/// Plenty for every client's current and next video.
+const PLAYBACK_SESSION_LIMIT: usize = 64;
 
 #[derive(Clone)]
 struct CachedSearch {
@@ -704,6 +740,7 @@ impl AppServerState {
             websub_secret,
             proxy_targets: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             proxy_counter: Arc::new(AtomicU64::new(1)),
+            playback_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             search_lock: Arc::new(tokio::sync::Mutex::new(())),
             search_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
@@ -1467,37 +1504,42 @@ impl AppServerState {
             .filter(|track| track.kind == PlaybackTrackKind::Audio)
             .max_by_key(|track| track.bitrate.unwrap_or_default());
 
-        for track in [video, audio].into_iter().flatten() {
-            let Some(length) = track.content_length.filter(|length| *length > 0) else {
-                continue;
-            };
-            let start = length.saturating_sub(2_048);
-            let mut request = self
-                .media_http
-                .get(&track.url)
-                .header(
-                    reqwest::header::RANGE,
-                    format!("bytes={start}-{}", length - 1),
-                )
-                .header(reqwest::header::ACCEPT_ENCODING, "identity");
-            for configured in source
-                .request_headers
-                .iter()
-                .chain(track.request_headers.iter())
-            {
-                if let (Ok(name), Ok(value)) = (
-                    reqwest::header::HeaderName::from_bytes(configured.name.as_bytes()),
-                    reqwest::header::HeaderValue::from_str(&configured.value),
-                ) {
-                    request = request.header(name, value);
+        // Both ends at once: this sits in front of the first frame.
+        let probes = [video, audio]
+            .into_iter()
+            .flatten()
+            .map(|track| async move {
+                let Some(length) = track.content_length.filter(|length| *length > 0) else {
+                    return true;
+                };
+                let start = length.saturating_sub(2_048);
+                let mut request = self
+                    .media_http
+                    .get(&track.url)
+                    .header(
+                        reqwest::header::RANGE,
+                        format!("bytes={start}-{}", length - 1),
+                    )
+                    .header(reqwest::header::ACCEPT_ENCODING, "identity");
+                for configured in source
+                    .request_headers
+                    .iter()
+                    .chain(track.request_headers.iter())
+                {
+                    if let (Ok(name), Ok(value)) = (
+                        reqwest::header::HeaderName::from_bytes(configured.name.as_bytes()),
+                        reqwest::header::HeaderValue::from_str(&configured.value),
+                    ) {
+                        request = request.header(name, value);
+                    }
                 }
-            }
-            let response = tokio::time::timeout(Duration::from_secs(4), request.send()).await;
-            if !matches!(response, Ok(Ok(response)) if response.status().is_success()) {
-                return false;
-            }
-        }
-        true
+                let response = tokio::time::timeout(Duration::from_secs(4), request.send()).await;
+                matches!(response, Ok(Ok(response)) if response.status().is_success())
+            });
+        futures_util::future::join_all(probes)
+            .await
+            .into_iter()
+            .all(|available| available)
     }
 
     /// A channel's Shorts, listed by yt-dlp.
@@ -1668,11 +1710,96 @@ impl AppServerState {
             .collect()
     }
 
+    /// A playback session for `video_id`, resolved once and handed out again.
+    ///
+    /// Resolving costs several seconds, almost all of it yt-dlp, and it is paid
+    /// before the first frame. Clients ask ahead - for the video queued next,
+    /// and on opening a watch page before its details arrive - so by the time
+    /// the player asks, the answer is usually here or already on its way. Asks
+    /// for a video whose resolve is still running wait on that one rather than
+    /// starting another, which also keeps the sidecar's two extraction slots
+    /// free. The resolve runs as its own task, so an ask that gives up (a
+    /// client moving on) does not abandon it for the next one.
+    ///
+    /// `fresh` is for a player whose session stopped working: it discards what
+    /// is held and resolves again.
     pub async fn playback_session(
         &self,
         video_id: &str,
         _prefer_sabr: bool,
+        fresh: bool,
     ) -> Result<PlaybackSession> {
+        let resolve = self.shared_playback_resolve(video_id, fresh);
+        let resolved = resolve.clone().await;
+        if !resolved.as_ref().is_ok_and(|resolved| resolved.reusable) {
+            self.forget_playback_resolve(video_id, &resolve);
+        }
+        let resolved = resolved.map_err(|error| anyhow!(error))?;
+        Ok(self.proxy_session(resolved.session).await)
+    }
+
+    fn shared_playback_resolve(&self, video_id: &str, fresh: bool) -> SharedPlaybackResolve {
+        let mut sessions = self
+            .playback_sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        sessions.retain(|_, cached| now.duration_since(cached.started_at) < PLAYBACK_SESSION_TTL);
+        if fresh {
+            sessions.remove(video_id);
+        }
+        if let Some(cached) = sessions.get(video_id) {
+            return cached.resolve.clone();
+        }
+        if sessions.len() >= PLAYBACK_SESSION_LIMIT
+            && let Some(oldest) = sessions
+                .iter()
+                .min_by_key(|(_, cached)| cached.started_at)
+                .map(|(id, _)| id.clone())
+        {
+            sessions.remove(&oldest);
+        }
+        let state = self.clone();
+        let id = video_id.to_string();
+        let task = tokio::spawn(async move {
+            state
+                .resolve_playback(&id)
+                .await
+                .map_err(|error| format!("{error:#}"))
+        });
+        let resolve = async move {
+            task.await
+                .unwrap_or_else(|error| Err(format!("playback resolve aborted: {error}")))
+        }
+        .boxed()
+        .shared();
+        sessions.insert(
+            video_id.to_string(),
+            CachedPlayback {
+                started_at: now,
+                resolve: resolve.clone(),
+            },
+        );
+        resolve
+    }
+
+    /// Drop a resolve that is not worth handing out again - unless it has
+    /// already been replaced, in which case the replacement stays.
+    fn forget_playback_resolve(&self, video_id: &str, resolve: &SharedPlaybackResolve) {
+        let mut sessions = self
+            .playback_sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if sessions
+            .get(video_id)
+            .is_some_and(|cached| cached.resolve.ptr_eq(resolve))
+        {
+            sessions.remove(video_id);
+        }
+    }
+
+    /// Resolve playback from scratch. The session is not yet proxied.
+    async fn resolve_playback(&self, video_id: &str) -> Result<ResolvedPlayback> {
         let fallback_url = embed_url(video_id);
         let mut provider_sources: Vec<PlaybackSource> = Vec::new();
         // Run both extractors together: rustypipe supplies the stream layout
@@ -1690,7 +1817,9 @@ impl AppServerState {
         // yt-dlp owns the adaptive source. The extractor is consulted only for
         // what yt-dlp does not produce — the HLS manifest a live stream needs —
         // and as a fallback when yt-dlp itself came back empty.
-        if let Some(source) = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await {
+        let ytdlp_source = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await;
+        let reusable = ytdlp_source.is_some();
+        if let Some(source) = ytdlp_source {
             eprintln!(
                 "playback for {video_id}: {} yt-dlp tracks, ranges derived locally",
                 source.tracks.len()
@@ -1757,6 +1886,8 @@ impl AppServerState {
 
         provider_sources.sort_by_key(playback_source_priority);
 
+        use futures_util::StreamExt;
+
         // The tail probe is a reachability hint with a short timeout, not proof,
         // so it may only reorder — never discard. An earlier version treated it
         // as a filter, which could empty the list and strand playback on the
@@ -1764,13 +1895,27 @@ impl AppServerState {
         // and cap the whole phase: this runs before the user sees any video, so
         // it must never become the reason playback feels slow to start. If the
         // budget expires the priority order simply stands.
+        //
+        // Every source is probed at once, and the answer is in as soon as the
+        // earliest source that answered has nothing still pending ahead of it:
+        // the usual case - the first source confirming - costs one round trip.
         let promoted = tokio::time::timeout(Duration::from_secs(6), async {
-            for index in 0..provider_sources.len() {
-                if self
-                    .adaptive_tail_is_available(&provider_sources[index])
-                    .await
-                {
-                    return Some(index);
+            let mut probes = provider_sources
+                .iter()
+                .enumerate()
+                .map(|(index, source)| async move {
+                    (index, self.adaptive_tail_is_available(source).await)
+                })
+                .collect::<futures_util::stream::FuturesUnordered<_>>();
+            let mut answers = vec![None; provider_sources.len()];
+            while let Some((index, available)) = probes.next().await {
+                answers[index] = Some(available);
+                for (index, answer) in answers.iter().enumerate() {
+                    match answer {
+                        Some(true) => return Some(index),
+                        Some(false) => continue,
+                        None => break,
+                    }
                 }
             }
             None
@@ -1793,32 +1938,36 @@ impl AppServerState {
                 },
             );
             let primary = provider_sources.remove(0);
-            return Ok(self
-                .proxy_session(PlaybackSession {
+            return Ok(ResolvedPlayback {
+                session: PlaybackSession {
                     primary,
                     alternatives: provider_sources,
                     fallback_url,
-                })
-                .await);
+                },
+                reusable,
+            });
         }
 
         eprintln!(
             "playback for {video_id}: extraction produced no usable source; \
              the client will report a direct-stream failure"
         );
-        Ok(PlaybackSession {
-            primary: PlaybackSource {
-                protocol: PlaybackProtocol::EmbedFallback,
-                url: fallback_url.clone(),
-                mime_type: Some("text/html".into()),
-                po_token: None,
-                expires_at: None,
-                quality_label: None,
-                request_headers: Vec::new(),
-                tracks: Vec::new(),
+        Ok(ResolvedPlayback {
+            session: PlaybackSession {
+                primary: PlaybackSource {
+                    protocol: PlaybackProtocol::EmbedFallback,
+                    url: fallback_url.clone(),
+                    mime_type: Some("text/html".into()),
+                    po_token: None,
+                    expires_at: None,
+                    quality_label: None,
+                    request_headers: Vec::new(),
+                    tracks: Vec::new(),
+                },
+                alternatives: Vec::new(),
+                fallback_url,
             },
-            alternatives: Vec::new(),
-            fallback_url,
+            reusable: false,
         })
     }
 
@@ -5452,7 +5601,10 @@ mod tests {
     async fn playback_session_always_has_a_safe_fallback() {
         let state = AppServerState::initialize().await.unwrap();
         let _owner = test_owner(&state).await;
-        let session = state.playback_session("aqz-KE-bpKQ", true).await.unwrap();
+        let session = state
+            .playback_session("aqz-KE-bpKQ", true, true)
+            .await
+            .unwrap();
         assert!(session.fallback_url.contains("youtube-nocookie.com"));
         assert!(!session.primary.url.is_empty());
     }
@@ -5707,7 +5859,7 @@ mod tests {
             .unwrap();
         assert!(video_details.remote_available);
         let playback = state
-            .playback_session(&playable_video.id, true)
+            .playback_session(&playable_video.id, true, true)
             .await
             .unwrap();
         eprintln!("live playback protocol: {:?}", playback.primary.protocol);

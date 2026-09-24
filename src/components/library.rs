@@ -14,6 +14,19 @@ use g3_ui::{
 };
 
 use super::{FeedFilterSegments, PageHeader, VideoGrid};
+use std::collections::HashMap;
+
+/// How many history entries the page lays out before asking for more.
+const HISTORY_PAGE_SIZE: usize = 24;
+
+/// The library's videos by id. Queue and History each resolve a list of ids,
+/// and searching the whole library once per id grew with both.
+fn videos_by_id(videos: &[Video]) -> HashMap<&str, &Video> {
+    videos
+        .iter()
+        .map(|video| (video.id.as_str(), video))
+        .collect()
+}
 
 /// Queue and History are sheets, and the sheet is the whole page - its own
 /// header included - so the header rides up with the body it belongs to.
@@ -30,18 +43,14 @@ fn AuxiliarySheet(title: String, children: Element) -> Element {
 #[component]
 pub fn QueuePage() -> Element {
     let app_state = use_context::<AppState>();
-    let library = app_state.library();
-    let videos = library
-        .queue
-        .iter()
-        .filter_map(|entry| {
-            library
-                .videos
-                .iter()
-                .find(|video| &video.id == entry)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let videos = app_state.with_library(|library| {
+        let by_id = videos_by_id(&library.videos);
+        library
+            .queue
+            .iter()
+            .filter_map(|entry| by_id.get(entry.as_str()).map(|video| (*video).clone()))
+            .collect::<Vec<_>>()
+    });
     // The playlist being run is one entry in the queue, not a copy of its
     // contents, so it gets a card of its own rather than fifty. Shown above
     // the loose videos because that is where `start_playlist_run` puts it:
@@ -164,25 +173,32 @@ pub fn QueuePage() -> Element {
 #[component]
 pub fn HistoryPage() -> Element {
     let app_state = use_context::<AppState>();
-    let library = app_state.library();
-    let videos = library
-        .history
-        .iter()
-        .filter_map(|entry| {
-            library
-                .videos
-                .iter()
-                .find(|video| video.id == entry.video_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let mut visible_count = use_signal(|| HISTORY_PAGE_SIZE);
+    // Every video ever opened, so it is laid out a page at a time, and only
+    // that page is copied out of the library.
+    let (videos, total) = app_state.with_library(|library| {
+        let by_id = videos_by_id(&library.videos);
+        let found = library
+            .history
+            .iter()
+            .filter_map(|entry| by_id.get(entry.video_id.as_str()).copied())
+            .collect::<Vec<_>>();
+        let total = found.len();
+        let page = found
+            .into_iter()
+            .take(visible_count())
+            .cloned()
+            .collect::<Vec<_>>();
+        (page, total)
+    });
+    let remaining = total.saturating_sub(videos.len());
 
     rsx! {
         AuxiliarySheet { title: "History",
             Stack { gap: Space::Md,
                 Stack { horizontal: true, gap: Space::Sm, align: StackAlign::Center,
                     History { size: 18 }
-                    Text { variant: TextVariant::Label, "{videos.len()} recent" }
+                    Text { variant: TextVariant::Label, "{total} recent" }
                     Text { tone: TextTone::Secondary, class: "mr-auto", "Most recent first" }
                     Button {
                         fill: ButtonFill::Clear,
@@ -197,6 +213,15 @@ pub fn HistoryPage() -> Element {
                     }
                 }
                 VideoGrid { videos, empty_message: "Videos you open will appear here.".to_string() }
+                InfiniteScroll {
+                    loading: false,
+                    complete: remaining == 0,
+                    on_load: move |_| {
+                        if remaining > 0 {
+                            visible_count += HISTORY_PAGE_SIZE;
+                        }
+                    },
+                }
             }
         }
     }
@@ -364,12 +389,15 @@ pub fn ChannelDetail(id: String) -> Element {
         }
     });
 
-    let library = app_state.library();
-    let cached_channel = library
-        .channels
-        .iter()
-        .find(|channel| channel.id == id)
-        .cloned();
+    // Read through a borrow: `AppState::library` clones the whole snapshot,
+    // every cached video included, to find one channel.
+    let cached_channel = app_state.with_library(|library| {
+        library
+            .channels
+            .iter()
+            .find(|channel| channel.id == id)
+            .cloned()
+    });
     // `cache_channel_details` has already merged this response with richer
     // metadata discovered by the player/search surfaces. Prefer that merged
     // record so a sparse channel tab response (for example `528` instead of
@@ -417,12 +445,15 @@ pub fn ChannelDetail(id: String) -> Element {
                 .collect(),
         }
     } else {
-        library
-            .videos
-            .iter()
-            .filter(|video| video.channel_id == channel.id && tab().accepts(video))
-            .cloned()
-            .collect::<Vec<_>>()
+        let filter = tab();
+        app_state.with_library(|library| {
+            library
+                .videos
+                .iter()
+                .filter(|video| video.channel_id == channel.id && filter.accepts(video))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
     };
     match selected_tab {
         Some(ChannelMediaTab::Videos) => videos.extend(extra_videos()),

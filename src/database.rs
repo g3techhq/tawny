@@ -11,6 +11,11 @@ use surrealdb::{Surreal, engine::any::Any};
 surrealkit::embed_schema!("database/schema");
 
 pub async fn sync_schema(db: &Surreal<Any>) -> Result<()> {
+    db.query(include_str!("../database/presync.surql"))
+        .await
+        .context("apply Tawny pre-sync repairs")?
+        .check()
+        .context("validate Tawny pre-sync repairs")?;
     embedded_schema::sync(db)
         .await
         .context("sync Tawny schema with SurrealKit")?;

@@ -107,8 +107,16 @@ fn NativeBackCoordinator() -> Element {
 #[component]
 fn NativeMediaCoordinator() -> Element {
     let mut plugins = use_context::<NativePlugins>();
+    let app_state = use_context::<AppState>();
     use_hook(move || {
         let _ = plugins.media.write().prepare();
+    });
+    // Pausing keeps the system media controls so they can resume playback;
+    // closing the player is what takes them away.
+    use_effect(move || {
+        if app_state.active_video().is_none() {
+            let _ = plugins.media.write().clear_playback();
+        }
     });
     rsx! {}
 }
@@ -173,7 +181,7 @@ pub fn PageHeader(
                 if show_global_actions {
                     Button {
                         fill: ButtonFill::Clear,
-                        aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
+                        aria_label: format!("Queue, {} videos", app_state.with_library(|library| library.queue.len())),
                         onclick: move |_| { spawn(animated_navigate(Route::QueuePage {})); },
                         ListVideo { size: 20 }
                     }

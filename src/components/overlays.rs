@@ -63,7 +63,7 @@ pub fn AppOverlays() -> Element {
                     let save_video = video.clone();
                     let watched_id = video.id.clone();
                     let share_video = video.clone();
-                    let is_queued = app_state.library().queue.iter().any(|id| id == &video.id);
+                    let is_queued = app_state.with_library(|library| library.queue.iter().any(|id| id == &video.id));
                     let is_watched = video.watched;
                     rsx! {
                         Stack { gap: Space::Md,
@@ -142,7 +142,7 @@ pub fn AppOverlays() -> Element {
                     Text { tone: TextTone::Secondary, class: "line-clamp-2", "{video.title}" }
                 }
                 List { variant: ListVariant::Raised, lines: ListLines::Inset,
-                    for playlist in app_state.library().playlists {
+                    for playlist in app_state.with_library(|library| library.playlists.clone()) {
                         {
                             let video_id = target.as_ref().map(|video| video.id.clone()).unwrap_or_default();
                             let playlist_id = playlist.id.clone();

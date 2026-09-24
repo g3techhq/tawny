@@ -8,11 +8,31 @@ use dioxus_icons::lucide::{CheckCheck, ListPlus, Play, Plus, Shuffle, Trash2};
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
-    DividerOrientation, EmptyState, Grid, GridColumns, Img, Input, Modal, SegmentButton,
-    SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
+    DividerOrientation, EmptyState, Grid, GridColumns, Img, InfiniteScroll, Input, Modal,
+    SegmentButton, SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
+};
+use std::collections::{HashMap, HashSet};
+
+use super::{
+    PageHeader, VideoGrid, duration_candidates, use_after_route_transition, use_duration_hydration,
 };
 
-use super::{PageHeader, VideoGrid, duration_candidates, use_duration_hydration};
+/// How many videos a playlist lays out before asking for more. Every card is a
+/// swipe row with an image, and a long playlist built them all before the push
+/// animation could start.
+const PLAYLIST_PAGE_SIZE: usize = 24;
+
+/// The library's videos whose ids are in `wanted`.
+///
+/// Indexing only those, rather than the whole cache, keeps a render from
+/// hashing tens of thousands of videos to find a few dozen.
+fn videos_for<'a>(videos: &'a [Video], wanted: &HashSet<&str>) -> HashMap<&'a str, &'a Video> {
+    videos
+        .iter()
+        .filter(|video| wanted.contains(video.id.as_str()))
+        .map(|video| (video.id.as_str(), video))
+        .collect()
+}
 
 /// Fisher-Yates with a generator of its own.
 ///
@@ -150,11 +170,12 @@ pub fn Playlists() -> Element {
     // No filters here. The index is a set of covers to pick from, not a list to
     // work through - filtering it hides the playlist you came to open.
     let rows = app_state.with_library(|library| {
-        let by_id = library
-            .videos
+        let wanted = library
+            .playlists
             .iter()
-            .map(|video| (video.id.as_str(), video))
-            .collect::<std::collections::HashMap<_, _>>();
+            .flat_map(|playlist| playlist.video_ids.iter().map(String::as_str))
+            .collect::<HashSet<_>>();
+        let by_id = videos_for(&library.videos, &wanted);
         library
             .playlists
             .iter()
@@ -322,11 +343,12 @@ pub fn PlaylistDetail(id: String) -> Element {
         let videos = playlist
             .as_ref()
             .map(|playlist| {
-                let by_id = library
-                    .videos
+                let wanted = playlist
+                    .video_ids
                     .iter()
-                    .map(|video| (video.id.as_str(), video))
-                    .collect::<std::collections::HashMap<_, _>>();
+                    .map(String::as_str)
+                    .collect::<HashSet<_>>();
+                let by_id = videos_for(&library.videos, &wanted);
                 playlist
                     .video_ids
                     .iter()
@@ -341,11 +363,20 @@ pub fn PlaylistDetail(id: String) -> Element {
     // render of this component, and ahead of the filters, because
     // `duration_candidates` has to see the rows a duration chip discards.
     //
-    // A playlist is not paged, so the window is the whole list: one visit works
+    // The window is the whole list, not the page on screen: one visit works
     // through it a batch at a time until every entry has a length. That is the
     // point - a saved video is usually saved from the feed, where RSS gave it no
     // runtime, and the refresh backfill only ever reaches followed channels.
-    use_duration_hydration(duration_candidates(&videos, videos.len()));
+    //
+    // Held until the push has landed. Each batch writes the library, and that
+    // re-render arriving mid-slide is what made opening a playlist stutter.
+    let settled = use_after_route_transition();
+    use_duration_hydration(if settled() {
+        duration_candidates(&videos, videos.len())
+    } else {
+        Vec::new()
+    });
+    let mut visible_count = use_signal(|| PLAYLIST_PAGE_SIZE);
 
     let Some(playlist) = playlist else {
         // Still renders the bar: reaching a stale deep link with no way back was
@@ -385,6 +416,9 @@ pub fn PlaylistDetail(id: String) -> Element {
     videos.retain(|video| view.shows(video));
 
     let run: Vec<String> = videos.iter().map(|video| video.id.clone()).collect();
+    // The run above is the whole arranged list; only its first pages are laid out.
+    let remaining = videos.len().saturating_sub(visible_count());
+    videos.truncate(visible_count());
     let shuffle_run = run.clone();
     let filtered = view.is_filtered();
     let clear_id = playlist.id.clone();
@@ -540,6 +574,15 @@ pub fn PlaylistDetail(id: String) -> Element {
                         "Nothing here matches those filters.".to_string()
                     } else {
                         "Add videos from the buttons on a card.".to_string()
+                    },
+                }
+                InfiniteScroll {
+                    loading: false,
+                    complete: remaining == 0,
+                    on_load: move |_| {
+                        if remaining > 0 {
+                            visible_count += PLAYLIST_PAGE_SIZE;
+                        }
                     },
                 }
             }

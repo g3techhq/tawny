@@ -26,17 +26,11 @@ use g3_ui::{
 
 use super::VideoGrid;
 
-const CONFIGURED_SERVER_URL: Option<&str> = option_env!("SERVER_URL");
-
-fn playback_server_url() -> &'static str {
-    if let Some(url) = CONFIGURED_SERVER_URL {
-        return url;
-    }
-    if cfg!(target_os = "android") {
-        "http://127.0.0.1:8080"
-    } else {
-        "http://localhost:8080"
-    }
+/// The player's transport fetches from the webview, not through the server
+/// functions, so it has to be told the backend the viewer chose in settings -
+/// not just the compiled default, which on a device points back at itself.
+fn playback_server_url() -> String {
+    crate::config::backend_url()
 }
 
 fn sync_player_metadata(
@@ -66,7 +60,7 @@ fn sync_player_metadata(
     let Ok(sponsor_segments) = serde_json::to_string(&sponsor_segments) else {
         return;
     };
-    let Ok(server_url) = serde_json::to_string(playback_server_url()) else {
+    let Ok(server_url) = serde_json::to_string(&playback_server_url()) else {
         return;
     };
     let selected_caption = selected_caption
@@ -146,6 +140,18 @@ fn NativePlayerBridges(title: String) -> Element {
             r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
             "data-player-native-orientation-unlock": "",
             onclick: move |_| { let _ = plugins.media.write().set_orientation("unspecified"); },
+        }
+        // The WebView's fullscreen stops at its own bounds, so the status bar
+        // stays over the video unless the window hides it.
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-system-bars-hide": "",
+            onclick: move |_| { let _ = plugins.media.write().set_system_bars_hidden(true); },
+        }
+        button {
+            r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
+            "data-player-native-system-bars-show": "",
+            onclick: move |_| { let _ = plugins.media.write().set_system_bars_hidden(false); },
         }
         button {
             r#type: "button", class: "player-caption-state-bridge", tabindex: "-1", aria_hidden: "true",
@@ -381,7 +387,7 @@ fn attach_player_session(
     let Ok(session) = serde_json::to_string(&session) else {
         return;
     };
-    let Ok(server_url) = serde_json::to_string(playback_server_url()) else {
+    let Ok(server_url) = serde_json::to_string(&playback_server_url()) else {
         return;
     };
     let video_id = video_id.to_string();
@@ -429,7 +435,7 @@ fn attach_player_session(
                     window.TawnyPlayerControls.attach(media);
                 }}
                 const serverBase = window.TawnyTransport.playbackServerBase({{ serverUrl }});
-                const refreshPath = `/api/v1/playback/${{encodeURIComponent(videoId)}}?prefer_sabr={prefer_sabr}`;
+                const refreshPath = `/api/v1/playback/${{encodeURIComponent(videoId)}}?prefer_sabr={prefer_sabr}&fresh=true`;
                 await window.TawnyTransport.attach(media, session, {{
                     playbackRate: {playback_rate},
                     videoId,
@@ -517,6 +523,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let mut playback_failed = use_signal(|| false);
     let mut failure_detail = use_signal(String::new);
     let mut observed_video_id = use_signal(String::new);
+    // The video whose session stopped working. The server hands out the session
+    // it resolved earlier, so a retry for this video has to ask for a new one
+    // rather than get the same broken answer back. Keyed by video so the flag
+    // cannot leak into the next one and cost it the warm session.
+    let mut stale_session_for = use_signal(|| None::<String>);
     let prefer_sabr = app_state.settings().prefer_sabr;
     let preferred_audio_language = app_state.settings().preferred_audio_language;
 
@@ -532,11 +543,42 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             match active_video {
                 Some(video) => {
                     let id = video.id.clone();
-                    Some((id, resolve_playback(video.id, prefer_sabr).await))
+                    let fresh = stale_session_for.peek().as_deref() == Some(id.as_str());
+                    Some((id, resolve_playback(video.id, prefer_sabr, fresh).await))
                 }
                 None => None,
             }
         }
+    });
+
+    // Resolve whatever is up next while this one plays, so moving on - by
+    // autoplay, a swipe, or the next button - finds its session already on the
+    // server instead of waiting several seconds for it. Held back until this
+    // video's own session is in, so the two never race for the extractor.
+    let mut warmed_next = use_signal(|| None::<String>);
+    use_effect(move || {
+        let resolved_video_id = playback_resource
+            .read()
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .map(|(id, _)| id.clone());
+        let Some(current) = resolved_video_id else {
+            return;
+        };
+        if app_state
+            .active_video()
+            .is_none_or(|active| active.id != current)
+        {
+            return;
+        }
+        let Some(next) = app_state.next_in_run(&current) else {
+            return;
+        };
+        if warmed_next.peek().as_deref() == Some(next.as_str()) {
+            return;
+        }
+        warmed_next.set(Some(next.clone()));
+        warm_playback(next, prefer_sabr);
     });
 
     let active_video = app_state.active_video();
@@ -548,6 +590,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         if observed_video_id() != video_id {
             observed_video_id.set(video_id.clone());
             playback_attempt.set(0);
+            stale_session_for.set(None);
             use_embed.set(false);
             playback_failed.set(false);
             failure_detail.set(String::new());
@@ -678,6 +721,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             .as_ref()
             .is_some_and(source_is_transportable);
     let is_short = video.is_short;
+    let errored_video_id = video.id.clone();
+    let retried_video_id = video.id.clone();
     let current_speed = app_state.settings().speed_for(is_short);
     let session_to_attach = playback_session.clone();
     let attach_video_id = video.id.clone();
@@ -780,6 +825,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                 class: if video.audio_only { "persistent-player-stage audio-only" } else { "persistent-player-stage" },
                 "data-video-id": "{video.id}",
                 "data-thumbnail": "{video.thumbnail_url}",
+                // Read by the Android media plugin for the system player.
+                "data-title": "{video.title}",
+                "data-channel": "{video.channel_name}",
                 // Feeds the audio-only artwork above; a CSS rule cannot reach the
                 // thumbnail on its own.
                 style: "--player-artwork: url('{video.thumbnail_url}');",
@@ -815,6 +863,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                             // that stops helping, say so instead of quietly
                             // handing the video to YouTube's own player.
                             if playback_attempt() < 2 {
+                                stale_session_for.set(Some(errored_video_id.clone()));
                                 playback_attempt += 1;
                             } else {
                                 read_transport_failure(failure_detail);
@@ -1225,6 +1274,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 fill: ButtonFill::Solid,
                                 onclick: move |_| {
                                     playback_failed.set(false);
+                                    stale_session_for.set(Some(retried_video_id.clone()));
                                     // Rewinding to zero both re-runs the
                                     // resolver and restores the retry budget.
                                     playback_attempt.set(0);
@@ -1400,6 +1450,16 @@ fn local_details(video: Video, related_videos: Vec<Video>) -> VideoDetails {
         comments: Default::default(),
         remote_available: false,
     }
+}
+
+/// Have the server resolve a video's playback now, ahead of the player asking.
+///
+/// The answer is dropped: what matters is that the server holds the session,
+/// or is already resolving it, when the player's own request arrives.
+fn warm_playback(video_id: String, prefer_sabr: bool) {
+    spawn(async move {
+        let _ = resolve_playback(video_id, prefer_sabr, false).await;
+    });
 }
 
 fn source_is_transportable(source: &PlaybackSource) -> bool {
@@ -1593,6 +1653,23 @@ fn VideoDetailInner(id: String) -> Element {
         scroll_video_page_to_top();
     });
 
+    // A video missing from the library only starts playing once its details
+    // arrive, and the player resolves playback only once it starts - two
+    // multi-second requests back to back. Asking for playback now runs them
+    // side by side; the player's own request then joins this one. The video
+    // already playing (a mini player being expanded) has its session.
+    let warm_video_id = id.clone();
+    use_hook(move || {
+        if app_state
+            .active_video
+            .peek()
+            .as_ref()
+            .is_none_or(|active| active.id != warm_video_id)
+        {
+            warm_playback(warm_video_id, app_state.settings.peek().prefer_sabr);
+        }
+    });
+
     let details_resource = {
         let video_id = id.clone();
         use_resource(move || {
@@ -1600,8 +1677,10 @@ fn VideoDetailInner(id: String) -> Element {
             async move { get_video_details(video_id).await }
         })
     };
-    let library = app_state.library();
-    let cached_video = library.videos.iter().find(|video| video.id == id).cloned();
+    // Read through a borrow throughout: `AppState::library` clones the whole
+    // snapshot, which held up opening this page for the sake of one video.
+    let cached_video = app_state
+        .with_library(|library| library.videos.iter().find(|video| video.id == id).cloned());
     // Swapping the cached copy for the remote one re-renders the whole details
     // body, and opening from the mini player is exactly the case where the
     // cached copy is already correct. Waiting costs nothing visible: the page
@@ -1640,13 +1719,15 @@ fn VideoDetailInner(id: String) -> Element {
         }
     });
 
-    let cached_related = library
-        .videos
-        .iter()
-        .filter(|video| video.id != id)
-        .take(8)
-        .cloned()
-        .collect::<Vec<_>>();
+    let cached_related = app_state.with_library(|library| {
+        library
+            .videos
+            .iter()
+            .filter(|video| video.id != id)
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
     let details = remote_details.clone().or_else(|| {
         cached_video
             .clone()
@@ -1657,7 +1738,7 @@ fn VideoDetailInner(id: String) -> Element {
     let player_video_id = id.clone();
     use_effect(move || {
         let local = {
-            let library = player_library();
+            let library = player_library.read();
             library
                 .videos
                 .iter()
@@ -1735,20 +1816,24 @@ fn VideoDetailInner(id: String) -> Element {
 
     let video = details.video.clone();
     let channel = details.channel.clone().or_else(|| {
-        library
-            .channels
-            .iter()
-            .find(|channel| channel.id == video.channel_id)
-            .cloned()
+        app_state.with_library(|library| {
+            library
+                .channels
+                .iter()
+                .find(|channel| channel.id == video.channel_id)
+                .cloned()
+        })
     });
     let related = if details.related_videos.is_empty() {
-        library
-            .videos
-            .iter()
-            .filter(|candidate| candidate.id != video.id)
-            .take(8)
-            .cloned()
-            .collect::<Vec<_>>()
+        app_state.with_library(|library| {
+            library
+                .videos
+                .iter()
+                .filter(|candidate| candidate.id != video.id)
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
     } else {
         details.related_videos.clone()
     };

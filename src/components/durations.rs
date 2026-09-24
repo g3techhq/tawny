@@ -27,9 +27,12 @@ pub const DURATION_LOOKAHEAD: usize = 48;
 /// Call this *before* a duration filter runs. After it, the rows with no length
 /// are already gone, and they could never acquire the metadata that would let
 /// them enter the filter in the first place.
-pub fn duration_candidates(videos: &[Video], window: usize) -> Vec<String> {
+pub fn duration_candidates<'a>(
+    videos: impl IntoIterator<Item = &'a Video>,
+    window: usize,
+) -> Vec<String> {
     videos
-        .iter()
+        .into_iter()
         .take(window)
         .filter(|video| !video.is_live && video.duration_seconds == 0)
         .take(DURATION_LOOKAHEAD)
