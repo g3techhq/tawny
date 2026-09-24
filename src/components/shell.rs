@@ -173,7 +173,7 @@ pub fn PageHeader(
                 if show_global_actions {
                     Button {
                         fill: ButtonFill::Clear,
-                        aria_label: format!("Queue, {} videos", app_state.library().queue.len()),
+                        aria_label: format!("Queue, {} videos", app_state.with_library(|library| library.queue.len())),
                         onclick: move |_| { spawn(animated_navigate(Route::QueuePage {})); },
                         ListVideo { size: 20 }
                     }

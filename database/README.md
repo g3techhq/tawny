@@ -1,8 +1,9 @@
 # Database workflow
 
 `database/schema` is Tawny's desired schema. The server currently embeds it and
-runs SurrealKit during startup; `database/backfill.surql` is applied immediately
-afterward. Keep schema files and the application checkout at the same revision.
+runs SurrealKit during startup. `database/presync.surql` is applied just before
+the sync to repair data that would fail an index rebuild, and
+`database/backfill.surql` is applied immediately afterward. Keep schema files and the application checkout at the same revision.
 
 ## Scoped operator commands
 

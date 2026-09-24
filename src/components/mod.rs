@@ -1,4 +1,5 @@
 mod account;
+mod deferred;
 mod durations;
 mod explore;
 mod feed;
@@ -12,6 +13,7 @@ mod subscriptions;
 mod video_card;
 
 pub use account::{AccountGate, AccountSettings, BackendSettings};
+pub use deferred::use_after_first_paint;
 pub use durations::{DURATION_LOOKAHEAD, duration_candidates, use_duration_hydration};
 pub use explore::Explore;
 pub use feed::{Feed, FeedFilterSegments};
@@ -22,4 +24,4 @@ pub use playlists::{PlaylistDetail, Playlists};
 pub use settings::SettingsPage;
 pub use shell::{AppShell, PageHeader};
 pub use subscriptions::Subscriptions;
-pub use video_card::VideoGrid;
+pub use video_card::{VideoGrid, VideoGridSkeleton};

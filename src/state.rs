@@ -291,7 +291,7 @@ impl AppState {
     }
 
     pub fn create_playlist(mut self, name: String) -> String {
-        let id = format!("local-{}", self.library().cache_revision + 1);
+        let id = format!("local-{}", self.library.peek().cache_revision + 1);
         {
             let mut library = self.library.write();
             library.playlists.push(Playlist {
@@ -535,7 +535,7 @@ impl AppState {
             .collect::<String>()
             .trim_matches('-')
             .to_string();
-        let revision = self.library().cache_revision + 1;
+        let revision = self.library.peek().cache_revision + 1;
         let id = if slug.is_empty() {
             format!("group-{revision}")
         } else {
@@ -744,7 +744,7 @@ impl AppState {
     /// that scrolled out of it would vanish from the queue even though its id is
     /// still queued. Carrying those records over keeps the queue honest.
     pub fn adopt_library(mut self, remote: LibrarySnapshot) {
-        let merged = keep_referenced_videos(&self.library(), remote);
+        let merged = keep_referenced_videos(&self.library.peek(), remote);
         self.library.set(merged);
     }
 

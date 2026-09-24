@@ -310,6 +310,10 @@ textarea {
 .persistent-player.expanded {
   width: min(100%, 1180px);
   margin: 0 auto;
+  /* The watch page has no page header, so the player is what meets the
+     Android status bar. The strip takes the header's colour rather than the
+     player's black so the status bar icons stay legible in either theme. */
+  border-top: env(safe-area-inset-top) solid var(--g3-color-card);
 }
 
 .persistent-player.expanded .persistent-player-stage {
@@ -1518,25 +1522,16 @@ html[data-android-pip="true"] .tawny-shell {
   background: #000;
 }
 
-html[data-android-pip="true"] .tawny-shell > .g3-header,
-html[data-android-pip="true"] .tawny-shell > .g3-nav,
-html[data-android-pip="true"] .g3-content-scroll > :not(.persistent-player),
+/* Everything beside the player, whatever g3-ui calls it. Naming the page and
+   nav regions here broke with g3-ui 0.4: the page body is now a fixed sibling
+   with z-index 1, so a missed selector painted it straight over the video. */
+html[data-android-pip="true"] .tawny-shell > :not(.persistent-player),
 html[data-android-pip="true"] .mini-player-copy,
 html[data-android-pip="true"] .mini-player-close,
 html[data-android-pip="true"] .tawny-player-controls,
 html[data-android-pip="true"] .player-buffering-indicator,
 html[data-android-pip="true"] .player-seek-feedback {
   display: none !important;
-}
-
-html[data-android-pip="true"] .tawny-shell > .g3-content,
-html[data-android-pip="true"] .g3-content-scroll {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  padding: 0 !important;
 }
 
 html[data-android-pip="true"] .persistent-player,
@@ -1681,7 +1676,7 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
 
   .persistent-player.expanded .persistent-player-stage {
     width: 100%;
-    height: 100dvh;
+    height: calc(100dvh - env(safe-area-inset-top));
     aspect-ratio: auto;
   }
 

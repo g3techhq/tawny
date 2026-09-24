@@ -4,11 +4,19 @@ use dioxus_icons::lucide::{Check, Plus, Trash2, Users};
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Avatar, AvatarSize, Button, ButtonFill, ButtonSize, Card, Color, Content, EmptyState, Grid,
-    GridColumns, Input, Item, List, ListLines, ListVariant, Modal, Searchbar, Shelf, Space, Stack,
-    Text, TextTone,
+    GridColumns, InfiniteScroll, Input, Item, List, ListLines, ListVariant, Modal, Searchbar,
+    Shelf, Skeleton, SkeletonShape, Space, Stack, Text, TextTone,
 };
 
-use super::PageHeader;
+use super::{PageHeader, use_after_first_paint};
+
+/// How many subscribed channels the grid lays out before asking for more.
+/// Each is a card with an avatar image, and a long subscription list built
+/// them all in one render.
+const CHANNEL_PAGE_SIZE: usize = 48;
+
+/// How many unsubscribed channels the Suggested shelf previews.
+const SUGGESTION_COUNT: usize = 12;
 
 /// One channel tile, used by both the subscribed grid and the suggestions.
 #[component]
@@ -67,14 +75,37 @@ pub fn Subscriptions() -> Element {
     let mut editor_open = use_signal(|| false);
     let mut group_search = use_signal(String::new);
 
-    let library = app_state.library();
-    let groups = library.subscription_groups.clone();
+    let mut visible_count = use_signal(|| CHANNEL_PAGE_SIZE);
+    // Sorting out the channel catalogue is the slow part of this page, so the
+    // header and placeholders go up first.
+    let painted = use_after_first_paint();
+
+    // Read through a borrow. `AppState::library` clones the whole snapshot,
+    // every cached video included, just to reach the channel list.
+    let groups = app_state.with_library(|library| library.subscription_groups.clone());
     // The page is about channels you follow. Everything else is a suggestion
     // and belongs below them, not mixed in.
-    let (subscribed, suggested): (Vec<Channel>, Vec<Channel>) = library
-        .channels
-        .into_iter()
-        .partition(|channel| channel.subscribed);
+    let (subscribed, suggested): (Vec<Channel>, Vec<Channel>) = if painted() {
+        app_state.with_library(|library| {
+            let subscribed = library
+                .channels
+                .iter()
+                .filter(|channel| channel.subscribed)
+                .cloned()
+                .collect();
+            let suggested = library
+                .channels
+                .iter()
+                .filter(|channel| !channel.subscribed)
+                .take(SUGGESTION_COUNT)
+                .cloned()
+                .collect();
+            (subscribed, suggested)
+        })
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let remaining = subscribed.len().saturating_sub(visible_count());
 
     let editing = editing_group();
     let editing_group_name = editing
@@ -88,15 +119,20 @@ pub fn Subscriptions() -> Element {
         .map(|group| group.channel_ids.clone())
         .unwrap_or_default();
     let group_query = group_search().trim().to_lowercase();
-    let subscribed_for_editor = subscribed
-        .iter()
-        .filter(|channel| {
-            group_query.is_empty()
-                || channel.name.to_lowercase().contains(&group_query)
-                || channel.handle.to_lowercase().contains(&group_query)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    // Only while the editor is up: it lists every subscription at once.
+    let subscribed_for_editor = if editor_open() {
+        subscribed
+            .iter()
+            .filter(|channel| {
+                group_query.is_empty()
+                    || channel.name.to_lowercase().contains(&group_query)
+                    || channel.handle.to_lowercase().contains(&group_query)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
 
     rsx! {
         PageHeader {}
@@ -124,6 +160,7 @@ pub fn Subscriptions() -> Element {
                                         .channel_ids
                                         .iter()
                                         .filter_map(|id| subscribed.iter().find(|channel| &channel.id == id))
+                                        .take(5)
                                         .cloned()
                                         .collect::<Vec<_>>();
                                     rsx! {
@@ -172,18 +209,35 @@ pub fn Subscriptions() -> Element {
                 Stack { gap: Space::Sm,
                     // Styled as the Suggested shelf title below, so the two
                     // sections read as peers.
-                    Text { variant: g3_ui::TextVariant::Overline, "Subscriptions · {subscribed.len()}" }
-                    if subscribed.is_empty() {
+                    if !painted() {
+                        Text { variant: g3_ui::TextVariant::Overline, "Subscriptions" }
+                        Grid { columns: GridColumns::Fit(20.0),
+                            for index in 0..6 {
+                                Skeleton { key: "{index}", shape: SkeletonShape::Block, class: "h-16 rounded-lg" }
+                            }
+                        }
+                    } else if subscribed.is_empty() {
+                        Text { variant: g3_ui::TextVariant::Overline, "Subscriptions · 0" }
                         EmptyState {
                             title: "No subscriptions yet",
                             icon: rsx! { Users { size: 40 } },
                             "Subscribe to a channel from search or a video to see it here."
                         }
                     } else {
+                        Text { variant: g3_ui::TextVariant::Overline, "Subscriptions · {subscribed.len()}" }
                         Grid { columns: GridColumns::Fit(20.0),
-                            for channel in subscribed.clone() {
+                            for channel in subscribed.iter().take(visible_count()).cloned() {
                                 ChannelCard { key: "{channel.id}", channel }
                             }
+                        }
+                        InfiniteScroll {
+                            loading: false,
+                            complete: remaining == 0,
+                            on_load: move |_| {
+                                if remaining > 0 {
+                                    visible_count += CHANNEL_PAGE_SIZE;
+                                }
+                            },
                         }
                     }
                 }
@@ -194,7 +248,7 @@ pub fn Subscriptions() -> Element {
                         // A shelf is a preview, not a second copy of the full
                         // channel catalogue. Keeping it bounded also avoids
                         // mounting hundreds of image cards in one scroll row.
-                        for channel in suggested.into_iter().take(12) {
+                        for channel in suggested {
                             div { key: "{channel.id}", class: "w-72",
                                 ChannelCard { channel }
                             }

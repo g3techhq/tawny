@@ -75,12 +75,16 @@ pub async fn search_catalog_page(
 }
 
 #[get(
-    "/api/v1/playback/{video_id}?prefer_sabr",
+    "/api/v1/playback/{video_id}?prefer_sabr&fresh",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>
 )]
-pub async fn resolve_playback(video_id: String, prefer_sabr: bool) -> Result<PlaybackSession> {
+pub async fn resolve_playback(
+    video_id: String,
+    prefer_sabr: bool,
+    fresh: bool,
+) -> Result<PlaybackSession> {
     Ok(state
-        .playback_session(&video_id, prefer_sabr)
+        .playback_session(&video_id, prefer_sabr, fresh)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }
