@@ -3,7 +3,11 @@ FROM node:22-bookworm-slim AS node-runtime
 FROM python:3.13-slim-bookworm
 
 ARG YTDLP_VERSION=2026.8.19
-ARG POT_PROVIDER_VERSION=1.3.1
+# The yt-dlp plugin installed here and the pot-provider container in compose
+# are two halves of one protocol, so they move together. 2.0.0 fixes an RCE in
+# the provider (GHSA-qpv9-8xfj-xx9m); its image still listens on 0.0.0.0
+# inside the container, so the compose network keeps reaching it.
+ARG POT_PROVIDER_VERSION=2.0.0
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 

@@ -61,7 +61,8 @@ pub async fn search_catalog(query: String, filter: String) -> Result<SearchResul
 
 #[get(
     "/api/v1/search/page?query&filter&next_page",
-    state: dioxus::fullstack::extract::State<crate::server::AppServerState>
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    owner: crate::auth::Owner
 )]
 pub async fn search_catalog_page(
     query: String,
@@ -69,7 +70,7 @@ pub async fn search_catalog_page(
     next_page: String,
 ) -> Result<SearchResults> {
     Ok(state
-        .search_page(&query, &filter, &next_page)
+        .search_page(&owner.0, &query, &filter, &next_page)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?)
 }

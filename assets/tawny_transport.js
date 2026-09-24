@@ -613,7 +613,11 @@
         };
         video.addEventListener("timeupdate", runtime.positionHandler);
         video.addEventListener("ended", runtime.endedHandler, { once: true });
-        video.play().catch(() => {});
+        video.play().catch((error) => {
+          // Refused rather than interrupted: the controls stop waiting for a
+          // start that is not coming and offer Play instead.
+          if (error?.name === "NotAllowedError") emit(video, "tawnyautoplayblocked");
+        });
 
         runtime.errorHandler = (event) => {
           event.stopImmediatePropagation();

@@ -1785,7 +1785,12 @@ fn VideoDetailInner(id: String) -> Element {
                 details.chapters,
                 details.preview_frames,
             );
-            if history_recorded_for.peek().as_deref() != Some(video.id.as_str()) {
+            // A library write, so it waits out the sheet like the details
+            // cache does: it re-renders everything on this page that reads the
+            // library, in the middle of the morph.
+            if transition_settled()
+                && history_recorded_for.peek().as_deref() != Some(video.id.as_str())
+            {
                 app_state.record_history(&video.id);
                 history_recorded_for.set(Some(video.id.clone()));
             }
@@ -1815,15 +1820,14 @@ fn VideoDetailInner(id: String) -> Element {
     };
 
     let video = details.video.clone();
-    let channel = details.channel.clone().or_else(|| {
-        app_state.with_library(|library| {
-            library
-                .channels
-                .iter()
-                .find(|channel| channel.id == video.channel_id)
-                .cloned()
-        })
+    let library_channel = app_state.with_library(|library| {
+        library
+            .channels
+            .iter()
+            .find(|channel| channel.id == video.channel_id)
+            .cloned()
     });
+    let channel = details.channel.clone().or_else(|| library_channel.clone());
     let related = if details.related_videos.is_empty() {
         app_state.with_library(|library| {
             library
@@ -1850,12 +1854,15 @@ fn VideoDetailInner(id: String) -> Element {
     };
     let playlist_video = video.clone();
     let share_video = video.clone();
-    let channel_id = video.channel_id.clone();
     let open_channel_id = video.channel_id.clone();
-    let is_subscribed = channel
+    // The library first, for the same reason as `is_watched` above: it is what
+    // the button writes, while the details are fetched once and never hear of
+    // the change - and they can come from a cache that predates your follow.
+    let is_subscribed = library_channel
         .as_ref()
-        .map(|channel| channel.subscribed)
-        .unwrap_or(false);
+        .or(channel.as_ref())
+        .is_some_and(|channel| channel.subscribed);
+    let channel_to_toggle = channel.clone();
     let caption_tracks = details.captions.clone();
     let chapters = details.chapters.clone();
     let comments_disabled = details.comments.disabled;
@@ -1996,7 +2003,9 @@ fn VideoDetailInner(id: String) -> Element {
                                 color: if is_subscribed { Color::Neutral } else { Color::Accent },
                                 "aria-pressed": if is_subscribed { "true" } else { "false" },
                                 onclick: move |_| {
-                                    app_state.toggle_subscription(&channel_id);
+                                    if let Some(channel) = channel_to_toggle.as_ref() {
+                                        app_state.toggle_subscription_for(channel);
+                                    }
                                 },
                                 if is_subscribed { "Subscribed" } else { "Subscribe" }
                             }
