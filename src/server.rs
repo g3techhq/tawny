@@ -800,6 +800,86 @@ impl AppServerState {
             .collect())
     }
 
+    /// Whether this account follows one channel, and which uploads it wants.
+    ///
+    /// Anything shown as a Subscribe button asks this, not `channel.subscribed`:
+    /// that column means someone on the instance follows the channel - see
+    /// `refresh_channel_interest` - so it reads as subscribed to an account
+    /// that is not, and the other way round for details cached by another one.
+    async fn user_follows(
+        &self,
+        owner: &str,
+        channel_id: &str,
+    ) -> Result<Option<(bool, SubscriptionContent)>> {
+        if owner.is_empty() {
+            return Ok(None);
+        }
+        let rows: Vec<DbUserSubscription> = self
+            .db
+            .query(
+                "SELECT channel_id, subscribed, content FROM user_subscription WHERE owner = type::record($owner) AND channel_id = $channel_id LIMIT 1",
+            )
+            .bind(("owner", owner.to_string()))
+            .bind(("channel_id", channel_id.to_string()))
+            .await?
+            .check()?
+            .take(0)?;
+        Ok(rows.into_iter().next().map(|row| {
+            let content =
+                SubscriptionContent::from_storage(row.content.as_deref().unwrap_or("all"));
+            (row.subscribed, content)
+        }))
+    }
+
+    /// Details with the channel's follow state set for `owner`.
+    ///
+    /// The details cache is shared by every account and keyed by video alone,
+    /// so whatever follow state it holds belongs to whoever fetched it first -
+    /// and until now it was served as-is for two hours, and indefinitely as the
+    /// stale fallback. Applied to every copy on the way out, cached or fresh.
+    async fn with_owner_follow_state(
+        &self,
+        owner: &str,
+        mut details: VideoDetails,
+    ) -> Result<VideoDetails> {
+        if let Some(channel) = details.channel.as_mut() {
+            let (subscribed, content) = self
+                .user_follows(owner, &channel.id)
+                .await?
+                .unwrap_or((false, channel.subscription_content));
+            channel.subscribed = subscribed;
+            channel.subscription_content = content;
+        }
+        Ok(details)
+    }
+
+    /// Search results with every channel's follow state set for `owner`.
+    ///
+    /// Search is cached by query alone, and the channels in it carried the
+    /// instance-wide flag, which is not anyone's own. That mattered beyond the
+    /// button: the client adds a channel it has not seen to the library as it
+    /// arrives, flag included, so a wrong "subscribed" here became a follow.
+    async fn with_owner_follows_in_search(
+        &self,
+        owner: &str,
+        mut results: SearchResults,
+    ) -> Result<SearchResults> {
+        if results.channels.is_empty() {
+            return Ok(results);
+        }
+        let follows = self.user_subscriptions(owner).await?;
+        for channel in &mut results.channels {
+            match follows.get(&channel.id) {
+                Some((subscribed, content)) => {
+                    channel.subscribed = *subscribed;
+                    channel.subscription_content = *content;
+                }
+                None => channel.subscribed = false,
+            }
+        }
+        Ok(results)
+    }
+
     /// Where this account has reached in each video it has touched.
     async fn user_progress(&self, owner: &str) -> Result<HashMap<String, DbVideoProgress>> {
         if owner.is_empty() {
@@ -1805,20 +1885,60 @@ impl AppServerState {
         // Run both extractors together: rustypipe supplies the stream layout
         // (byte ranges, codecs, languages) and yt-dlp supplies URLs that are
         // not subject to the iOS client's 403 gate.
+        let started = std::time::Instant::now();
         let query = self.youtube.query();
-        let (player, ytdlp_formats) = tokio::join!(
+        let (player, mut ytdlp_formats) = tokio::join!(
             youtube_call(
                 query.player_from_clients(video_id, PLAYER_CLIENTS),
                 "extract YouTube player"
             ),
             self.ytdlp_formats(video_id),
         );
+        let extracted_at = started.elapsed();
 
         // yt-dlp owns the adaptive source. The extractor is consulted only for
         // what yt-dlp does not produce — the HLS manifest a live stream needs —
         // and as a fallback when yt-dlp itself came back empty.
-        let ytdlp_source = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await;
-        let reusable = ytdlp_source.is_some();
+        let mut ytdlp_source = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await;
+        let ranged_at = started.elapsed();
+        // Now and then yt-dlp hands out URLs that serve the first minute or so
+        // and then answer 403 to every later range: the video starts, plays its
+        // buffered head, and dies. Which extraction gets gated is luck - on
+        // 2026-09-24 the same long video came back gated 3 times in 18 tries,
+        // across both provider versions - so one more extraction usually cures
+        // it, and costs nothing when the first one was sound.
+        let mut ytdlp_verified = None;
+        if let Some(source) = ytdlp_source.as_ref() {
+            let sound = self.adaptive_tail_is_available(source).await;
+            ytdlp_verified = Some(sound);
+            if !sound {
+                eprintln!(
+                    "playback for {video_id}: yt-dlp URLs are gated past the head, extracting again"
+                );
+                let retried_formats = self.ytdlp_formats(video_id).await;
+                if let Some(retried) =
+                    ytdlp_playback_source(&self.http, video_id, &retried_formats).await
+                    && self.adaptive_tail_is_available(&retried).await
+                {
+                    ytdlp_source = Some(retried);
+                    ytdlp_formats = retried_formats;
+                    ytdlp_verified = Some(true);
+                }
+            }
+        }
+        let verified_at = started.elapsed();
+        // A session known to be gated is still handed to this player - its head
+        // plays, and the transport refreshes when it fails - but it is not kept
+        // for the next ask, which would otherwise inherit the same dead URLs for
+        // the whole session TTL.
+        let reusable = ytdlp_source.is_some() && ytdlp_verified != Some(false);
+        // Identifies the yt-dlp source after sorting, so its tail is not
+        // probed a second time below.
+        let verified_track_url = ytdlp_source
+            .as_ref()
+            .filter(|_| ytdlp_verified == Some(true))
+            .and_then(|source| source.tracks.first())
+            .map(|track| track.url.clone());
         if let Some(source) = ytdlp_source {
             eprintln!(
                 "playback for {video_id}: {} yt-dlp tracks, ranges derived locally",
@@ -1885,6 +2005,12 @@ impl AppServerState {
         }
 
         provider_sources.sort_by_key(playback_source_priority);
+        let primary_verified = verified_track_url.is_some()
+            && provider_sources
+                .first()
+                .and_then(|source| source.tracks.first())
+                .map(|track| &track.url)
+                == verified_track_url.as_ref();
 
         use futures_util::StreamExt;
 
@@ -1898,44 +2024,57 @@ impl AppServerState {
         //
         // Every source is probed at once, and the answer is in as soon as the
         // earliest source that answered has nothing still pending ahead of it:
-        // the usual case - the first source confirming - costs one round trip.
-        let promoted = tokio::time::timeout(Duration::from_secs(6), async {
-            let mut probes = provider_sources
-                .iter()
-                .enumerate()
-                .map(|(index, source)| async move {
-                    (index, self.adaptive_tail_is_available(source).await)
-                })
-                .collect::<futures_util::stream::FuturesUnordered<_>>();
-            let mut answers = vec![None; provider_sources.len()];
-            while let Some((index, available)) = probes.next().await {
-                answers[index] = Some(available);
-                for (index, answer) in answers.iter().enumerate() {
-                    match answer {
-                        Some(true) => return Some(index),
-                        Some(false) => continue,
-                        None => break,
+        // the usual case - the first source confirming - costs one round trip,
+        // and none at all when that source is the yt-dlp one verified above.
+        let promoted = if primary_verified {
+            Some(0)
+        } else {
+            tokio::time::timeout(Duration::from_secs(6), async {
+                let mut probes = provider_sources
+                    .iter()
+                    .enumerate()
+                    .map(|(index, source)| async move {
+                        (index, self.adaptive_tail_is_available(source).await)
+                    })
+                    .collect::<futures_util::stream::FuturesUnordered<_>>();
+                let mut answers = vec![None; provider_sources.len()];
+                while let Some((index, available)) = probes.next().await {
+                    answers[index] = Some(available);
+                    for (index, answer) in answers.iter().enumerate() {
+                        match answer {
+                            Some(true) => return Some(index),
+                            Some(false) => continue,
+                            None => break,
+                        }
                     }
                 }
-            }
-            None
-        })
-        .await
-        .unwrap_or(None);
+                None
+            })
+            .await
+            .unwrap_or(None)
+        };
         if let Some(index) = promoted.filter(|index| *index > 0) {
             let verified = provider_sources.remove(index);
             provider_sources.insert(0, verified);
         }
 
         if !provider_sources.is_empty() {
+            // Cumulative, so the slow phase is the one with the big step. This
+            // all runs before the first frame, and a slow start is otherwise
+            // impossible to attribute from the log.
             eprintln!(
-                "playback for {video_id}: {} sources, primary {:?}, tail probe {}",
+                "playback for {video_id}: {} sources, primary {:?}, tail probe {} \
+                 (extract {}ms, ranges {}ms, verify {}ms, total {}ms)",
                 provider_sources.len(),
                 provider_sources[0].protocol,
                 match promoted {
                     Some(_) => "confirmed a source",
                     None => "confirmed nothing (using priority order)",
                 },
+                extracted_at.as_millis(),
+                ranged_at.as_millis(),
+                verified_at.as_millis(),
+                started.elapsed().as_millis(),
             );
             let primary = provider_sources.remove(0);
             return Ok(ResolvedPlayback {
@@ -2374,6 +2513,13 @@ impl AppServerState {
     }
 
     pub async fn video_details(&self, owner: &str, video_id: &str) -> Result<VideoDetails> {
+        let details = self.video_details_for_anyone(owner, video_id).await?;
+        self.with_owner_follow_state(owner, details).await
+    }
+
+    /// The details any account would see. The follow state in them is not
+    /// this account's - [`Self::video_details`] sets that.
+    async fn video_details_for_anyone(&self, owner: &str, video_id: &str) -> Result<VideoDetails> {
         if let Some(cached) = self.read_video_details_cache(video_id, true).await? {
             return Ok(self.proxy_captions(cached).await);
         }
@@ -2605,8 +2751,15 @@ impl AppServerState {
             ),
         );
         if let Ok(videos_channel) = videos_result {
-            let subscribed = self.channel_is_subscribed(channel_id).await?;
-            let channel = rusty_channel_to_channel(&videos_channel, subscribed);
+            // This account's follow, not the instance's - see `user_follows`.
+            let follow = self.user_follows(owner, channel_id).await?;
+            let mut channel = rusty_channel_to_channel(
+                &videos_channel,
+                follow.is_some_and(|(subscribed, _)| subscribed),
+            );
+            if let Some((_, content)) = follow {
+                channel.subscription_content = content;
+            }
             let mut videos = rusty_page(
                 channel_id,
                 ChannelMediaTab::Videos,
@@ -2780,6 +2933,18 @@ impl AppServerState {
         query: &str,
         filter: &str,
     ) -> Result<SearchResults> {
+        let results = self.search_catalog_for_anyone(owner, query, filter).await?;
+        self.with_owner_follows_in_search(owner, results).await
+    }
+
+    /// Search as any account would see it; the follow state in it is set by
+    /// [`Self::search_catalog`].
+    async fn search_catalog_for_anyone(
+        &self,
+        owner: &str,
+        query: &str,
+        filter: &str,
+    ) -> Result<SearchResults> {
         let query = query.trim();
         if query.is_empty() {
             return Ok(SearchResults {
@@ -2813,7 +2978,10 @@ impl AppServerState {
 
         let result = match self.search_direct(query, filter).await {
             Ok(result) => result,
-            Err(_) => self.search_cached(owner, query, filter).await?,
+            // Never into the shared cache: this searches the asking account's
+            // own library, and cached under the query alone it was served to
+            // every other account that searched the same words.
+            Err(_) => return self.search_cached(owner, query, filter).await,
         };
 
         self.search_cache.write().await.insert(
@@ -2827,6 +2995,19 @@ impl AppServerState {
     }
 
     pub async fn search_page(
+        &self,
+        owner: &str,
+        query_text: &str,
+        filter: &str,
+        next_page: &str,
+    ) -> Result<SearchResults> {
+        let results = self
+            .search_page_for_anyone(query_text, filter, next_page)
+            .await?;
+        self.with_owner_follows_in_search(owner, results).await
+    }
+
+    async fn search_page_for_anyone(
         &self,
         query_text: &str,
         filter: &str,
@@ -4268,12 +4449,24 @@ async fn ytdlp_playback_source(
         return None;
     }
 
-    // Probed together rather than in sequence: one round trip per format is
-    // tolerable in parallel and ruinous serially.
+    // A few at a time, not all at once. Every format lives on the same
+    // googlevideo host, which speaks HTTP/1.1 only, so each probe in flight is
+    // its own connection - and opening two dozen at once gets connection
+    // attempts dropped, each one waiting out SYN retries (1s, 3s, 7s) before
+    // it gets through or times out. Measured 2026-09-24: all 25 at once took
+    // 10s every time; four at a time over reused connections took 0.1-0.5s.
+    //
+    // Boxed so the stream's type does not carry the closure: unboxed, it is
+    // not general enough to cross the `tokio::spawn` the resolve runs in.
+    use futures_util::StreamExt;
     let probes = candidates
         .iter()
-        .map(|(_, itag, _, url)| probe_segment_ranges(client, video_id, *itag, url));
-    let ranges = futures_util::future::join_all(probes).await;
+        .map(|(_, itag, _, url)| probe_segment_ranges(client, video_id, *itag, url).boxed())
+        .collect::<Vec<_>>();
+    let ranges = futures_util::stream::iter(probes)
+        .buffered(SEGMENT_PROBE_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
 
     let mut tracks = candidates
         .into_iter()
@@ -4334,6 +4527,11 @@ async fn ytdlp_playback_source(
     })
 }
 
+/// How many segment-range probes may be in flight at once. See
+/// `ytdlp_playback_source`: past about four, connection attempts start being
+/// dropped and the resolve waits whole seconds on SYN retries.
+const SEGMENT_PROBE_CONCURRENCY: usize = 4;
+
 /// Ranges keyed by video and itag.
 ///
 /// The URLs expire but the container layout does not, so a probe is paid for
@@ -4377,16 +4575,22 @@ async fn probe_segment_ranges(
     if let Some(cached) = cached_segment_ranges(video_id, itag) {
         return Some(cached);
     }
-    let response = client
-        .get(url)
-        .header(reqwest::header::RANGE, "bytes=0-32767")
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let head = response.bytes().await.ok()?;
+    // One format that stalls is dropped from the manifest rather than holding
+    // up the first frame for the client's whole timeout.
+    let head = tokio::time::timeout(Duration::from_secs(4), async {
+        let response = client
+            .get(url)
+            .header(reqwest::header::RANGE, "bytes=0-32767")
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.bytes().await.ok()
+    })
+    .await
+    .ok()??;
     let ranges = segment_ranges(&head)?;
     store_segment_ranges(video_id, itag, ranges);
     Some(ranges)
@@ -5799,6 +6003,117 @@ mod tests {
         // Both gone, and only then does the instance stop caring.
         subscribe(second.clone(), false).await;
         assert!(!state.channel_is_subscribed(&channel_id).await.unwrap());
+    }
+
+    /// Video details are cached for every account at once, so the follow
+    /// state inside them is whoever fetched them first. Each account has to
+    /// see its own.
+    #[tokio::test]
+    async fn video_details_carry_each_accounts_own_follow_state() {
+        let state = AppServerState::initialize().await.unwrap();
+        let follower = test_owner(&state).await;
+        let other = test_owner(&state).await;
+
+        let mut snapshot = state.library_snapshot(&follower).await.unwrap();
+        snapshot.channels[0].subscribed = true;
+        snapshot.cache_revision += 1;
+        let synced = state.sync_library(&follower, snapshot).await.unwrap();
+        let channel = synced.channels[0].clone();
+        let video = synced
+            .videos
+            .iter()
+            .find(|video| video.channel_id == channel.id)
+            .cloned()
+            .unwrap_or_else(|| synced.videos[0].clone());
+        use crate::models::{Channel, CommentsPage, VideoDetails};
+        let cached_with = |subscribed: bool| VideoDetails {
+            video: video.clone(),
+            channel: Some(Channel {
+                subscribed,
+                ..channel.clone()
+            }),
+            description: String::new(),
+            like_count: 0,
+            dislike_count: 0,
+            captions: Vec::new(),
+            chapters: Vec::new(),
+            preview_frames: None,
+            related_videos: Vec::new(),
+            comments: CommentsPage::default(),
+            remote_available: true,
+        };
+        let followed = |details: VideoDetails| details.channel.unwrap().subscribed;
+
+        // Cached by the follower, read by someone who does not follow.
+        let seen = state
+            .with_owner_follow_state(&other, cached_with(true))
+            .await
+            .unwrap();
+        assert!(!followed(seen), "another account's follow leaked through");
+
+        // Cached before following - or by the other account - read by the
+        // follower: the reported bug.
+        let seen = state
+            .with_owner_follow_state(&follower, cached_with(false))
+            .await
+            .unwrap();
+        assert!(followed(seen), "a follower was shown Subscribe");
+    }
+
+    /// Search is cached by query for every account, and a channel in it that
+    /// the client has not seen is added to the library flag and all - so a
+    /// wrong "subscribed" here is a follow nobody asked for.
+    #[tokio::test]
+    async fn search_results_carry_each_accounts_own_follow_state() {
+        use crate::models::{Channel, SearchResults};
+        let state = AppServerState::initialize().await.unwrap();
+        let follower = test_owner(&state).await;
+        let other = test_owner(&state).await;
+
+        let mut snapshot = state.library_snapshot(&follower).await.unwrap();
+        snapshot.channels[0].subscribed = true;
+        snapshot.cache_revision += 1;
+        let synced = state.sync_library(&follower, snapshot).await.unwrap();
+        let followed_channel = synced.channels[0].clone();
+        let unfollowed_channel = synced.channels[1].clone();
+        // As the shared cache might hold them: flags from the instance, or
+        // from whichever account searched first.
+        let cached = SearchResults {
+            query: "anything".into(),
+            videos: Vec::new(),
+            channels: vec![
+                Channel {
+                    subscribed: false,
+                    ..followed_channel.clone()
+                },
+                Channel {
+                    subscribed: true,
+                    ..unfollowed_channel.clone()
+                },
+            ],
+            suggestion: None,
+            remote_available: true,
+            next_page: None,
+        };
+        let flags = |results: SearchResults| {
+            results
+                .channels
+                .into_iter()
+                .map(|channel| channel.subscribed)
+                .collect::<Vec<_>>()
+        };
+
+        let mine = state
+            .with_owner_follows_in_search(&follower, cached.clone())
+            .await
+            .unwrap();
+        assert_eq!(flags(mine), vec![true, false]);
+
+        let theirs = state
+            .with_owner_follows_in_search(&other, cached)
+            .await
+            .unwrap();
+        assert_eq!(flags(theirs), vec![false, false]);
     }
 
     #[tokio::test]

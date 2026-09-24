@@ -969,6 +969,16 @@ textarea {
   opacity: 1;
 }
 
+/* Autoplay is on its way. The spinner stands in for a Play button that playback
+   would contradict a moment later, including when a tap raises the bar. */
+.player-starting .player-buffering-indicator {
+  opacity: 1;
+}
+
+.player-starting .player-play-button {
+  visibility: hidden;
+}
+
 .player-buffering-ring {
   width: 2.4rem;
   height: 2.4rem;

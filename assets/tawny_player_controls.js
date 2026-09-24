@@ -114,6 +114,13 @@
     const sponsorHandled = new Set();
     let previewFrames = null;
     let playbackIntent = !video.paused && !video.ended;
+    // Between attaching and the picture actually moving, the element is
+    // paused only because the transport has not called play() yet. Reading
+    // that as a pause put the bar up with a Play button over the first frame,
+    // and autoplay then contradicted it a second later. Until playback has
+    // really started the stage shows the buffering spinner instead.
+    let starting = video.autoplay && video.paused && !video.ended;
+    let startingFrom = null;
     let playbackRecoveryTimer = null;
     let pipTransition = false;
     let pipTransitionTimer = null;
@@ -157,19 +164,25 @@
     // aim at and no reason to wait the full dwell.
     const CONTROLS_LEAVE_HIDE_MS = 450;
 
+    function hideControls() {
+      controls.classList.remove("controls-visible");
+      root.classList.remove("player-controls-visible");
+    }
+
     function showControls(permanent, delay) {
       controls.classList.add("controls-visible");
       root.classList.add("player-controls-visible");
       if (hideTimer) clearTimeout(hideTimer);
       hideTimer = null;
-      if (permanent || video.paused) return;
+      // Raised by a tap while starting, the bar still goes away on its own:
+      // the pause that would otherwise pin it is not a real one.
+      if (permanent || (video.paused && !starting)) return;
       // An open menu holds the controls up - but only while it is open. Closing
       // it has to re-arm this, or the bar stays for the rest of the video.
       if (optionsMenu && !optionsMenu.hidden) return;
       hideTimer = setTimeout(() => {
         if (!scrubbing && !timelineHovering && (optionsMenu?.hidden ?? true)) {
-          controls.classList.remove("controls-visible");
-          root.classList.remove("player-controls-visible");
+          hideControls();
         }
       }, delay ?? CONTROLS_HIDE_MS);
     }
@@ -178,10 +191,32 @@
       showControls(false);
     }
 
+    function setStarting(value) {
+      starting = value;
+      startingFrom = null;
+      root.classList.toggle("player-starting", value);
+    }
+
+    // Over once the playhead has moved on its own. `playing` alone is too
+    // early: Shaka holds the rate at zero until its rebuffering goal is met,
+    // and the element reports playing throughout.
+    function trackStart() {
+      if (!starting || video.paused) return;
+      if (startingFrom === null) {
+        startingFrom = video.currentTime;
+      } else if (video.currentTime - startingFrom > 0.05) {
+        // The bar stays down: raising it now would put the controls over a
+        // video that has only just started, which is the flash this avoids.
+        // A bar a tap raised while starting is already on its hide timer.
+        setStarting(false);
+      }
+    }
+
     function updatePlaybackState() {
       const playing = !video.paused && !video.ended;
       controls.classList.toggle("is-playing", playing);
       playButton?.setAttribute("aria-label", playing ? "Pause" : "Play");
+      if (starting && !video.ended) return;
       if (video.paused || video.ended) showControls(true);
       else scheduleHide();
     }
@@ -206,13 +241,19 @@
     function updateTimeline() {
       const length = Number.isFinite(video.duration) ? video.duration : 0;
       const position = Number.isFinite(video.currentTime) ? video.currentTime : 0;
-      if (currentTime) currentTime.textContent = formatTime(position);
+      // Compared first: assigning the same text still replaces the node, and
+      // this runs every frame the bar is up.
+      const positionText = formatTime(position);
+      if (currentTime && currentTime.textContent !== positionText) {
+        currentTime.textContent = positionText;
+      }
       updateChapterLabel(position);
       // The markers are appended imperatively into an element the framework
       // owns, so any re-render of that subtree silently drops them. Rebuilding
       // when they have gone missing is what keeps them on screen.
       applySponsorSegments();
-      if (duration) duration.textContent = formatTime(length);
+      const lengthText = formatTime(length);
+      if (duration && duration.textContent !== lengthText) duration.textContent = lengthText;
       if (!progress || scrubbing) return;
       const played = length > 0 ? Math.min(100, (position / length) * 100) : 0;
       const buffered = length > 0 ? Math.min(100, (bufferedEnd() / length) * 100) : 0;
@@ -626,6 +667,9 @@
     async function runAction(action) {
       switch (action) {
         case "toggle":
+          // Whichever way it goes, this is now the viewer's decision rather
+          // than autoplay's.
+          if (starting) setStarting(false);
           if (video.paused) {
             setPlaybackIntent(true);
             await video.play().catch(() => {});
@@ -1109,7 +1153,15 @@
       }
       root.querySelector("[data-player-native-playback-stop]")?.click();
     });
+    listen(video, "timeupdate", trackStart);
+    // The transport's play() was refused - a browser that wants a gesture
+    // first. The Play button is then exactly what the viewer needs.
+    listen(video, "tawnyautoplayblocked", () => {
+      setStarting(false);
+      updatePlaybackState();
+    });
     listen(video, "ended", () => {
+      setStarting(false);
       setPlaybackIntent(false);
       updatePlaybackState();
       root.querySelector("[data-player-native-playback-stop]")?.click();
@@ -1243,14 +1295,29 @@
 
     root.tabIndex = 0;
     setPlaybackIntent(playbackIntent);
+    // The markup renders the bar raised, which is right for everything but a
+    // video about to start on its own.
+    setStarting(starting);
+    if (starting) hideControls();
     updatePlaybackState();
     updateTimeline();
     updateSpeed();
     updateMuted();
     updateCaptions();
     setTimeout(refreshQualities, 0);
+    // Drawing the timeline writes text, measures the track and rebuilds its
+    // gradient - every frame, which is only worth it while there is a bar to
+    // see. Hidden, mini, or mid route transition, it was pure main-thread cost,
+    // and during a transition it re-rendered the very player the morph was
+    // painting live. Segment skips still run every frame regardless: a skip
+    // cannot wait for someone to look at the bar.
+    const timelineOnScreen = () =>
+      (scrubbing || controls.classList.contains("controls-visible")) &&
+      !root.parentElement?.classList.contains("mini") &&
+      !document.documentElement.dataset.routeTransition;
     const animateTimeline = () => {
-      updateTimeline();
+      if (timelineOnScreen()) updateTimeline();
+      else applySponsorSegments();
       animationFrame = requestAnimationFrame(animateTimeline);
     };
     animationFrame = requestAnimationFrame(animateTimeline);

@@ -206,6 +206,19 @@ impl AppState {
     /// where losing the position would actually matter. A whole second of
     /// change is the smallest step worth a re-render.
     pub fn record_progress(mut self, video_id: &str, seconds: u64) -> bool {
+        // Checked through a peek first. Taking the write guard notifies every
+        // subscriber when it drops, changed or not - and the library's
+        // subscribers include the effect that persists the whole cache.
+        let unchanged = self
+            .library
+            .peek()
+            .videos
+            .iter()
+            .find(|video| video.id == video_id)
+            .is_none_or(|video| video.progress_seconds == seconds);
+        if unchanged {
+            return false;
+        }
         {
             let mut library = self.library.write();
             let Some(video) = library.videos.iter_mut().find(|video| video.id == video_id) else {
@@ -411,6 +424,26 @@ impl AppState {
         drop(library);
         self.sync_in_background();
         Some(subscribed)
+    }
+
+    /// [`Self::toggle_subscription`] for a channel the library may not hold
+    /// yet - one met through a video opened from search or a related list.
+    /// It is added unfollowed first, so the toggle always has something to
+    /// flip rather than the button silently doing nothing.
+    pub fn toggle_subscription_for(mut self, channel: &Channel) -> bool {
+        let known = self
+            .library
+            .peek()
+            .channels
+            .iter()
+            .any(|known| known.id == channel.id);
+        if !known {
+            self.library.write().channels.push(Channel {
+                subscribed: false,
+                ..channel.clone()
+            });
+        }
+        self.toggle_subscription(&channel.id).unwrap_or(false)
     }
 
     /// Narrow (or widen) which of a channel's uploads reach the feed. Leaves
@@ -1234,14 +1267,19 @@ impl AppState {
     }
 
     pub fn record_history(mut self, video_id: &str) {
-        let mut library = self.library.write();
-        if library
+        // A peek, not the write guard: see `record_progress`. Reopening the
+        // video already at the top is the usual case - expanding the mini
+        // player - and it landed a full re-render and cache write mid-morph.
+        if self
+            .library
+            .peek()
             .history
             .first()
             .is_some_and(|entry| entry.video_id == video_id && entry.played_at == "Just now")
         {
             return;
         }
+        let mut library = self.library.write();
         library.history.retain(|entry| entry.video_id != video_id);
         library.history.insert(
             0,
@@ -1296,8 +1334,11 @@ pub fn AppStateProvider(children: Element) -> Element {
     // account now and refuses an unauthenticated caller, so a sync that starts
     // first gets a 500 and the app silently keeps its cached copy.
     let session = use_session_provider();
-    let mut library = use_persistent_signal("tawny-library-v1", LibrarySnapshot::demo);
-    let settings = use_persistent_signal("tawny-settings-v1", AppSettings::default);
+    // The library is megabytes and changes every few seconds while a video
+    // plays, so its writes are spaced out; the server holds anything that
+    // matters in between. Settings are small and changed by hand.
+    let mut library = use_persistent_signal("tawny-library-v1", 10_000, LibrarySnapshot::demo);
+    let settings = use_persistent_signal("tawny-settings-v1", 250, AppSettings::default);
     let mut initial_sync_started = use_signal(|| false);
     let mut initial_syncing = use_signal(|| false);
 
