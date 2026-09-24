@@ -1119,6 +1119,18 @@
         controls.querySelector("[data-player-autoplay-next]")?.click();
       }
     });
+    // The system media controls extrapolate position from the last report, so
+    // a seek or speed change has to be reported too. Uses the intent rather
+    // than `paused`, which Shaka flips briefly while buffering a seek.
+    const reportPlaybackState = () => {
+      const bridge = playbackIntent
+        ? "[data-player-native-playback-start]"
+        : "[data-player-native-playback-stop]";
+      root.querySelector(bridge)?.click();
+    };
+    listen(video, "seeked", reportPlaybackState);
+    listen(video, "ratechange", reportPlaybackState);
+    listen(video, "durationchange", reportPlaybackState);
     listen(window, "tawnynativepiprequest", beginPipTransition);
     listen(window, "tawnynativepictureinpicturechange", () => {
       // Entering and leaving PiP can each pause the WebView after the native

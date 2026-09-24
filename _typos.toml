@@ -11,6 +11,8 @@ extend-exclude = [
 [default.extend-words]
 dioxus = "dioxus"
 partee = "partee"
+# The media element event, not a misspelling of "sought".
+seeked = "seeked"
 surreal = "surreal"
 surrealdb = "surrealdb"
 tourney = "tourney"

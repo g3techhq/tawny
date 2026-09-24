@@ -3291,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "g3-native-plugins"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "cfg-if",
  "dioxus",
@@ -3328,7 +3328,7 @@ dependencies = [
 
 [[package]]
 name = "g3-ui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "cfg-if",
  "dioxus",
@@ -6325,7 +6325,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

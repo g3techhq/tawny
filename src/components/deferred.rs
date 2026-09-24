@@ -26,3 +26,31 @@ pub fn use_after_first_paint() -> ReadSignal<bool> {
     });
     painted.into()
 }
+
+/// False until the route transition that brought this page in has finished.
+///
+/// Anything that re-renders the page while it is sliding in - a request
+/// landing, a library write - runs on the main thread the animation needs, and
+/// shows as the slide stuttering. Work that can wait a moment waits on this.
+pub fn use_after_route_transition() -> ReadSignal<bool> {
+    let mut settled = use_signal(|| false);
+    use_effect(move || {
+        spawn(async move {
+            // Frames do not tick inside a view transition's update callback, but
+            // they do once its animations run, so this settles when they end.
+            // The timer is a ceiling for a webview that has stopped drawing.
+            let mut eval = document::eval(
+                "let sent = false;
+                const done = () => { if (!sent) { sent = true; dioxus.send(true); } };
+                setTimeout(done, 1500);
+                const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                while (!sent && document.documentElement.dataset.routeTransition) await frame();
+                if (!sent) await frame();
+                done();",
+            );
+            let _ = eval.recv::<bool>().await;
+            settled.set(true);
+        });
+    });
+    settled.into()
+}

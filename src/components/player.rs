@@ -825,6 +825,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                 class: if video.audio_only { "persistent-player-stage audio-only" } else { "persistent-player-stage" },
                 "data-video-id": "{video.id}",
                 "data-thumbnail": "{video.thumbnail_url}",
+                // Read by the Android media plugin for the system player.
+                "data-title": "{video.title}",
+                "data-channel": "{video.channel_name}",
                 // Feeds the audio-only artwork above; a CSS rule cannot reach the
                 // thumbnail on its own.
                 style: "--player-artwork: url('{video.thumbnail_url}');",
