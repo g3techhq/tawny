@@ -195,6 +195,15 @@ fn NativePlayerBridges(title: String) -> Element {
     rsx! {}
 }
 
+/// The server's message for a failed resolve, without the framework's
+/// "error running server function" wrapping.
+fn resolve_error_message(error: &dioxus::CapturedError) -> String {
+    match error.0.downcast_ref::<ServerFnError>() {
+        Some(ServerFnError::ServerError { message, .. }) => message.clone(),
+        _ => error.to_string(),
+    }
+}
+
 /// Pull the transport's own account of why playback stopped.
 ///
 /// `TawnyTransport.events` outlives the media element, so this stays readable
@@ -684,6 +693,15 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         .filter(|(id, _)| *id == video.id)
         .and_then(|(_, result)| result.as_ref().ok())
         .cloned();
+    // Why the server found nothing to play, in its own words - a stopped
+    // yt-dlp sidecar, for one - rather than a generic "check the log".
+    let resolve_error = playback_resource
+        .read()
+        .as_ref()
+        .and_then(|value| value.as_ref())
+        .filter(|(id, _)| *id == video.id)
+        .and_then(|(_, result)| result.as_ref().err())
+        .map(resolve_error_message);
     let fallback_url = playback_session
         .as_ref()
         .map(|session| session.fallback_url.clone())
@@ -1261,7 +1279,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     }
                 } else {
                     div { class: "player-stage-status player-stage-error",
-                        if nothing_extracted {
+                        if let Some(reason) = resolve_error.clone() {
+                            p { "{reason}" }
+                        } else if nothing_extracted {
                             p { "No playable stream could be extracted for this video. Check the server log for the extraction error." }
                         } else {
                             p { "Streams were found but playback failed." }

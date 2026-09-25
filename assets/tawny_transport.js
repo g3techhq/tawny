@@ -313,7 +313,11 @@
       baseDelay: 500,
       backoffFactor: 2,
       fuzzFactor: 0.35,
-      timeout: 15000,
+      // No cap on the whole request. A 4K segment is ~8 MB, so a 15 s cap
+      // aborted any download under ~4.3 Mbit/s even while bytes were still
+      // arriving, then retried the same segment from zero. Wedged requests are
+      // caught by the stall and connection timeouts instead.
+      timeout: 0,
       stallTimeout: 5000,
       connectionTimeout: 8000,
     };
