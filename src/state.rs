@@ -53,6 +53,9 @@ pub struct AppState {
     pub playlist_picker_video: Signal<Option<Video>>,
     pub playlist_picker_open: Signal<bool>,
     pub video_actions_video: Signal<Option<Video>>,
+    /// The playlist the actions sheet was opened from, so it can offer to
+    /// take the video out of it.
+    pub video_actions_playlist: Signal<Option<String>>,
     pub video_actions_open: Signal<bool>,
     pub share_video: Signal<Option<Video>>,
     pub share_open: Signal<bool>,
@@ -1371,6 +1374,7 @@ pub fn AppStateProvider(children: Element) -> Element {
         playlist_picker_video: Signal::new(None),
         playlist_picker_open: Signal::new(false),
         video_actions_video: Signal::new(None),
+        video_actions_playlist: Signal::new(None),
         video_actions_open: Signal::new(false),
         share_video: Signal::new(None),
         share_open: Signal::new(false),

@@ -116,7 +116,8 @@ textarea {
   white-space: nowrap;
 }
 
-.video-card-edge-action {
+.video-card-edge-action,
+.video-card-remove-desktop {
   display: none;
 }
 
@@ -202,8 +203,16 @@ textarea {
     outline-offset: -2px;
   }
 
-  .video-card-remove {
-    z-index: 6;
+  .video-card-remove-touch {
+    display: none;
+  }
+
+  .video-card-remove-desktop {
+    position: absolute;
+    z-index: 5;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: block;
   }
 }
 

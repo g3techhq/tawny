@@ -15,6 +15,11 @@ mod state;
 mod subscriptions_io;
 
 use app::App;
+// Both features re-export the same `dioxus-desktop` crate.
+#[cfg(all(feature = "desktop", not(feature = "mobile")))]
+use dioxus::desktop::Config as NativeConfig;
+#[cfg(feature = "mobile")]
+use dioxus::mobile::Config as NativeConfig;
 
 #[cfg(feature = "server")]
 fn main() {
@@ -94,5 +99,10 @@ fn main() {
     // its session. See `config` for why the URL cannot come from the usual
     // persistence helper.
     config::install();
+    #[cfg(any(feature = "desktop", feature = "mobile"))]
+    dioxus::LaunchBuilder::new()
+        .with_cfg(NativeConfig::new().with_custom_head(app::native_head()))
+        .launch(App);
+    #[cfg(not(any(feature = "desktop", feature = "mobile")))]
     dioxus::launch(App);
 }

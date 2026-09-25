@@ -1,6 +1,6 @@
 use crate::state::{AppState, PlaylistSave};
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{Check, Copy, ListPlus, Play, Plus, Rows3, Share2};
+use dioxus_icons::lucide::{Check, Copy, ListPlus, Play, Plus, Rows3, Share2, Trash2};
 use g3_ui::{
     BottomSheet, Button, ButtonExpand, ButtonFill, Color, Img, Input, Item, List, ListLines,
     ListVariant, Modal, Space, Stack, StackAlign, Text, TextTone, TextVariant, Toggle,
@@ -63,6 +63,18 @@ pub fn AppOverlays() -> Element {
                     let save_video = video.clone();
                     let watched_id = video.id.clone();
                     let share_video = video.clone();
+                    let remove_id = video.id.clone();
+                    // Only offered when the sheet was opened from a playlist
+                    // the video is still in.
+                    let remove_from = (app_state.video_actions_playlist)().and_then(|playlist_id| {
+                        app_state.with_library(|library| {
+                            library
+                                .playlists
+                                .iter()
+                                .find(|playlist| playlist.id == playlist_id && playlist.video_ids.contains(&video.id))
+                                .map(|playlist| (playlist.id.clone(), playlist.name.clone()))
+                        })
+                    });
                     let is_queued = app_state.with_library(|library| library.queue.iter().any(|id| id == &video.id));
                     let is_watched = video.watched;
                     rsx! {
@@ -129,6 +141,21 @@ pub fn AppOverlays() -> Element {
                                         app_state.video_actions_open.set(false);
                                         app_state.open_share(share_video.clone());
                                     },
+                                }
+                                if let Some((playlist_id, playlist_name)) = remove_from {
+                                    Item {
+                                        start: rsx! {
+                                            span { class: "flex text-[var(--g3-color-danger)]", Trash2 { size: 18 } }
+                                        },
+                                        label: "Remove from playlist",
+                                        description: "{playlist_name}",
+                                        onclick: move |_| {
+                                            app_state.video_actions_open.set(false);
+                                            if app_state.remove_from_playlist(&remove_id, &playlist_id) {
+                                                app_state.show_toast(format!("Removed from {playlist_name}"), Color::Neutral);
+                                            }
+                                        },
+                                    }
                                 }
                             }
                         }
