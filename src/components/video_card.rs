@@ -84,8 +84,8 @@ pub fn VideoCard(
     video: Video,
     /// Set when this card is one entry of a playlist. Opening it then hands the
     /// playlist to the queue as a run, so autoplay and the player's arrows walk
-    /// the playlist rather than stopping at this one video. The card also
-    /// offers to remove the video from it.
+    /// the playlist rather than stopping at this one video. The card, and its
+    /// menu, also offer to remove the video from it.
     playlist_id: Option<String>,
     /// Draw the thumbnail portrait, for Shorts.
     short: Option<bool>,
@@ -129,8 +129,10 @@ pub fn VideoCard(
     };
     let open_menu = {
         let video = video.clone();
+        let playlist_id = playlist_id.clone();
         move |_| {
             app_state.video_actions_video.set(Some(video.clone()));
+            app_state.video_actions_playlist.set(playlist_id.clone());
             app_state.video_actions_open.set(true);
         }
     };
@@ -142,6 +144,7 @@ pub fn VideoCard(
             }
         }
     });
+    let desktop_remove = remove.clone();
     let start_id = video.id.clone();
     let end_id = video.id.clone();
     let desktop_start_id = video.id.clone();
@@ -215,8 +218,9 @@ pub fn VideoCard(
                                 label: "Watched {progress:.0}%",
                             }
                         }
+                            // Rides along with the card as it is swiped.
                             if let Some(remove) = remove {
-                                div { class: "video-card-remove absolute top-2 right-2",
+                                div { class: "video-card-remove video-card-remove-touch absolute top-2 right-2",
                                     Button {
                                         size: ButtonSize::Sm,
                                         color: Color::Neutral,
@@ -271,6 +275,20 @@ pub fn VideoCard(
                 aria_label: "{end_action}",
                 onclick: move |_| app_state.run_swipe_action(&desktop_end_id, false),
                 {swipe_icon(end_kind, 24)}
+            }
+            // On a mouse the end edge action covers the thumbnail's right
+            // side, and the swipe layer underneath can't be lifted over it,
+            // so this copy sits beside the edge actions, above them.
+            if let Some(remove) = desktop_remove {
+                div { class: "video-card-remove video-card-remove-desktop",
+                    Button {
+                        size: ButtonSize::Sm,
+                        color: Color::Neutral,
+                        aria_label: "Remove from playlist",
+                        onclick: remove,
+                        Trash2 { size: 15 }
+                    }
+                }
             }
         }
     }
