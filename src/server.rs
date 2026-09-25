@@ -285,6 +285,12 @@ struct YtdlpFormat {
     language: Option<String>,
     #[serde(default)]
     has_drm: Option<bool>,
+    #[serde(default)]
+    protocol: Option<String>,
+    /// The master playlist an HLS format belongs to. Every m3u8 format of one
+    /// extraction shares it.
+    #[serde(default)]
+    manifest_url: Option<String>,
     /// Filled in from the dump's top-level duration, which is where yt-dlp
     /// reports it: the per-format entries carry none, and a DASH manifest
     /// without one presents as a zero-length video.
@@ -1944,6 +1950,9 @@ impl AppServerState {
                 "playback for {video_id}: {} yt-dlp tracks, ranges derived locally",
                 source.tracks.len()
             );
+            provider_sources.push(source);
+        } else if let Some(source) = ytdlp_hls_source(&ytdlp_formats) {
+            eprintln!("playback for {video_id}: yt-dlp produced no DASH ladder, using its HLS");
             provider_sources.push(source);
         }
 
@@ -4527,6 +4536,37 @@ async fn ytdlp_playback_source(
     })
 }
 
+/// The HLS master playlist yt-dlp found, as a source of its own.
+///
+/// Some extractions come back with no DASH formats at all, only the m3u8
+/// ladder (the Safari web client's). Its itags (229-234, 269-270, 602-625)
+/// match nothing the other extractor lists, so without this the resolve fell
+/// through to that extractor's gated URLs: playback started, then stalled on a
+/// 403 at about 1:09. The HLS segments are not gated - a 1080p variant of a
+/// 40-minute video was fetched at its middle and end with no 403 on
+/// 2026-09-24 - so this is the one to play when the DASH ladder is missing.
+fn ytdlp_hls_source(formats: &[YtdlpFormat]) -> Option<PlaybackSource> {
+    let manifest = formats
+        .iter()
+        .filter(|format| {
+            format
+                .protocol
+                .as_deref()
+                .is_some_and(|protocol| protocol.starts_with("m3u8"))
+        })
+        .find_map(|format| format.manifest_url.as_deref().filter(|url| !url.is_empty()))?;
+    Some(PlaybackSource {
+        protocol: PlaybackProtocol::Hls,
+        url: manifest.to_string(),
+        mime_type: Some("application/vnd.apple.mpegurl".into()),
+        po_token: None,
+        expires_at: None,
+        quality_label: Some("Adaptive HLS".into()),
+        request_headers: Vec::new(),
+        tracks: Vec::new(),
+    })
+}
+
 /// How many segment-range probes may be in flight at once. See
 /// `ytdlp_playback_source`: past about four, connection attempts start being
 /// dropped and the resolve waits whole seconds on SYN retries.
@@ -5382,7 +5422,7 @@ mod tests {
         AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters, health,
         mp4_segment_ranges, parse_youtube_feed, playback_proxy_options, reconciliation_limit,
         segment_ranges, sniff_media_type, url_path_ends_with, video_published_epoch,
-        webm_segment_ranges, websub_channel_from_topic, ytdlp_po_provider_args,
+        webm_segment_ranges, websub_channel_from_topic, ytdlp_hls_source, ytdlp_po_provider_args,
         ytdlp_service_channel_shorts_url, ytdlp_service_video_url,
     };
     use crate::models::PlaybackProtocol;
@@ -5477,6 +5517,35 @@ mod tests {
             "http://yt-dlp:8080/base/v1/videos/aNXB-8Aqt88"
         );
         assert!(ytdlp_service_video_url("not a URL", "aNXB-8Aqt88").is_none());
+    }
+
+    #[test]
+    fn falls_back_to_ytdlp_hls_master_playlist() {
+        let dump = serde_json::json!({
+            "duration": 60.0,
+            "formats": [
+                {"format_id": "sb0", "protocol": "mhtml", "url": "https://i.ytimg.com/sb"},
+                {
+                    "format_id": "232",
+                    "protocol": "m3u8_native",
+                    "url": "https://manifest.googlevideo.com/api/manifest/hls_playlist/itag/232/index.m3u8",
+                    "manifest_url": "https://manifest.googlevideo.com/api/manifest/hls_variant/file/index.m3u8"
+                }
+            ]
+        });
+        let formats = super::formats_from_ytdlp_dump(serde_json::from_value(dump).unwrap());
+        let source = ytdlp_hls_source(&formats).expect("an HLS source");
+        assert_eq!(source.protocol, PlaybackProtocol::Hls);
+        assert_eq!(
+            source.url,
+            "https://manifest.googlevideo.com/api/manifest/hls_variant/file/index.m3u8"
+        );
+
+        let dash_only = serde_json::json!({
+            "formats": [{"format_id": "140", "protocol": "https", "url": "https://rr1.googlevideo.com/videoplayback"}]
+        });
+        let formats = super::formats_from_ytdlp_dump(serde_json::from_value(dash_only).unwrap());
+        assert!(ytdlp_hls_source(&formats).is_none());
     }
 
     #[test]
