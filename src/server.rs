@@ -1702,48 +1702,49 @@ impl AppServerState {
     /// `filesize` is compared per itag so a mismatch is skipped rather than
     /// producing a manifest whose ranges point into the wrong bytes.
     /// Every format yt-dlp can see, which is the whole basis of playback now.
-    async fn ytdlp_service_formats(&self, video_id: &str) -> Option<Vec<YtdlpFormat>> {
-        let service_url = self.ytdlp_service_url.as_deref()?;
-        let url = ytdlp_service_video_url(service_url, video_id)?;
-        let response = match self.ytdlp_http.get(url).send().await {
-            Ok(response) => response,
-            Err(error) => {
-                eprintln!("yt-dlp service is unavailable for {video_id}: {error}");
-                return None;
-            }
-        };
+    async fn ytdlp_service_formats(
+        &self,
+        service_url: &str,
+        video_id: &str,
+    ) -> std::result::Result<Vec<YtdlpFormat>, String> {
+        let url = ytdlp_service_video_url(service_url, video_id)
+            .ok_or_else(|| format!("the yt-dlp service URL {service_url} is invalid"))?;
+        let response = self.ytdlp_http.get(url).send().await.map_err(|error| {
+            format!("the yt-dlp service at {service_url} is unreachable ({error})")
+        })?;
         if !response.status().is_success() {
-            eprintln!(
-                "yt-dlp service failed for {video_id} with status {}",
+            return Err(format!(
+                "the yt-dlp service answered {} for this video",
                 response.status()
-            );
-            return None;
+            ));
         }
-        let bytes = match response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                eprintln!("could not read yt-dlp service output for {video_id}: {error}");
-                return None;
-            }
-        };
-        match serde_json::from_slice::<YtdlpDump>(&bytes) {
-            Ok(dump) => Some(formats_from_ytdlp_dump(dump)),
-            Err(error) => {
-                eprintln!("could not parse yt-dlp service output for {video_id}: {error}");
-                None
-            }
-        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| format!("the yt-dlp service's answer could not be read ({error})"))?;
+        serde_json::from_slice::<YtdlpDump>(&bytes)
+            .map(formats_from_ytdlp_dump)
+            .map_err(|error| format!("the yt-dlp service's answer could not be parsed ({error})"))
     }
 
-    async fn ytdlp_formats(&self, video_id: &str) -> Vec<YtdlpFormat> {
-        if self.ytdlp_service_url.is_some() {
-            return self
-                .ytdlp_service_formats(video_id)
-                .await
-                .unwrap_or_default();
+    /// Every format yt-dlp found, or why there are none. The reason is shown
+    /// to the viewer, so it names the cause rather than the symptom.
+    async fn ytdlp_formats(&self, video_id: &str) -> std::result::Result<Vec<YtdlpFormat>, String> {
+        let formats = self.run_ytdlp(video_id).await;
+        if let Err(reason) = &formats {
+            eprintln!("yt-dlp gave no formats for {video_id}: {reason}");
+        }
+        formats
+    }
+
+    async fn run_ytdlp(&self, video_id: &str) -> std::result::Result<Vec<YtdlpFormat>, String> {
+        if let Some(service_url) = self.ytdlp_service_url.as_deref() {
+            return self.ytdlp_service_formats(service_url, video_id).await;
         }
         let Some(binary) = self.ytdlp_bin.as_ref() else {
-            return Vec::new();
+            return Err(
+                "no yt-dlp is configured (set TAWNY_YTDLP_SERVICE_URL or TAWNY_YTDLP_BIN)".into(),
+            );
         };
         let mut command = tokio::process::Command::new(binary);
         command.args([
@@ -1760,29 +1761,17 @@ impl AppServerState {
         let output = match tokio::time::timeout(Duration::from_secs(30), output).await {
             Ok(Ok(output)) if output.status.success() => output,
             Ok(Ok(output)) => {
-                eprintln!(
-                    "yt-dlp failed for {video_id}: {}",
+                return Err(format!(
+                    "yt-dlp failed: {}",
                     String::from_utf8_lossy(&output.stderr).trim()
-                );
-                return Vec::new();
+                ));
             }
-            Ok(Err(error)) => {
-                eprintln!("could not run yt-dlp: {error}");
-                return Vec::new();
-            }
-            Err(_) => {
-                eprintln!("yt-dlp timed out for {video_id}");
-                return Vec::new();
-            }
+            Ok(Err(error)) => return Err(format!("yt-dlp could not be run ({error})")),
+            Err(_) => return Err("yt-dlp timed out".into()),
         };
-        let dump = match serde_json::from_slice::<YtdlpDump>(&output.stdout) {
-            Ok(dump) => dump,
-            Err(error) => {
-                eprintln!("could not parse yt-dlp output for {video_id}: {error}");
-                return Vec::new();
-            }
-        };
-        formats_from_ytdlp_dump(dump)
+        serde_json::from_slice::<YtdlpDump>(&output.stdout)
+            .map(formats_from_ytdlp_dump)
+            .map_err(|error| format!("yt-dlp's output could not be parsed ({error})"))
     }
 
     /// The itag-to-URL view the extractor-layout path still needs.
@@ -1893,7 +1882,7 @@ impl AppServerState {
         // not subject to the iOS client's 403 gate.
         let started = std::time::Instant::now();
         let query = self.youtube.query();
-        let (player, mut ytdlp_formats) = tokio::join!(
+        let (player, ytdlp_result) = tokio::join!(
             youtube_call(
                 query.player_from_clients(video_id, PLAYER_CLIENTS),
                 "extract YouTube player"
@@ -1901,10 +1890,14 @@ impl AppServerState {
             self.ytdlp_formats(video_id),
         );
         let extracted_at = started.elapsed();
+        // Why yt-dlp gave nothing, kept for the error the viewer sees if no
+        // other ungated source turns up either.
+        let ytdlp_failure = ytdlp_result.as_ref().err().cloned();
+        let mut ytdlp_formats = ytdlp_result.unwrap_or_default();
 
         // yt-dlp owns the adaptive source. The extractor is consulted only for
-        // what yt-dlp does not produce — the HLS manifest a live stream needs —
-        // and as a fallback when yt-dlp itself came back empty.
+        // what yt-dlp does not produce: the HLS manifest a live stream needs.
+        // Its own stream URLs are gated, so they are never played.
         let mut ytdlp_source = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await;
         let ranged_at = started.elapsed();
         // Now and then yt-dlp hands out URLs that serve the first minute or so
@@ -1921,7 +1914,7 @@ impl AppServerState {
                 eprintln!(
                     "playback for {video_id}: yt-dlp URLs are gated past the head, extracting again"
                 );
-                let retried_formats = self.ytdlp_formats(video_id).await;
+                let retried_formats = self.ytdlp_formats(video_id).await.unwrap_or_default();
                 if let Some(retried) =
                     ytdlp_playback_source(&self.http, video_id, &retried_formats).await
                     && self.adaptive_tail_is_available(&retried).await
@@ -1958,21 +1951,8 @@ impl AppServerState {
 
         let ytdlp_urls = Self::ytdlp_url_map(&ytdlp_formats);
         let youtube_sources = match player {
-            Ok(player) => {
-                let sources = rusty_playback_sources(&player, &ytdlp_urls);
-                // Tracks yt-dlp does not cover are dropped, which is right when
-                // it covers most of them and wrong when it covers none: a
-                // yt-dlp hiccup would otherwise empty the list and report "no
-                // playable stream" for a video that is perfectly playable.
-                if sources.is_empty() && !ytdlp_urls.is_empty() {
-                    eprintln!(
-                        "playback for {video_id}: yt-dlp matched no itag, using extractor URLs"
-                    );
-                    rusty_playback_sources(&player, &HashMap::new())
-                } else {
-                    sources
-                }
-            }
+            // Only tracks yt-dlp covers, plus the extractor's manifests.
+            Ok(player) => rusty_playback_sources(&player, &ytdlp_urls),
             Err(error) => {
                 eprintln!("playback extraction failed for {video_id}: {error:#}");
                 Vec::new()
@@ -2096,27 +2076,12 @@ impl AppServerState {
             });
         }
 
-        eprintln!(
-            "playback for {video_id}: extraction produced no usable source; \
-             the client will report a direct-stream failure"
-        );
-        Ok(ResolvedPlayback {
-            session: PlaybackSession {
-                primary: PlaybackSource {
-                    protocol: PlaybackProtocol::EmbedFallback,
-                    url: fallback_url.clone(),
-                    mime_type: Some("text/html".into()),
-                    po_token: None,
-                    expires_at: None,
-                    quality_label: None,
-                    request_headers: Vec::new(),
-                    tracks: Vec::new(),
-                },
-                alternatives: Vec::new(),
-                fallback_url,
-            },
-            reusable: false,
-        })
+        // An error, not a session: the player shows this message, and the
+        // viewer learns the cause (a stopped sidecar, say) instead of meeting
+        // gated URLs that freeze a minute in.
+        let reason = no_stream_reason(ytdlp_failure.as_deref(), ytdlp_formats.len());
+        eprintln!("playback for {video_id}: {reason}");
+        Err(anyhow!(reason))
     }
 
     async fn seed_demo_if_empty(&self) -> Result<()> {
@@ -3876,6 +3841,108 @@ async fn request_playback_upstream(
     request.send().await
 }
 
+/// The first byte, and the last if it is given, of a `Range: bytes=a-b` header.
+fn requested_byte_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
+    let value = headers.get(header::RANGE)?.to_str().ok()?.trim();
+    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+    let start = start.trim().parse().ok()?;
+    let end = match end.trim() {
+        "" => None,
+        end => Some(end.parse().ok()?),
+    };
+    Some((start, end))
+}
+
+const RANGE_RESUME_ATTEMPTS: u32 = 3;
+
+/// A ranged upstream body that picks up where it stopped if the CDN drops it.
+///
+/// Each resume asks for only the bytes that are still missing, so the browser
+/// sees one continuous body. If the resumes run out, the stream ends with an
+/// error. Content-Length is set, so the browser treats the short body as a
+/// failed request and does not append a partial segment.
+fn resumable_range_stream(
+    state: AppServerState,
+    target: ProxyTarget,
+    request_headers: HeaderMap,
+    upstream: reqwest::Response,
+) -> futures_util::stream::BoxStream<'static, std::result::Result<Bytes, std::io::Error>> {
+    use futures_util::StreamExt;
+    type UpstreamBody =
+        futures_util::stream::BoxStream<'static, std::result::Result<Bytes, String>>;
+    fn upstream_body(response: reqwest::Response) -> UpstreamBody {
+        response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|error| error.to_string()))
+            .boxed()
+    }
+    fn failed_body(reason: String) -> UpstreamBody {
+        futures_util::stream::once(async move { Err(reason) }).boxed()
+    }
+    struct Resume {
+        state: AppServerState,
+        target: ProxyTarget,
+        request_headers: HeaderMap,
+        range: Option<(u64, Option<u64>)>,
+        sent: u64,
+        attempts_left: u32,
+        body: Option<UpstreamBody>,
+    }
+    let range = requested_byte_range(&request_headers);
+    let resume = Resume {
+        state,
+        target,
+        request_headers,
+        range,
+        sent: 0,
+        attempts_left: RANGE_RESUME_ATTEMPTS,
+        body: Some(upstream_body(upstream)),
+    };
+    futures_util::stream::unfold(resume, |mut resume| async move {
+        loop {
+            let body = resume.body.as_mut()?;
+            let failure = match body.next().await {
+                Some(Ok(chunk)) => {
+                    resume.sent += chunk.len() as u64;
+                    return Some((Ok(chunk), resume));
+                }
+                None => return None,
+                Some(Err(error)) => error,
+            };
+            let Some((start, end)) = resume.range.filter(|_| resume.attempts_left > 0) else {
+                resume.body = None;
+                return Some((Err(std::io::Error::other(failure)), resume));
+            };
+            let attempt = RANGE_RESUME_ATTEMPTS - resume.attempts_left;
+            resume.attempts_left -= 1;
+            tokio::time::sleep(Duration::from_millis(150 * u64::from(attempt + 1))).await;
+            let next = start + resume.sent;
+            let range = match end {
+                Some(end) => format!("bytes={next}-{end}"),
+                None => format!("bytes={next}-"),
+            };
+            let mut headers = resume.request_headers.clone();
+            let Ok(value) = HeaderValue::from_str(&range) else {
+                resume.body = None;
+                return Some((Err(std::io::Error::other(failure)), resume));
+            };
+            headers.insert(header::RANGE, value);
+            // A resume that is not a matching 206 would splice the wrong bytes
+            // into the segment, so it counts as another failure instead.
+            resume.body = Some(
+                match request_playback_upstream(&resume.state, &resume.target, &headers).await {
+                    Ok(response) if response.status() == StatusCode::PARTIAL_CONTENT => {
+                        upstream_body(response)
+                    }
+                    Ok(response) => failed_body(format!("resume answered {}", response.status())),
+                    Err(error) => failed_body(error.to_string()),
+                },
+            );
+        }
+    })
+    .boxed()
+}
+
 pub async fn playback_proxy(
     Extension(state): Extension<AppServerState>,
     Path(token): Path<String>,
@@ -3919,8 +3986,8 @@ pub async fn playback_proxy(
             Err(_) => break,
         }
     }
-    let mut status = upstream.status();
-    let mut upstream_headers = upstream.headers().clone();
+    let status = upstream.status();
+    let upstream_headers = upstream.headers().clone();
     let content_type = upstream_headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -3960,32 +4027,35 @@ pub async fn playback_proxy(
             }
         };
         Body::from(center_vtt_cues(&String::from_utf8_lossy(&bytes)))
-    } else if range_requested {
-        // Do not commit response headers to the browser until an entire DASH
-        // byte range has arrived. If the upstream CDN closes mid-segment,
-        // retry here so MediaSource sees one complete segment instead of a
-        // truncated response followed by a fatal playback error.
-        let mut bytes = upstream.bytes().await.ok();
-        for attempt in 0..3 {
-            if bytes.is_some() {
-                break;
+    } else if range_requested && status == StatusCode::PARTIAL_CONTENT {
+        // Stream the range; never hold the headers until all of it has
+        // arrived. Buffering a 4K segment (~8 MB) first delayed the headers
+        // past the player's 8 s connection timeout whenever the server's link
+        // was busy. The player then aborted with zero bytes, so ABR never got
+        // a throughput sample and kept asking for the same 4K segment. Every
+        // abandoned request also kept downloading on the server, which slowed
+        // the next one. A body that fails midway is resumed from the byte it
+        // reached, so MediaSource still gets one whole segment.
+        use futures_util::StreamExt;
+        let mut stream = resumable_range_stream(
+            state.clone(),
+            target.clone(),
+            request_headers.clone(),
+            upstream,
+        );
+        match stream.next().await {
+            Some(Ok(head)) => {
+                if generic_type {
+                    sniffed_type = sniff_media_type(&head);
+                }
+                let head = futures_util::stream::once(async move { Ok::<_, std::io::Error>(head) });
+                Body::from_stream(head.chain(stream))
             }
-            tokio::time::sleep(Duration::from_millis(150 * (attempt + 1))).await;
-            let retry = match request_playback_upstream(&state, &target, &request_headers).await {
-                Ok(response) => response,
-                Err(_) => continue,
-            };
-            status = retry.status();
-            upstream_headers = retry.headers().clone();
-            bytes = retry.bytes().await.ok();
+            Some(Err(_)) => {
+                return media_proxy_error(StatusCode::BAD_GATEWAY, "Media range is unavailable");
+            }
+            None => Body::empty(),
         }
-        let Some(bytes) = bytes else {
-            return media_proxy_error(StatusCode::BAD_GATEWAY, "Media range is unavailable");
-        };
-        if generic_type {
-            sniffed_type = sniff_media_type(&bytes);
-        }
-        Body::from(bytes)
     } else {
         // Peek the first chunk so the container can be identified, then put it
         // back at the front of the stream. Buffering the whole body instead
@@ -4278,6 +4348,19 @@ fn embed_url(video_id: &str) -> String {
     )
 }
 
+/// What the viewer is told when no ungated stream could be found.
+fn no_stream_reason(ytdlp_failure: Option<&str>, ytdlp_format_count: usize) -> String {
+    match ytdlp_failure {
+        Some(failure) => format!("No playable stream: {failure}."),
+        None if ytdlp_format_count == 0 => {
+            "No playable stream: yt-dlp found no formats for this video.".into()
+        }
+        None => format!(
+            "No playable stream: none of yt-dlp's {ytdlp_format_count} formats could be played."
+        ),
+    }
+}
+
 /// Ordering for playback sources, lowest first.
 ///
 /// HLS leads deliberately. YouTube gates raw googlevideo (GVS) range requests
@@ -4470,7 +4553,17 @@ async fn ytdlp_playback_source(
     use futures_util::StreamExt;
     let probes = candidates
         .iter()
-        .map(|(_, itag, _, url)| probe_segment_ranges(client, video_id, *itag, url).boxed())
+        .map(|(format, itag, _, url)| {
+            // Without an exact size the file cannot be told apart from its
+            // siblings, so it is probed every time rather than cached.
+            let key = format.filesize.map(|size| SegmentRangeKey {
+                video_id: video_id.to_string(),
+                itag: *itag,
+                language: format.language.clone(),
+                size,
+            });
+            probe_segment_ranges(client, key, url).boxed()
+        })
         .collect::<Vec<_>>();
     let ranges = futures_util::stream::iter(probes)
         .buffered(SEGMENT_PROBE_CONCURRENCY)
@@ -4572,31 +4665,43 @@ fn ytdlp_hls_source(formats: &[YtdlpFormat]) -> Option<PlaybackSource> {
 /// dropped and the resolve waits whole seconds on SYN retries.
 const SEGMENT_PROBE_CONCURRENCY: usize = 4;
 
-/// Ranges keyed by video and itag.
+/// The exact file whose container layout was probed.
 ///
 /// The URLs expire but the container layout does not, so a probe is paid for
-/// once per format rather than once per playback.
+/// once per file rather than once per playback. The itag alone does not name
+/// a file. Dubbed uploads ship one itag 251 (and one 140, 249, 250...) per
+/// audio language, and the original's header is a different size from the
+/// dubs'. Keyed by itag, every language got the ranges of whichever one was
+/// probed first. Seen 2026-09-25 (XKSjCOKDtpk): English Opus's index range
+/// pointed at cluster bytes, and Shaka failed the whole source with 3007
+/// (WEBM_CUES_ELEMENT_MISSING). The transport then fell through to the gated
+/// extractor source, which froze at about 1:01. Size alone is not enough
+/// either: that video's Japanese and Turkish itag 140 are the same length.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SegmentRangeKey {
+    video_id: String,
+    itag: u32,
+    language: Option<String>,
+    /// yt-dlp's exact `filesize`, never the estimate.
+    size: u64,
+}
+
 static SEGMENT_RANGE_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<HashMap<(String, u32), SegmentRanges>>,
+    std::sync::Mutex<HashMap<SegmentRangeKey, SegmentRanges>>,
 > = std::sync::OnceLock::new();
 
-fn cached_segment_ranges(video_id: &str, itag: u32) -> Option<SegmentRanges> {
+fn cached_segment_ranges(key: &SegmentRangeKey) -> Option<SegmentRanges> {
     SEGMENT_RANGE_CACHE
         .get_or_init(Default::default)
         .lock()
         .ok()?
-        .get(&(video_id.to_string(), itag))
+        .get(key)
         .copied()
 }
 
-fn store_segment_ranges(video_id: &str, itag: u32, ranges: SegmentRanges) {
-    if let Some(cache) = SEGMENT_RANGE_CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .ok()
-    {
-        let mut cache = cache;
-        cache.insert((video_id.to_string(), itag), ranges);
+fn store_segment_ranges(key: SegmentRangeKey, ranges: SegmentRanges) {
+    if let Ok(mut cache) = SEGMENT_RANGE_CACHE.get_or_init(Default::default).lock() {
+        cache.insert(key, ranges);
     }
 }
 
@@ -4608,11 +4713,10 @@ fn store_segment_ranges(video_id: &str, itag: u32, ranges: SegmentRanges) {
 /// is worth.
 async fn probe_segment_ranges(
     client: &reqwest::Client,
-    video_id: &str,
-    itag: u32,
+    key: Option<SegmentRangeKey>,
     url: &str,
 ) -> Option<SegmentRanges> {
-    if let Some(cached) = cached_segment_ranges(video_id, itag) {
+    if let Some(cached) = key.as_ref().and_then(cached_segment_ranges) {
         return Some(cached);
     }
     // One format that stalls is dropped from the manifest rather than holding
@@ -4632,7 +4736,9 @@ async fn probe_segment_ranges(
     .await
     .ok()??;
     let ranges = segment_ranges(&head)?;
-    store_segment_ranges(video_id, itag, ranges);
+    if let Some(key) = key {
+        store_segment_ranges(key, ranges);
+    }
     Some(ranges)
 }
 
@@ -4647,20 +4753,16 @@ fn segment_ranges(head: &[u8]) -> Option<SegmentRanges> {
     }
 }
 
-/// When yt-dlp produced any URLs at all, a track it does not cover is dropped
-/// rather than kept: its extractor URL is known to be gated, so offering it
-/// only invites the ABR manager to select it, take a 403, and recover. When
-/// yt-dlp is unavailable entirely the extractor URL is used as-is, which still
-/// plays for about a minute — degraded, but better than refusing to play.
+/// A track yt-dlp does not cover is dropped, never played from the
+/// extractor's own URL. Those URLs are gated: they serve about a minute and
+/// then answer 403. Playing them when yt-dlp was down made a stopped sidecar
+/// look like a mysterious freeze at ~1:01 instead of an error that names the
+/// cause (2026-09-25).
 fn resolved_stream_url(
     ytdlp_urls: &HashMap<u32, (String, Option<u64>)>,
     itag: u32,
     size: Option<u64>,
-    fallback: &str,
 ) -> Option<String> {
-    if ytdlp_urls.is_empty() {
-        return Some(fallback.to_string());
-    }
     match ytdlp_urls.get(&itag) {
         Some((url, reported)) if reported.is_none() || size.is_none() || *reported == size => {
             Some(url.clone())
@@ -4686,7 +4788,7 @@ fn rusty_playback_sources(
         .filter_map(|stream| {
             Some(PlaybackSource {
                 protocol: PlaybackProtocol::Progressive,
-                url: resolved_stream_url(ytdlp_urls, stream.itag, stream.size, &stream.url)?,
+                url: resolved_stream_url(ytdlp_urls, stream.itag, stream.size)?,
                 mime_type: Some(stream.mime),
                 po_token: None,
                 expires_at: expires_at.clone(),
@@ -4704,7 +4806,7 @@ fn rusty_playback_sources(
         .filter_map(|stream| {
             Some(PlaybackTrack {
                 kind: PlaybackTrackKind::Video,
-                url: resolved_stream_url(ytdlp_urls, stream.itag, stream.size, &stream.url)?,
+                url: resolved_stream_url(ytdlp_urls, stream.itag, stream.size)?,
                 mime_type: stream.mime.clone(),
                 bitrate: Some(u64::from(stream.bitrate)),
                 content_length: stream.size,
@@ -4738,12 +4840,7 @@ fn rusty_playback_sources(
                 let track_info = stream.track.as_ref();
                 Some(PlaybackTrack {
                     kind: PlaybackTrackKind::Audio,
-                    url: resolved_stream_url(
-                        ytdlp_urls,
-                        stream.itag,
-                        Some(stream.size),
-                        &stream.url,
-                    )?,
+                    url: resolved_stream_url(ytdlp_urls, stream.itag, Some(stream.size))?,
                     mime_type: stream.mime.clone(),
                     bitrate: Some(u64::from(stream.bitrate)),
                     content_length: Some(stream.size),
@@ -5419,14 +5516,19 @@ mod tests {
 
     use super::DbVideo;
     use super::{
-        AppServerState, canonical_sort_key, center_vtt_cues, ebml_vint, extract_chapters, health,
-        mp4_segment_ranges, parse_youtube_feed, playback_proxy_options, reconciliation_limit,
-        segment_ranges, sniff_media_type, url_path_ends_with, video_published_epoch,
-        webm_segment_ranges, websub_channel_from_topic, ytdlp_hls_source, ytdlp_po_provider_args,
-        ytdlp_service_channel_shorts_url, ytdlp_service_video_url,
+        AppServerState, SegmentRangeKey, SegmentRanges, cached_segment_ranges, canonical_sort_key,
+        center_vtt_cues, ebml_vint, extract_chapters, health, mp4_segment_ranges, no_stream_reason,
+        parse_youtube_feed, playback_proxy, playback_proxy_options, reconciliation_limit,
+        requested_byte_range, segment_ranges, sniff_media_type, store_segment_ranges,
+        url_path_ends_with, video_published_epoch, webm_segment_ranges, websub_channel_from_topic,
+        ytdlp_hls_source, ytdlp_po_provider_args, ytdlp_service_channel_shorts_url,
+        ytdlp_service_video_url,
     };
     use crate::models::PlaybackProtocol;
     use crate::models::Video;
+    use axum::extract::Path;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+    use std::time::Duration;
 
     #[test]
     fn parses_youtube_atom_entries() {
@@ -5477,6 +5579,131 @@ mod tests {
                 .unwrap()
                 .contains("Range")
         );
+    }
+
+    #[test]
+    fn dubbed_audio_tracks_do_not_share_segment_ranges() {
+        // One itag, two languages, two files with different headers.
+        let original = SegmentRanges {
+            init_end: 258,
+            index_start: 259,
+            index_end: 4037,
+        };
+        let dub = SegmentRanges {
+            init_end: 300,
+            index_start: 301,
+            index_end: 4100,
+        };
+        let key = |language: &str, size: u64| SegmentRangeKey {
+            video_id: "dubbed-cache-test".into(),
+            itag: 140,
+            language: Some(language.into()),
+            size,
+        };
+        // XKSjCOKDtpk's Japanese and Turkish itag 140 are the same length.
+        store_segment_ranges(key("ja", 34_831_565), original);
+        store_segment_ranges(key("tr", 34_831_565), dub);
+        assert_eq!(
+            cached_segment_ranges(&key("ja", 34_831_565)),
+            Some(original)
+        );
+        assert_eq!(cached_segment_ranges(&key("tr", 34_831_565)), Some(dub));
+        assert_eq!(cached_segment_ranges(&key("en", 34_830_834)), None);
+    }
+
+    #[test]
+    fn reads_the_requested_byte_range() {
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(requested_byte_range(&headers), None);
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=100-199"));
+        assert_eq!(requested_byte_range(&headers), Some((100, Some(199))));
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=100-"));
+        assert_eq!(requested_byte_range(&headers), Some((100, None)));
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-1,5-9"));
+        assert_eq!(requested_byte_range(&headers), None);
+    }
+
+    /// An upstream that drops the first ranged response halfway through, then
+    /// serves whatever range it is asked for next. Returns the ranges it saw.
+    async fn flaky_range_upstream(
+        media: Vec<u8>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            let mut served = 0;
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                let range = request
+                    .lines()
+                    .find_map(|line| line.strip_prefix("range: bytes="))
+                    .unwrap()
+                    .trim()
+                    .to_string();
+                log.lock().unwrap().push(range.clone());
+                let (start, end) = range.split_once('-').unwrap();
+                let (start, end): (usize, usize) = (start.parse().unwrap(), end.parse().unwrap());
+                let body = &media[start..=end];
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\ncontent-range: bytes {start}-{end}/{}\r\nconnection: close\r\n\r\n",
+                    body.len(),
+                    media.len()
+                );
+                socket.write_all(head.as_bytes()).await.unwrap();
+                let cut = if served == 0 {
+                    body.len() / 2
+                } else {
+                    body.len()
+                };
+                socket.write_all(&body[..cut]).await.unwrap();
+                socket.flush().await.unwrap();
+                served += 1;
+            }
+        });
+        (format!("http://{address}/media"), seen)
+    }
+
+    #[tokio::test]
+    async fn resumes_a_range_the_upstream_drops_midway() {
+        let state = AppServerState::initialize().await.unwrap();
+        let media = (0..200_000u32)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let (upstream, seen) = flaky_range_upstream(media.clone()).await;
+        let proxied = state
+            .register_proxy_target(upstream, Vec::new(), Duration::from_secs(60))
+            .await;
+        let token = proxied.rsplit('/').next().unwrap().to_string();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=1000-150999"));
+
+        let response = playback_proxy(axum::Extension(state), Path(token), headers).await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()[header::CONTENT_LENGTH], "150000");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the resumed body completes");
+        assert_eq!(&body[..], &media[1000..=150_999]);
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], "1000-150999");
+        let resumed_from: usize = seen[1].split_once('-').unwrap().0.parse().unwrap();
+        assert!(resumed_from > 1000 && resumed_from <= 76_000, "{seen:?}");
     }
 
     #[tokio::test]
@@ -5871,15 +6098,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn playback_session_always_has_a_safe_fallback() {
+    async fn playback_session_is_ungated_or_says_why_not() {
         let state = AppServerState::initialize().await.unwrap();
         let _owner = test_owner(&state).await;
-        let session = state
-            .playback_session("aqz-KE-bpKQ", true, true)
-            .await
-            .unwrap();
-        assert!(session.fallback_url.contains("youtube-nocookie.com"));
-        assert!(!session.primary.url.is_empty());
+        match state.playback_session("aqz-KE-bpKQ", true, true).await {
+            Ok(session) => {
+                assert!(session.fallback_url.contains("youtube-nocookie.com"));
+                assert!(session.primary.url.contains("/api/v1/playback/proxy/"));
+            }
+            Err(error) => assert!(
+                error.to_string().starts_with("No playable stream"),
+                "{error:#}"
+            ),
+        }
+    }
+
+    #[test]
+    fn names_why_no_stream_could_be_played() {
+        assert_eq!(
+            no_stream_reason(
+                Some("the yt-dlp service at http://127.0.0.1:8090 is unreachable (refused)"),
+                0
+            ),
+            "No playable stream: the yt-dlp service at http://127.0.0.1:8090 is unreachable (refused)."
+        );
+        assert!(no_stream_reason(None, 0).contains("found no formats"));
+        assert!(no_stream_reason(None, 12).contains("none of yt-dlp's 12 formats"));
     }
 
     #[tokio::test]
@@ -6247,13 +6491,7 @@ mod tests {
             .await
             .unwrap();
         eprintln!("live playback protocol: {:?}", playback.primary.protocol);
-        match playback.primary.protocol {
-            PlaybackProtocol::EmbedFallback => {
-                assert!(playback.primary.url.contains(&playable_video.id));
-                assert!(playback.primary.url.contains("youtube-nocookie.com"));
-            }
-            _ => assert!(playback.primary.url.contains("/api/v1/playback/proxy/")),
-        }
+        assert!(playback.primary.url.contains("/api/v1/playback/proxy/"));
 
         let mut snapshot = state.library_snapshot(&owner).await.unwrap();
         snapshot
