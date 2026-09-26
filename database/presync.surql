@@ -18,3 +18,13 @@ IF (INFO FOR DB).tables.user_subscription != NONE {
         };
     };
 };
+
+-- Sessions used to name their account by its full record id
+-- ("app_user:k3j2h1"); g3-auth names it by the key alone. Rewrite the old
+-- form so devices signed in before the change stay signed in, instead of
+-- each minting a new guest and appearing to lose its library. The id is the
+-- only "app_user:" in a session's stored JSON.
+IF (INFO FOR DB).tables.sessions != NONE {
+    UPDATE sessions SET sessionstore = string::replace(sessionstore, "app_user:", "")
+        WHERE string::contains(sessionstore, "app_user:");
+};

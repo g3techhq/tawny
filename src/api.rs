@@ -234,10 +234,11 @@ pub async fn hydrate_video_durations(video_ids: Vec<String>) -> Result<Vec<Video
 ///
 /// Deliberately unauthenticated - this is where a viewer gets their first
 /// credential, so requiring one would be circular.
+#[g3_auth::public]
 #[post(
     "/api/v1/auth/guest",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    session: crate::auth::SessionAuth
+    crate::auth::SessionContext { auth_session, .. }: crate::auth::SessionContext
 )]
 pub async fn create_guest_account() -> Result<Account> {
     let account = state
@@ -245,7 +246,7 @@ pub async fn create_guest_account() -> Result<Account> {
         .create_guest()
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
-    crate::auth::sign_in_session(&session.0, &account);
+    crate::auth::sign_in_session(&auth_session, &account);
     Ok(account)
 }
 
@@ -264,10 +265,13 @@ pub async fn register_account(credentials: Credentials) -> Result<Account> {
 }
 
 /// Sign in to an existing account, abandoning whatever session was held.
+///
+/// Public: a device whose session expired signs back in from here.
+#[g3_auth::public]
 #[post(
     "/api/v1/auth/sign-in",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
-    session: crate::auth::SessionAuth
+    crate::auth::SessionContext { auth_session, .. }: crate::auth::SessionContext
 )]
 pub async fn sign_in_to_account(credentials: Credentials) -> Result<Account> {
     let account = state
@@ -275,18 +279,22 @@ pub async fn sign_in_to_account(credentials: Credentials) -> Result<Account> {
         .sign_in(&credentials.email, &credentials.password)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
-    session.0.logout_user();
-    crate::auth::sign_in_session(&session.0, &account);
+    auth_session.logout_user();
+    crate::auth::sign_in_session(&auth_session, &account);
     Ok(account)
 }
 
 /// Drop this device's session. Other devices keep theirs.
+///
+/// Public: signing out of a session that already expired has to succeed, not
+/// strand the device on an error.
+#[g3_auth::public]
 #[post(
     "/api/v1/auth/sign-out",
-    session: crate::auth::SessionAuth
+    crate::auth::SessionContext { auth_session, .. }: crate::auth::SessionContext
 )]
 pub async fn sign_out_of_account() -> Result<()> {
-    session.0.logout_user();
+    auth_session.logout_user();
     Ok(())
 }
 

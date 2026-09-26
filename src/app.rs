@@ -48,31 +48,41 @@ pub fn native_head() -> String {
 
 /// Primary destinations are stable roots. Pages reached from a card push above
 /// them; the watch page and the three header destinations present as sheets.
+///
+/// Every page is `#[public]`: a first-time visitor may open any of them, and
+/// the client signs them in as a guest from there. The data each page shows
+/// comes from server functions, which the guard does protect.
 
-#[derive(Debug, Clone, Routable, PartialEq, RouteTransitions)]
+#[derive(Debug, Clone, Routable, PartialEq, RouteTransitions, g3_auth::PublicRoutes)]
 #[rustfmt::skip]
 pub enum Route {
     #[layout(AppShell)]
         #[redirect("/:..segments", |segments: Vec<String>| { let _ = segments; Route::Feed {} })]
         #[transition(layer = stack_root)]
+        #[public]
         #[route("/")]
         Feed {},
         #[transition(layer = stack_root)]
+        #[public]
         #[route("/subscriptions")]
         Subscriptions {},
         #[transition(layer = stack_root)]
+        #[public]
         #[route("/playlists")]
         Playlists {},
         #[transition(layer = stack_root)]
+        #[public]
         #[route("/explore")]
         Explore {},
         // Queue, History, and Settings are peers: each one's header offers the
         // other two, so a lateral move between them slides in the order the header
         // lists them instead of taking the unrelated-peer fade.
         #[transition(layer = sheet, forward_to = (HistoryPage, SettingsPage))]
+        #[public]
         #[route("/queue")]
         QueuePage {},
         #[transition(layer = sheet, forward_to = SettingsPage)]
+        #[public]
         #[route("/history")]
         HistoryPage {},
         // A new item in an active run replaces the current watch entry.  Back
@@ -83,15 +93,19 @@ pub enum Route {
         // history, so minimizing lands on the page beneath both instead of
         // reopening the list the video was picked from.
         #[transition(layer = sheet, history = replace, handoff_from = (QueuePage, HistoryPage))]
+        #[public]
         #[route("/watch/:id")]
         VideoDetail { id: String },
         #[transition(layer = stack_page)]
+        #[public]
         #[route("/playlists/:id")]
         PlaylistDetail { id: String },
         #[transition(layer = sheet)]
+        #[public]
         #[route("/settings")]
         SettingsPage {},
         #[transition(layer = stack_page)]
+        #[public]
         #[route("/channel/:id")]
         ChannelDetail { id: String },
 }
