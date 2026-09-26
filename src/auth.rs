@@ -3,29 +3,24 @@
 //! First launch creates a guest account and logs it into an HTTP-only session
 //! cookie. Registration promotes that same account; sign-in replaces the
 //! session's user. No credential is kept in Tawny's JavaScript state.
-
-mod session_store;
-
-use std::sync::Arc;
+//!
+//! Sessions, the guard and the signed-in user come from `g3-auth`; this module
+//! holds what is Tawny's own: the accounts themselves.
 
 use anyhow::{Result, anyhow};
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
-use async_trait::async_trait;
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
-use axum_session_auth::{AuthSession, Authentication};
 use serde::Deserialize;
 use surrealdb::{Surreal, engine::any::Any};
 use surrealdb_types::SurrealValue;
 
 use crate::models::{Account, CredentialProblem, validate_email, validate_password};
-
-pub use session_store::SurrealSessionPool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthError {
@@ -223,52 +218,25 @@ impl<'db> Accounts<'db> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct SessionUser {
-    id: String,
-    anonymous: bool,
+/// Tawny's account table, as g3-auth sees it: sessions resolve to an
+/// `app_user` row, named by its `display_name`.
+pub enum AppUser {}
+
+impl g3_auth::AuthUser for AppUser {
+    const TABLE: &'static str = "app_user";
 }
 
-impl Default for SessionUser {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            anonymous: true,
-        }
-    }
-}
+/// The database, the auth session and the resolved user, for server functions
+/// that sign in or out.
+pub type SessionContext = g3_auth::SessionContext<AppUser, Any>;
+pub type AuthSession = g3_auth::AuthSession<AppUser, Any>;
 
-impl SessionUser {
-    fn from_account(account: &Account) -> Self {
-        Self {
-            id: account.id.clone(),
-            anonymous: false,
-        }
-    }
-}
-
-#[async_trait]
-impl Authentication<SessionUser, String, Arc<Surreal<Any>>> for SessionUser {
-    async fn load_user(userid: String, db: Option<&Arc<Surreal<Any>>>) -> Result<Self> {
-        let db = db.ok_or_else(|| anyhow!("database connection not provided"))?;
-        let account = Accounts::new(db.as_ref()).find(&userid).await?;
-        Ok(Self::from_account(&account))
-    }
-
-    fn is_authenticated(&self) -> bool {
-        !self.anonymous
-    }
-    fn is_active(&self) -> bool {
-        !self.anonymous
-    }
-    fn is_anonymous(&self) -> bool {
-        self.anonymous
-    }
-}
-
-pub type TawnyAuthSession =
-    AuthSession<SessionUser, String, SurrealSessionPool<Any>, Arc<Surreal<Any>>>;
-
+/// The signed-in account as the `app_user:<key>` record id that every
+/// owner-scoped query binds with `type::record($owner)`.
+///
+/// The guard already refused a request without a session before it got here;
+/// this still refuses one, because a server function called during
+/// server-side rendering runs without any middleware.
 pub struct Owner(pub String);
 
 impl<S> FromRequestParts<S> for Owner
@@ -281,15 +249,21 @@ where
         parts: &mut Parts,
         _state: &S,
     ) -> std::result::Result<Self, Self::Rejection> {
-        let auth_session = parts.extensions.get::<TawnyAuthSession>().ok_or((
+        let auth_session = parts.extensions.get::<AuthSession>().ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
             "auth session middleware is missing",
         ))?;
         auth_session
             .current_user
             .as_ref()
-            .filter(|user| user.is_authenticated())
-            .map(|user| Self(user.id.clone()))
+            .filter(|user| !user.anonymous)
+            .map(|user| {
+                Self(format!(
+                    "{}:{}",
+                    <AppUser as g3_auth::AuthUser>::TABLE,
+                    user.id
+                ))
+            })
             .ok_or((
                 StatusCode::UNAUTHORIZED,
                 "your session has expired; please sign in again",
@@ -297,33 +271,18 @@ where
     }
 }
 
-pub struct SessionAuth(pub TawnyAuthSession);
-
-impl<S> FromRequestParts<S> for SessionAuth
-where
-    S: Send + Sync,
-{
-    type Rejection = (StatusCode, &'static str);
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> std::result::Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<TawnyAuthSession>()
-            .cloned()
-            .map(Self)
-            .ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "auth session middleware is missing",
-            ))
-    }
+/// Log `account` into this session and keep it past the browser closing.
+///
+/// g3-auth keys a session by the record's key alone (`k3j2h1`, not
+/// `app_user:k3j2h1`); `database/presync.surql` rewrites sessions written in
+/// the old form, so devices signed in before the change stay signed in.
+pub fn sign_in_session(session: &AuthSession, account: &Account) {
+    session.login_user(record_key(&account.id).to_string());
+    session.remember_user(true);
 }
 
-pub fn sign_in_session(session: &TawnyAuthSession, account: &Account) {
-    session.login_user(account.id.clone());
-    session.remember_user(true);
+fn record_key(id: &str) -> &str {
+    id.strip_prefix("app_user:").unwrap_or(id)
 }
 
 #[cfg(test)]
@@ -354,5 +313,80 @@ mod tests {
     fn a_sign_in_failure_does_not_reveal_whether_the_account_exists() {
         let message = AuthError::InvalidLogin.message().to_lowercase();
         assert!(!message.contains("not found"));
+    }
+
+    /// Opening an endpoint to signed-out callers is a reviewed change: it
+    /// shows up here, not only as an attribute somewhere in `api.rs`.
+    #[test]
+    fn only_the_sign_in_endpoints_are_public() {
+        assert_eq!(
+            g3_auth::public_endpoints(),
+            [
+                "/api/v1/auth/guest",
+                "/api/v1/auth/sign-in",
+                "/api/v1/auth/sign-out"
+            ]
+        );
+    }
+
+    #[test]
+    fn every_page_is_public_and_no_api_path_is() {
+        use g3_auth::PublicRoutes;
+
+        use crate::app::Route;
+
+        for page in [
+            "/",
+            "/subscriptions",
+            "/watch/abc",
+            "/playlists/x",
+            "/channel/UC1",
+        ] {
+            assert!(Route::is_public_path(page), "{page} should be public");
+        }
+        // The catch-all redirect parses every path as `Feed`; the guard must
+        // not read that as "public".
+        assert!(!Route::is_public_path("/api/v1/library"));
+    }
+
+    #[test]
+    fn sessions_are_keyed_by_the_bare_record_key() {
+        assert_eq!(record_key("app_user:k3j2h1"), "k3j2h1");
+        assert_eq!(record_key("k3j2h1"), "k3j2h1");
+    }
+
+    /// A device signed in before g3-auth holds a session naming its account
+    /// as `app_user:<key>`. The pre-sync rewrite keeps it signed in.
+    #[tokio::test]
+    async fn an_old_session_is_rewritten_to_the_bare_key() {
+        let db = surrealdb::engine::any::connect("mem://").await.unwrap();
+        db.use_ns("test").use_db("test").await.unwrap();
+        let old = r#"{"id":"s1","data":{"user_auth_session_id":"\"app_user:k3j2h1\""}}"#;
+        db.query("CREATE sessions:s1 SET sessionstore = $old, sessionid = 's1'")
+            .bind(("old", old))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        for _ in 0..2 {
+            // Twice: it runs on every start.
+            db.query(include_str!("../database/presync.surql"))
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
+        }
+
+        let stored: Option<String> = db
+            .query("SELECT VALUE sessionstore FROM ONLY sessions:s1")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(
+            stored.as_deref(),
+            Some(r#"{"id":"s1","data":{"user_auth_session_id":"\"k3j2h1\""}}"#)
+        );
     }
 }

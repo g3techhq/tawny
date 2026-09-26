@@ -5,7 +5,7 @@ use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Avatar, AvatarSize, Button, ButtonFill, ButtonSize, Card, Color, Content, EmptyState, Grid,
     GridColumns, InfiniteScroll, Input, Item, List, ListLines, ListVariant, Modal, Searchbar,
-    Shelf, Skeleton, SkeletonShape, Space, Stack, Text, TextTone,
+    Skeleton, SkeletonShape, Space, Stack, Text, TextTone,
 };
 
 use super::{PageHeader, use_after_first_paint};
@@ -15,16 +15,13 @@ use super::{PageHeader, use_after_first_paint};
 /// them all in one render.
 const CHANNEL_PAGE_SIZE: usize = 48;
 
-/// How many unsubscribed channels the Suggested shelf previews.
-const SUGGESTION_COUNT: usize = 12;
-
 /// One channel tile, used by both the subscribed grid and the suggestions.
 #[component]
 pub fn ChannelCard(channel: Channel) -> Element {
     let app_state = use_context::<AppState>();
-    let channel_id = channel.id.clone();
+    let toggle_channel = channel.clone();
     let open_channel_id = channel.id.clone();
-    let is_subscribed = channel.subscribed;
+    let is_subscribed = app_state.follows(&channel.id);
     let subscribers = channel.subscriber_count.trim().to_string();
 
     rsx! {
@@ -44,7 +41,8 @@ pub fn ChannelCard(channel: Channel) -> Element {
                     "aria-pressed": if is_subscribed { "true" } else { "false" },
                     start: is_subscribed.then(|| rsx! { Check { size: 15 } }),
                     onclick: move |_| {
-                        if let Some(now_subscribed) = app_state.toggle_subscription(&channel_id) {
+                        let now_subscribed = app_state.toggle_subscription_for(&toggle_channel);
+                        {
                             let message = if now_subscribed { "Subscribed" } else { "Unsubscribed" };
                             app_state.show_toast(message, Color::Neutral);
                         }
@@ -80,30 +78,11 @@ pub fn Subscriptions() -> Element {
     // header and placeholders go up first.
     let painted = use_after_first_paint();
 
-    // Read through a borrow. `AppState::library` clones the whole snapshot,
-    // every cached video included, just to reach the channel list.
-    let groups = app_state.with_library(|library| library.subscription_groups.clone());
-    // The page is about channels you follow. Everything else is a suggestion
-    // and belongs below them, not mixed in.
-    let (subscribed, suggested): (Vec<Channel>, Vec<Channel>) = if painted() {
-        app_state.with_library(|library| {
-            let subscribed = library
-                .channels
-                .iter()
-                .filter(|channel| channel.subscribed)
-                .cloned()
-                .collect();
-            let suggested = library
-                .channels
-                .iter()
-                .filter(|channel| !channel.subscribed)
-                .take(SUGGESTION_COUNT)
-                .cloned()
-                .collect();
-            (subscribed, suggested)
-        })
+    let groups = app_state.with_viewer(|viewer| viewer.subscription_groups.clone());
+    let subscribed = if painted() {
+        app_state.with_viewer(|viewer| viewer.subscriptions.clone())
     } else {
-        (Vec::new(), Vec::new())
+        Vec::new()
     };
     let remaining = subscribed.len().saturating_sub(visible_count());
 
@@ -242,19 +221,6 @@ pub fn Subscriptions() -> Element {
                     }
                 }
 
-                if !suggested.is_empty() {
-                    Shelf { title: "Suggested", gap: Space::Md,
-                        end: rsx! { Text { tone: TextTone::Secondary, "From your searches and watch history" } },
-                        // A shelf is a preview, not a second copy of the full
-                        // channel catalogue. Keeping it bounded also avoids
-                        // mounting hundreds of image cards in one scroll row.
-                        for channel in suggested {
-                            div { key: "{channel.id}", class: "w-72",
-                                ChannelCard { channel }
-                            }
-                        }
-                    }
-                }
             }
 
             // Membership editing lives in one place, so adding a channel to a

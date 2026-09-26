@@ -1,17 +1,17 @@
 # Tawny
 
-Tawny is a calm, local-first YouTube client built with Dioxus and `g3-ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
+Tawny is a calm, self-hosted YouTube client built with Dioxus and `g3-ui`. The same client targets Android, iOS, web, macOS, Windows, and Linux, with a SurrealDB-backed server that watches subscribed channels for new uploads.
 
 Tawny is designed as a self-hosted replacement for a LibreTube plus Piped deployment. The Dioxus backend performs search, feeds, channels, video details, comments, captions, and stream orchestration directly against YouTube; its deployment-local yt-dlp and PO-token sidecars are included in this repository, and no public Piped instance is contacted.
 
-This repository currently contains a working local-first vertical slice:
+This repository currently contains a working vertical slice:
 
 - cached subscription feed with All, Videos, Shorts, and Live filters;
 - real YouTube search for videos and channels with continuation paging, request coalescing, and a five-minute result cache;
 - full channel pages with Videos, Shorts, Live, refresh, and continuation paging;
 - subscription management with direct extraction, official RSS fallback, and YouTube WebSub callbacks;
-- local playlists, creation, detail views, and offline persistence;
-- revisioned playlist, subscription, queue, history, and watch-state sync;
+- playlists, creation, detail views, and offline viewing of what you have opened;
+- playlists, subscriptions, queue, history, and watch progress kept per account on the server, shown at once from a device cache (`g3-cache`) and changed with set-style mutations that are safe across devices;
 - configurable swipe-left and swipe-right playlist destinations;
 - channel pages, a persistent play queue, watch history, and a full video action sheet;
 - a persistent player that expands on video pages and becomes a mini-player above navigation elsewhere, with one-tap speed controls;
@@ -22,7 +22,7 @@ This repository currently contains a working local-first vertical slice:
 - responsive mobile, web, and desktop navigation using `g3-ui`;
 - server-side playback resolution for SABR, HLS, DASH, progressive streams, and per-video PO tokens.
 
-The seeded library is intentional: it keeps the first launch useful while the real library hydrates. Library actions update the device cache immediately and then write the newer revision to SurrealDB; if another client already has a newer revision, its server snapshot wins.
+A new account starts with a few demo channels and the default playlists, so the first launch is not empty. Library actions show on the device at once and are then saved to SurrealDB; the screens refetch what the change affected. See [docs/architecture.md](docs/architecture.md#data-on-the-client).
 
 ## Development
 

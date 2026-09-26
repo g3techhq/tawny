@@ -48,16 +48,6 @@ impl SubscriptionContent {
             Self::Shorts => "Shorts only",
         }
     }
-
-    /// Livestreams follow the long-form side: they are the channel's "not a
-    /// Short" output, so a Shorts-only subscription drops them too.
-    pub fn accepts(self, is_short: bool) -> bool {
-        match self {
-            Self::All => true,
-            Self::Videos => !is_short,
-            Self::Shorts => is_short,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
@@ -77,6 +67,7 @@ pub struct Channel {
 }
 
 impl Channel {
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     /// Merge metadata discovered by another YouTube surface without letting a
     /// sparse search result erase the richer channel record already cached.
     /// Subscription state is local state and is therefore never replaced.
@@ -112,6 +103,7 @@ impl Channel {
     }
 }
 
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
 fn compact_count_value(value: &str) -> Option<f64> {
     let trimmed = value.trim();
     let numeric = trimmed
@@ -197,6 +189,10 @@ pub struct Video {
     /// video does not - rather than a global mode.
     #[serde(default)]
     pub audio_only: bool,
+    /// The channel's avatar, filled in by the server on every video it hands
+    /// out so a card need not look the channel up.
+    #[serde(default)]
+    pub channel_avatar_url: Option<String>,
 }
 
 impl Video {
@@ -235,6 +231,9 @@ impl Video {
                 time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
             && let Ok(date) = Date::parse(&value[..10], &format)
         {
+            return date.midnight().assume_utc().unix_timestamp();
+        }
+        if let Some(date) = text_date(value) {
             return date.midnight().assume_utc().unix_timestamp();
         }
 
@@ -280,6 +279,38 @@ impl Video {
             return now.saturating_sub(count.saturating_mul(seconds));
         }
         0
+    }
+
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    /// How exactly `published_at` pins the upload down: 3 for a timestamp, 2 for
+    /// a calendar date, 1 for relative text ("3 days ago"), 0 for nothing usable.
+    fn publish_precision(&self) -> u8 {
+        use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+        let value = self.published_at.trim();
+        if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
+            return 3;
+        }
+        let iso_date = value.len() >= 10
+            && time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+                .is_ok_and(|format| time::Date::parse(&value[..10], &format).is_ok());
+        if iso_date || text_date(value).is_some() {
+            return 2;
+        }
+        if self.published_epoch() != 0 { 1 } else { 0 }
+    }
+
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
+    /// Keep `previous`'s publish date when it is more exact than this one.
+    ///
+    /// A video's date does not change, but the sources describing it do: the
+    /// feed gives a timestamp, the watch page a day, a related-videos shelf "11
+    /// months ago". Taking whichever arrived last moved a video within a
+    /// newest-first playlist just for having been opened.
+    pub fn keep_finer_publish_date(&mut self, previous: &Video) {
+        if previous.publish_precision() > self.publish_precision() {
+            self.published_at = previous.published_at.clone();
+        }
     }
 
     /// The publish date as it should be shown.
@@ -331,6 +362,46 @@ impl Video {
             (false, false) => format!("{} · {date}", self.view_count.trim()),
         }
     }
+}
+
+/// A written-out English date such as "Aug 2, 2013", "Premiered Aug 2, 2013"
+/// or "Streamed live on August 2, 2013".
+///
+/// Video details used to be stored with YouTube's display text, and a date the
+/// sorts cannot read counts as 1970: the video opened last sank to the bottom
+/// of a newest-first playlist, stranding a run on it. Rows cached that way are
+/// still around, so they are read rather than refetched.
+pub fn text_date(value: &str) -> Option<time::Date> {
+    let words = value
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    words.windows(3).find_map(|window| {
+        let month = month_from_name(window[0])?;
+        let day = window[1].parse::<u8>().ok()?;
+        let year = window[2].parse::<i32>().ok().filter(|year| *year >= 1000)?;
+        time::Date::from_calendar_date(year, month, day).ok()
+    })
+}
+
+fn month_from_name(word: &str) -> Option<time::Month> {
+    use time::Month::*;
+    let prefix = word.get(..3)?.to_ascii_lowercase();
+    Some(match prefix.as_str() {
+        "jan" => January,
+        "feb" => February,
+        "mar" => March,
+        "apr" => April,
+        "may" => May,
+        "jun" => June,
+        "jul" => July,
+        "aug" => August,
+        "sep" => September,
+        "oct" => October,
+        "nov" => November,
+        "dec" => December,
+        _ => return None,
+    })
 }
 
 fn short_month(month: time::Month) -> &'static str {
@@ -404,7 +475,6 @@ pub struct ChannelDetails {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FeedRefreshResult {
-    pub library: LibrarySnapshot,
     pub imported: usize,
     pub refreshed_channels: usize,
     pub failed_channels: usize,
@@ -523,16 +593,6 @@ impl FeedFilter {
             Self::Videos => "Videos",
             Self::Shorts => "Shorts",
             Self::Live => "Live",
-        }
-    }
-
-    /// Whether a video belongs under this filter.
-    pub fn accepts(self, video: &Video) -> bool {
-        match self {
-            Self::All => true,
-            Self::Videos => !video.is_live && !video.is_short,
-            Self::Shorts => video.is_short && !video.is_live,
-            Self::Live => video.is_live,
         }
     }
 }
@@ -1065,36 +1125,7 @@ mod settings_tests {
     }
 }
 
-/// The half of the library the client actually owns.
-///
-/// Videos and channels are server-owned: every one the client holds arrived in
-/// a server response, and the server persisted it *before* returning it. Echoing
-/// them back made a routine "mark watched" a 4.3 MB upload and ~11,900 redundant
-/// database upserts. This carries only what the server cannot re-derive.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct LibraryUserState {
-    pub cache_revision: u64,
-    pub subscriptions: Vec<SubscriptionState>,
-    pub playlists: Vec<Playlist>,
-    #[serde(default)]
-    pub subscription_groups: Vec<SubscriptionGroup>,
-    #[serde(default)]
-    pub queue: Vec<String>,
-    #[serde(default)]
-    pub history: Vec<HistoryEntry>,
-    /// Only videos the viewer has actually touched, not the whole cache.
-    #[serde(default)]
-    pub progress: Vec<VideoProgress>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubscriptionState {
-    pub channel_id: String,
-    pub subscribed: bool,
-    #[serde(default)]
-    pub content: SubscriptionContent,
-}
-
+/// Where this viewer has reached in one video, sent by `save_progress`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoProgress {
     pub video_id: String,
@@ -1104,56 +1135,34 @@ pub struct VideoProgress {
     pub audio_only: bool,
 }
 
-impl From<&LibrarySnapshot> for LibraryUserState {
-    fn from(snapshot: &LibrarySnapshot) -> Self {
-        Self {
-            cache_revision: snapshot.cache_revision,
-            // Subscription rows are one flag and one enum each, so all of them
-            // together stay small even with several hundred channels.
-            subscriptions: snapshot
-                .channels
-                .iter()
-                .map(|channel| SubscriptionState {
-                    channel_id: channel.id.clone(),
-                    subscribed: channel.subscribed,
-                    content: channel.subscription_content,
-                })
-                .collect(),
-            playlists: snapshot.playlists.clone(),
-            subscription_groups: snapshot.subscription_groups.clone(),
-            queue: snapshot.queue.clone(),
-            history: snapshot.history.clone(),
-            progress: snapshot
-                .videos
-                .iter()
-                .filter(|video| video.watched || video.progress_seconds > 0 || video.audio_only)
-                .map(|video| VideoProgress {
-                    video_id: video.id.clone(),
-                    watched: video.watched,
-                    progress_seconds: video.progress_seconds,
-                    audio_only: video.audio_only,
-                })
-                .collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LibrarySnapshot {
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+/// What a new account starts with: a few real channels and videos, so the
+/// feed is not empty on first launch, and the playlists the default swipes
+/// save to. The server seeds the catalog with it on first start.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DemoLibrary {
     pub channels: Vec<Channel>,
     pub videos: Vec<Video>,
     pub playlists: Vec<Playlist>,
-    #[serde(default)]
     pub subscription_groups: Vec<SubscriptionGroup>,
-    #[serde(default)]
     pub queue: Vec<String>,
-    #[serde(default)]
-    pub history: Vec<HistoryEntry>,
-    pub last_synced_at: Option<String>,
-    pub cache_revision: u64,
 }
 
-impl LibrarySnapshot {
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+/// The demo channels, playlists and groups a new account starts with.
+pub fn demo_viewer() -> Viewer {
+    let demo = DemoLibrary::demo();
+    Viewer {
+        subscriptions: demo.channels,
+        playlists: demo.playlists,
+        subscription_groups: demo.subscription_groups,
+        queue: demo.queue,
+        history: Vec::new(),
+    }
+}
+
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+impl DemoLibrary {
     pub fn demo() -> Self {
         let channels = vec![
             Channel {
@@ -1217,6 +1226,7 @@ impl LibrarySnapshot {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             },
             Video {
                 id: "M7lc1UVf-VE".into(),
@@ -1232,6 +1242,7 @@ impl LibrarySnapshot {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             },
             Video {
                 id: "ysz5S6PUM-U".into(),
@@ -1247,6 +1258,7 @@ impl LibrarySnapshot {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             },
             Video {
                 id: "jNQXAC9IVRw".into(),
@@ -1262,6 +1274,7 @@ impl LibrarySnapshot {
                 is_live: true,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             },
             Video {
                 id: "dQw4w9WgXcQ".into(),
@@ -1277,6 +1290,7 @@ impl LibrarySnapshot {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             },
             Video {
                 id: "ScMzIvxBSi4".into(),
@@ -1292,6 +1306,7 @@ impl LibrarySnapshot {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             },
         ];
 
@@ -1332,12 +1347,6 @@ impl LibrarySnapshot {
             playlists,
             subscription_groups,
             queue: vec!["M7lc1UVf-VE".into(), "ysz5S6PUM-U".into()],
-            history: vec![HistoryEntry {
-                video_id: "dQw4w9WgXcQ".into(),
-                played_at: "3 days ago".into(),
-            }],
-            last_synced_at: Some("Just now".into()),
-            cache_revision: 1,
         }
     }
 }
@@ -1427,6 +1436,248 @@ pub struct PlaybackSession {
     #[serde(default)]
     pub alternatives: Vec<PlaybackSource>,
     pub fallback_url: String,
+}
+
+/// Whose side a playback failure is on, which decides what can be done about
+/// it: nothing (YouTube's own rules), a fix to the deployment, or a fix to
+/// Tawny's code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackFailureOrigin {
+    /// YouTube refused the video: region, privacy, age, removal, or YouTube
+    /// blocking the server itself. Tawny is working as intended.
+    Youtube,
+    /// Something Tawny runs on is down, misconfigured or out of date - a
+    /// sidecar, an environment variable, the yt-dlp pin. Whoever runs the
+    /// server can fix it.
+    Setup,
+    /// Tawny's own code got it wrong.
+    Bug,
+    /// An error Tawny does not recognise, so it cannot say whose it is.
+    Unknown,
+}
+
+impl PlaybackFailureOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Youtube => "Blocked by YouTube",
+            Self::Setup => "Server setup problem",
+            Self::Bug => "Tawny bug",
+            Self::Unknown => "Unrecognised error",
+        }
+    }
+}
+
+/// Why a video cannot be played, sent to the player instead of a bare string
+/// so it can say whose problem it is and what, if anything, fixes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackFailure {
+    pub origin: PlaybackFailureOrigin,
+    /// What went wrong, as one sentence.
+    pub summary: String,
+    /// What the viewer or whoever runs the server can do, when anything helps.
+    #[serde(default)]
+    pub remedy: Option<String>,
+    /// The underlying error verbatim, for bug reports and the server log.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl PlaybackFailure {
+    pub fn new(origin: PlaybackFailureOrigin, summary: impl Into<String>) -> Self {
+        Self {
+            origin,
+            summary: summary.into(),
+            remedy: None,
+            detail: None,
+        }
+    }
+
+    pub fn remedy(mut self, remedy: impl Into<String>) -> Self {
+        self.remedy = Some(remedy.into());
+        self
+    }
+
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        self.detail = (!detail.trim().is_empty()).then_some(detail);
+        self
+    }
+}
+
+impl std::fmt::Display for PlaybackFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.origin.label(), self.summary)?;
+        if let Some(detail) = &self.detail {
+            write!(f, " ({detail})")?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The viewer
+//
+// What one account keeps, read by nearly every screen. The catalog (every
+// channel and video the instance has met) stays on the server; each screen
+// asks for the videos it shows. See docs/architecture.md.
+// ---------------------------------------------------------------------------
+
+/// One account's own state. Kilobytes: ids and names, never the videos they
+/// point at.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Viewer {
+    /// The channels this account follows, each with the uploads it wants.
+    pub subscriptions: Vec<Channel>,
+    pub playlists: Vec<Playlist>,
+    pub subscription_groups: Vec<SubscriptionGroup>,
+    /// Video ids, and `playlist:` markers for a queued run.
+    pub queue: Vec<String>,
+    /// Most recent first, at most [`HISTORY_LIMIT`].
+    pub history: Vec<HistoryEntry>,
+}
+
+impl Viewer {
+    pub fn follows(&self, channel_id: &str) -> Option<&Channel> {
+        self.subscriptions
+            .iter()
+            .find(|channel| channel.id == channel_id)
+    }
+
+    pub fn playlist(&self, playlist_id: &str) -> Option<&Playlist> {
+        self.playlists
+            .iter()
+            .find(|playlist| playlist.id == playlist_id)
+    }
+}
+
+/// One subscription as a device last saw it, sent back as the answer to set.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubscriptionChange {
+    pub channel: Channel,
+    pub subscribed: bool,
+    pub content: SubscriptionContent,
+}
+
+/// How many history entries an account keeps.
+pub const HISTORY_LIMIT: usize = 250;
+
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+/// How many videos one feed page holds.
+pub const FEED_PAGE_SIZE: usize = 24;
+
+/// Which subscriptions a feed draws from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FeedGroup {
+    #[default]
+    All,
+    /// Channels in no group.
+    Ungrouped,
+    Group(String),
+}
+
+/// The length buckets' edges, from the viewer's settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurationThresholds {
+    pub video_short_max_seconds: u64,
+    pub video_medium_max_seconds: u64,
+    pub shorts_short_max_seconds: u64,
+    pub shorts_medium_max_seconds: u64,
+}
+
+impl From<&AppSettings> for DurationThresholds {
+    fn from(settings: &AppSettings) -> Self {
+        Self {
+            video_short_max_seconds: settings.video_short_max_seconds,
+            video_medium_max_seconds: settings.video_medium_max_seconds,
+            shorts_short_max_seconds: settings.shorts_short_max_seconds,
+            shorts_medium_max_seconds: settings.shorts_medium_max_seconds,
+        }
+    }
+}
+
+/// Everything that decides which videos the subscription feed shows. Part of
+/// the cache key, so each combination is its own cached answer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedQuery {
+    pub group: FeedGroup,
+    pub kind: FeedFilter,
+    pub duration: Option<DurationFilter>,
+    pub hide_watched: bool,
+    pub thresholds: DurationThresholds,
+}
+
+/// One page of the subscription feed, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FeedPage {
+    pub videos: Vec<Video>,
+    pub has_more: bool,
+    /// With a length filter on: how many videos on this page's stretch of the
+    /// feed have no length yet, so the filter cannot speak for them.
+    pub without_duration: usize,
+    /// Those videos' ids, for the screen to ask their lengths for.
+    pub unknown_durations: Vec<String>,
+}
+
+/// Anything that holds videos, so a change to one video (its progress, its
+/// length) can be applied to every cached list showing it at once.
+pub trait VideoList {
+    fn videos_mut(&mut self) -> Box<dyn Iterator<Item = &mut Video> + '_>;
+
+    fn update_video(&mut self, video_id: &str, mut update: impl FnMut(&mut Video)) {
+        for video in self.videos_mut().filter(|video| video.id == video_id) {
+            update(video);
+        }
+    }
+
+    /// Take the catalog facts of `fresh` (length, live and Shorts state)
+    /// without touching this viewer's progress.
+    fn merge_metadata(&mut self, fresh: &[Video]) {
+        for video in self.videos_mut() {
+            if let Some(fresh) = fresh.iter().find(|fresh| fresh.id == video.id) {
+                video.duration_seconds = fresh.duration_seconds;
+                video.is_live = fresh.is_live;
+                video.is_short = fresh.is_short;
+            }
+        }
+    }
+}
+
+impl VideoList for Vec<Video> {
+    fn videos_mut(&mut self) -> Box<dyn Iterator<Item = &mut Video> + '_> {
+        Box::new(self.iter_mut())
+    }
+}
+
+impl VideoList for FeedPage {
+    fn videos_mut(&mut self) -> Box<dyn Iterator<Item = &mut Video> + '_> {
+        Box::new(self.videos.iter_mut())
+    }
+}
+
+/// One playlist on the playlists page: its cover and its counts, without the
+/// videos themselves.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistPreview {
+    pub id: String,
+    pub name: String,
+    pub count: usize,
+    pub unwatched: usize,
+    /// The first few videos' thumbnails, in playlist order.
+    pub thumbnails: Vec<String>,
+}
+
+/// A playlist with its videos, in the playlist's own order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistContents {
+    pub playlist: Playlist,
+    pub videos: Vec<Video>,
+}
+
+impl VideoList for PlaylistContents {
+    fn videos_mut(&mut self) -> Box<dyn Iterator<Item = &mut Video> + '_> {
+        Box::new(self.videos.iter_mut())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1991,6 +2242,7 @@ mod tests {
             is_live: false,
             is_short: false,
             audio_only: false,
+            channel_avatar_url: None,
         }
     }
 
@@ -2028,6 +2280,51 @@ mod tests {
         let mut videos = sample();
         PlaylistSort::Published.apply(&mut videos, false);
         assert_eq!(ids(&videos), ["a", "c", "b"]);
+    }
+
+    /// Opening a video stored the watch page's "Feb 1, 2024", which used to
+    /// read as 1970 and sink it to the end of Newest - leaving a run started on
+    /// it with nothing after it and everything before it.
+    #[test]
+    fn a_written_out_date_keeps_its_place_in_newest() {
+        let mut videos = sample();
+        videos[2].published_at = "Feb 1, 2024".into();
+        PlaylistSort::Published.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["b", "c", "a"]);
+        let view = PlaylistView {
+            sort: PlaylistSort::Published,
+            descending: true,
+            ..PlaylistView::default()
+        };
+        assert_eq!(view.next_after(&videos, "c").as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn text_dates_read_through_youtube_prefixes() {
+        let expected = time::Date::from_calendar_date(2013, time::Month::August, 2).ok();
+        assert_eq!(text_date("Aug 2, 2013"), expected);
+        assert_eq!(text_date("Premiered Aug 2, 2013"), expected);
+        assert_eq!(text_date("Streamed live on August 2, 2013"), expected);
+        assert_eq!(text_date("2 months ago"), None);
+        assert_eq!(text_date("From YouTube"), None);
+    }
+
+    /// The feed's timestamp outranks the watch page's day, which outranks a
+    /// related shelf's "3 years ago"; a finer date is never replaced by a coarser one.
+    #[test]
+    fn merging_details_keeps_the_finer_publish_date() {
+        let feed = video("a", "A", "2024-02-01T15:30:00Z", 0);
+        let mut detail = video("a", "A", "2024-02-01 0:00:00.0 +00:00:00", 0);
+        detail.keep_finer_publish_date(&feed);
+        assert_eq!(detail.published_at, "2024-02-01T15:30:00Z");
+
+        let mut related = video("a", "A", "3 years ago", 0);
+        related.keep_finer_publish_date(&video("a", "A", "Feb 1, 2024", 0));
+        assert_eq!(related.published_at, "Feb 1, 2024");
+
+        let mut fresh = video("a", "A", "2024-02-01T15:30:00Z", 0);
+        fresh.keep_finer_publish_date(&video("a", "A", "3 years ago", 0));
+        assert_eq!(fresh.published_at, "2024-02-01T15:30:00Z");
     }
 
     #[test]

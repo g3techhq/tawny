@@ -1,18 +1,18 @@
 use crate::{
-    api::{search_catalog, search_catalog_page},
+    api::{get_feed_page, search_catalog, search_catalog_page},
     app::Route,
-    models::{Channel, ExploreFilter, LibrarySnapshot, SearchResults, Video},
+    models::{Channel, ExploreFilter, FeedFilter, FeedGroup, FeedQuery, SearchResults, Video},
     state::AppState,
 };
 use dioxus::prelude::*;
+use g3_cache::use_cached;
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Avatar, AvatarSize, Button, ButtonFill, Chip, Color, Content, InfiniteScroll, Searchbar,
     SegmentButton, SegmentGroup, Shelf, Space, Spinner, Stack, StackAlign, Text, TextTone,
 };
-use std::collections::{HashMap, HashSet};
 
-use super::{PageHeader, VideoGrid, VideoGridSkeleton, use_after_first_paint};
+use super::{PageHeader, VideoGrid, VideoGridSkeleton};
 
 /// How many recent videos stand in for a query on an empty search page.
 const SUGGESTION_COUNT: usize = 24;
@@ -42,17 +42,27 @@ pub fn Explore() -> Element {
             visible_count.set(RESULT_PAGE_SIZE);
         }));
     }
-    // Ranking the library is the slow part of this page, so the search bar
-    // and placeholders go up first.
-    let painted = use_after_first_paint();
+    // With nothing typed, the page suggests the newest unwatched uploads from
+    // what the viewer follows: the first page of an unwatched feed, which is
+    // also what type-ahead filters before Enter asks the server.
+    let settings = app_state.settings();
+    let suggestions = use_cached(
+        get_feed_page,
+        (
+            FeedQuery {
+                group: FeedGroup::All,
+                kind: FeedFilter::All,
+                duration: None,
+                hide_watched: true,
+                thresholds: (&settings).into(),
+            },
+            0,
+        ),
+    );
     let page = visible_count();
     let remote =
         results().filter(|remote| remote.query.trim().eq_ignore_ascii_case(search().trim()));
-    let loading = remote.is_none() && !painted();
-    // Read through a borrow, rank references, and copy out only the page on
-    // screen. A real library holds tens of thousands of videos, and cloning
-    // every match on the way to a page of them ran that copy on every
-    // keystroke.
+    let loading = remote.is_none() && suggestions.read().is_none();
     let (videos, channels, result_count, remaining) = if let Some(remote) = &remote {
         paged(
             remote.videos.iter().collect(),
@@ -63,8 +73,12 @@ pub fn Explore() -> Element {
     } else if loading {
         (Vec::new(), Vec::new(), 0, 0)
     } else {
-        app_state.with_library(|library| {
-            let (videos, channels) = local_matches(library, &needle);
+        let suggested = match &*suggestions.read() {
+            Some(Ok(feed)) => feed.videos.clone(),
+            _ => Vec::new(),
+        };
+        app_state.with_viewer(|viewer| {
+            let (videos, channels) = local_matches(&suggested, &viewer.subscriptions, &needle);
             paged(videos, channels, filter, page)
         })
     };
@@ -80,7 +94,6 @@ pub fn Explore() -> Element {
         spawn(async move {
             match search_catalog(query, filter.query().to_string()).await {
                 Ok(found) => {
-                    app_state.ingest_search_results(&found);
                     if !found.remote_available {
                         app_state.show_toast(
                             "Showing cached matches — remote source is unavailable",
@@ -105,7 +118,6 @@ pub fn Explore() -> Element {
         spawn(async move {
             match search_catalog_page(query, filter.query().to_string(), token).await {
                 Ok(page) => {
-                    app_state.ingest_search_results(&page);
                     results.with_mut(|current| {
                         if let Some(current) = current.as_mut() {
                             for video in page.videos {
@@ -156,7 +168,7 @@ pub fn Explore() -> Element {
                 }
                 Text { tone: TextTone::Secondary,
                     if needle.is_empty() {
-                        "Unwatched recents, mixed with channels you watch often"
+                        "The newest unwatched uploads from channels you follow"
                     } else {
                         "{result_count} results for “{search_value}”. Press Enter to search online."
                     }
@@ -210,94 +222,35 @@ pub fn Explore() -> Element {
     }
 }
 
-/// What the cache has for `needle`: matching videos and channels, or with no
-/// query, suggestions to stand in for one.
+/// What the device has for `needle`: followed channels and suggested videos
+/// that match, or with no query, the suggestions themselves. Enter asks the
+/// server, which searches the whole catalog.
 fn local_matches<'a>(
-    library: &'a LibrarySnapshot,
+    suggestions: &'a [Video],
+    subscriptions: &'a [Channel],
     needle: &str,
 ) -> (Vec<&'a Video>, Vec<&'a Channel>) {
-    if !needle.is_empty() {
-        let videos = library
-            .videos
-            .iter()
-            .filter(|video| {
-                video.title.to_lowercase().contains(needle)
-                    || video.channel_name.to_lowercase().contains(needle)
-            })
-            .collect::<Vec<_>>();
-        let channels = library
-            .channels
-            .iter()
-            .filter(|channel| {
-                channel.name.to_lowercase().contains(needle)
-                    || channel.handle.to_lowercase().contains(needle)
-            })
-            .collect::<Vec<_>>();
-        return (videos, channels);
+    if needle.is_empty() {
+        return (
+            suggestions.iter().take(SUGGESTION_COUNT).collect(),
+            Vec::new(),
+        );
     }
-
-    let subscribed_ids = library
-        .channels
+    let videos = suggestions
         .iter()
-        .filter(|channel| channel.subscribed)
-        .map(|channel| channel.id.as_str())
-        .collect::<HashSet<_>>();
-    let mut videos = library
-        .videos
+        .filter(|video| {
+            video.title.to_lowercase().contains(needle)
+                || video.channel_name.to_lowercase().contains(needle)
+        })
+        .collect();
+    let channels = subscriptions
         .iter()
-        .filter(|video| subscribed_ids.contains(video.channel_id.as_str()) && !video.watched)
-        .collect::<Vec<_>>();
-    videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
-
-    // Keep the page fresh, then mix in missed uploads from channels the
-    // viewer actually returns to. History only records distinct videos,
-    // so this is affinity rather than a replay-count feedback loop.
-    let video_channels = library
-        .videos
-        .iter()
-        .map(|video| (video.id.as_str(), video.channel_id.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut affinity = HashMap::<&str, usize>::new();
-    for entry in &library.history {
-        if let Some(channel_id) = video_channels.get(entry.video_id.as_str()) {
-            *affinity.entry(channel_id).or_default() += 1;
-        }
-    }
-    let recent = videos
-        .iter()
-        .take(SUGGESTION_COUNT)
-        .copied()
-        .collect::<Vec<_>>();
-    let mut familiar = videos;
-    familiar.sort_by_cached_key(|video| {
-        (
-            std::cmp::Reverse(*affinity.get(video.channel_id.as_str()).unwrap_or(&0)),
-            std::cmp::Reverse(video.published_epoch()),
-        )
-    });
-    let mut ranked = Vec::with_capacity(SUGGESTION_COUNT);
-    let mut seen = HashSet::new();
-    for index in 0..SUGGESTION_COUNT {
-        let candidate = if index % 3 == 2 {
-            familiar.get(index / 3)
-        } else {
-            recent.get(index - index / 3)
-        };
-        if let Some(video) = candidate
-            && seen.insert(video.id.as_str())
-        {
-            ranked.push(*video);
-        }
-    }
-    for video in recent.into_iter().chain(familiar) {
-        if ranked.len() >= SUGGESTION_COUNT {
-            break;
-        }
-        if seen.insert(video.id.as_str()) {
-            ranked.push(video);
-        }
-    }
-    (ranked, Vec::new())
+        .filter(|channel| {
+            channel.name.to_lowercase().contains(needle)
+                || channel.handle.to_lowercase().contains(needle)
+        })
+        .collect();
+    (videos, channels)
 }
 
 /// The first `page` of each list under `filter`, copied out, with the total

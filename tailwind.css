@@ -305,6 +305,35 @@ textarea {
   justify-content: center;
 }
 
+.player-stage-origin {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.9);
+}
+/* YouTube's refusals are not something to fix, so they read calm; the
+   problems someone has to act on stand out. */
+.player-stage-origin-setup {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fcd34d;
+}
+.player-stage-origin-bug {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+}
+.player-stage-status p.player-stage-summary {
+  max-width: 40ch;
+  font-weight: 600;
+}
+.player-stage-status p.player-stage-remedy {
+  max-width: 52ch;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.86rem;
+}
 .player-stage-detail {
   max-width: 52ch;
   padding: 0.4rem 0.6rem;

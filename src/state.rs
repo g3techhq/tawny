@@ -1,16 +1,33 @@
+//! App-wide state.
+//!
+//! The server holds this account's data; the client holds what the screens
+//! last saw of it, through `g3-cache`. [`AppState::viewer`] is the account's
+//! own small state (follows, playlists, groups, queue, history), read by
+//! nearly every screen, and each screen reads the videos it shows itself.
+//!
+//! A change shows at once: it is applied to the cached reads it touches, sent
+//! to the server as a "set to" mutation, and then the reads it changed are
+//! refetched (see `data_change`), which also undoes the guess if the server
+//! refused it.
+
+use std::collections::HashMap;
+use std::future::Future;
+
 use crate::subscriptions_io::{ImportSummary, ParsedImport};
 use crate::{
-    api::{get_library, push_library_state, sync_library},
+    api::{self, get_feed_page, get_playlist, get_playlist_previews, get_videos, get_viewer},
     cache::use_persistent_signal,
+    data_change::{DataChange, invalidate},
     models::{
-        AppSettings, AudioTrackOption, CaptionTrack, Channel, ChannelDetails, FeedFilter,
-        HistoryEntry, LibrarySnapshot, LibraryUserState, Playlist, PlaylistView, SearchResults,
-        SponsorSegment, SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoDetails,
-        VideoPreviewFrames, playlist_queue_entry, queued_playlist_id,
+        AppSettings, AudioTrackOption, CaptionTrack, Channel, FeedFilter, HISTORY_LIMIT,
+        HistoryEntry, PlaylistContents, PlaylistView, SponsorSegment, SubscriptionChange,
+        SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoList, VideoPreviewFrames,
+        VideoProgress, Viewer, playlist_queue_entry, queued_playlist_id,
     },
     session::use_session_provider,
 };
 use dioxus::prelude::*;
+use g3_cache::{Cached, update_all_cached, update_cached, use_cached};
 use g3_ui::{Color, ToastOptions, Toaster};
 
 /// How close to the end counts as finished. YouTube stops short of the exact
@@ -44,8 +61,16 @@ pub struct PlaylistRunStatus {
 
 #[derive(Clone, Copy)]
 pub struct AppState {
-    pub library: Signal<LibrarySnapshot>,
+    /// This account's own state, as last fetched. See [`Self::with_viewer`].
+    pub viewer: Cached<Viewer>,
+    /// The playlist the queue is running, with its videos, so autoplay can
+    /// decide what is next without a round trip. Shares its cache entry with
+    /// that playlist's page.
+    pub run_playlist: Cached<Option<PlaylistContents>>,
     pub settings: Signal<AppSettings>,
+    /// Where playback has reached, per video, since it was last sent. Ticks
+    /// land here; [`Self::flush_progress`] sends them.
+    pending_progress: Signal<HashMap<String, VideoProgress>>,
     /// g3-ui's toast queue. It belongs to the `AppWrapper`, which sits below
     /// this state, so a component inside the wrapper hands it over once it
     /// mounts. Until then a notice has nowhere to show and is dropped.
@@ -76,12 +101,10 @@ pub struct AppState {
     pub selected_audio_track: Signal<Option<String>>,
     pub active_preview_frames: Signal<Option<VideoPreviewFrames>>,
     pub syncing: Signal<bool>,
-    /// Segment selections live here because the header owns the segmented
-    /// control while the page owns the list it filters.
     pub chapters_sheet_open: Signal<bool>,
     /// Videos this sitting has advanced away from, most recent last.
     ///
-    /// Deliberately not in the library: it is what "previous" means during one
+    /// Deliberately not on the server: it is what "previous" means during one
     /// run of the queue, not something worth carrying to another device or
     /// remembering tomorrow. History cannot answer it - playing a video moves it
     /// to the front of history, so stepping back through history immediately
@@ -93,20 +116,90 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn library(self) -> LibrarySnapshot {
-        (self.library)()
+    /// Read this account's state without copying it. Subscribes, so the
+    /// caller rerenders when it changes. Before the first answer arrives it
+    /// reads as empty.
+    pub fn with_viewer<T>(self, read: impl FnOnce(&Viewer) -> T) -> T {
+        match &*self.viewer.read() {
+            Some(Ok(viewer)) => read(viewer),
+            _ => read(&Viewer::default()),
+        }
     }
 
-    /// Read the library without copying it.
+    /// Like [`Self::with_viewer`], without subscribing: for event handlers.
+    fn peek_viewer<T>(self, read: impl FnOnce(&Viewer) -> T) -> T {
+        match &*self.viewer.peek() {
+            Some(Ok(viewer)) => read(viewer),
+            _ => read(&Viewer::default()),
+        }
+    }
+
+    /// Show a change to this account's state at once. The mutation that
+    /// follows, and its invalidation, reconcile it with the server.
+    fn edit_viewer(self, edit: impl FnOnce(&mut Viewer)) {
+        update_cached(get_viewer, (), edit);
+    }
+
+    /// Apply `update` to this video wherever a cached list holds it: feed
+    /// pages, playlists, the queue and history, and the one playing.
+    fn apply_to_videos(mut self, video_id: &str, update: impl Fn(&mut Video)) {
+        update_all_cached(get_feed_page, |page| page.update_video(video_id, &update));
+        update_all_cached(get_videos, |videos| videos.update_video(video_id, &update));
+        update_all_cached(get_playlist, |contents| {
+            if let Some(contents) = contents {
+                contents.update_video(video_id, &update);
+            }
+        });
+        // Previews carry counts, not videos: refetched rather than edited.
+        g3_cache::invalidate_cached(get_playlist_previews);
+        let active = self.active_video.peek().clone();
+        if let Some(mut active) = active
+            && active.id == video_id
+        {
+            update(&mut active);
+            self.active_video.set(Some(active));
+        }
+    }
+
+    /// Take newly resolved catalog facts (lengths, live and Shorts state)
+    /// into every cached list, keeping this viewer's progress.
     ///
-    /// [`Self::library`] clones the whole snapshot, which is tens of thousands
-    /// of videos and channels once a cache has filled up. That is fine for a
-    /// caller that needs to own the data, but ruinous on a render path: every
-    /// video card was cloning the entire library three times just to look up a
-    /// playlist name and an avatar, which stalled the swipe release animation.
-    /// Subscribes to the signal, so it stays reactive.
-    pub fn with_library<T>(self, read: impl FnOnce(&LibrarySnapshot) -> T) -> T {
-        read(&(self.library).read())
+    /// Feed pages are refetched too: a video with a length can now enter a
+    /// length filter it was left out of.
+    pub fn merge_video_metadata(self, fresh: Vec<Video>) {
+        if fresh.is_empty() {
+            return;
+        }
+        update_all_cached(get_videos, |videos| videos.merge_metadata(&fresh));
+        update_all_cached(get_playlist, |contents| {
+            if let Some(contents) = contents {
+                contents.merge_metadata(&fresh);
+            }
+        });
+        g3_cache::invalidate_cached(get_feed_page);
+    }
+
+    /// Send a mutation, then refetch what it changed, whether or not it
+    /// succeeded. A failure is said aloud: the guess shown in the meantime is
+    /// about to be undone by the refetch.
+    fn send<T: 'static>(
+        self,
+        change: DataChange,
+        mutation: impl Future<Output = Result<T>> + 'static,
+    ) {
+        spawn(async move {
+            let result = mutation.await;
+            invalidate(change);
+            if let Err(error) = result {
+                self.show_toast(
+                    format!(
+                        "Could not save that: {}",
+                        crate::session::readable(&error.to_string())
+                    ),
+                    Color::Danger,
+                );
+            }
+        });
     }
 
     pub fn settings(self) -> AppSettings {
@@ -125,6 +218,14 @@ impl AppState {
         (self.active_video)()
     }
 
+    pub fn show_toast(self, message: impl Into<String>, color: Color) {
+        if let Some(toaster) = *self.toaster.peek() {
+            // Most notices confirm an action that can be repeated at once -
+            // a swipe, a toggle - so the latest replaces rather than queues.
+            toaster.show(ToastOptions::new(message).color(color).replace());
+        }
+    }
+
     pub fn play(mut self, video: Video) {
         if self
             .active_video()
@@ -132,8 +233,8 @@ impl AppState {
             .is_none_or(|active| active.id != video.id)
         {
             // The outgoing video keeps whatever position its last tick recorded.
-            // Locally that is already correct; this is what stops the server
-            // from being up to half a minute behind when a video is swapped.
+            // This is what stops the server from being up to half a minute
+            // behind when a video is swapped.
             self.flush_progress();
             self.active_captions.set(Vec::new());
             self.selected_caption.set(None);
@@ -150,13 +251,13 @@ impl AppState {
     /// Fill in what is known about the video that is playing.
     ///
     /// Only ever adds. The same player is handed two descriptions of a video:
-    /// the copy cached in the library, which carries no chapters, captions or
-    /// preview frames because the library does not store them, and the one the
-    /// details request returns, which carries all three. They arrive in either
-    /// order and more than once, so applying an empty field on top of a full
-    /// one would strip the timeline of its divisions and its segment colours
-    /// part way through a video. Changing video is what clears this - see
-    /// [`Self::play`] and [`Self::stop_playback`].
+    /// the card it was opened from, which carries no chapters, captions or
+    /// preview frames, and the one the details request returns, which carries
+    /// all three. They arrive in either order and more than once, so applying
+    /// an empty field on top of a full one would strip the timeline of its
+    /// divisions and its segment colours part way through a video. Changing
+    /// video is what clears this - see [`Self::play`] and
+    /// [`Self::stop_playback`].
     pub fn set_player_metadata(
         mut self,
         captions: Vec<CaptionTrack>,
@@ -190,152 +291,185 @@ impl AppState {
         self.selected_audio_track.set(None);
     }
 
-    fn sync_in_background(self) {
-        // Only the client-owned half. The reply is just the accepted revision,
-        // so this costs kilobytes rather than the whole cache in both
-        // directions - see `LibraryUserState`. Built from a borrow: cloning the
-        // snapshot first made every edit copy the entire cache before sending a
-        // few kilobytes of it.
-        let user_state = LibraryUserState::from(&*self.library.peek());
-        spawn(async move {
-            let _ = push_library_state(user_state).await;
-        });
-    }
-
     /// Remember where playback has reached.
     ///
-    /// Called on a timer while a video plays, so it deliberately does not push
-    /// to the server on every tick - `flush_progress` does that at the points
-    /// where losing the position would actually matter. A whole second of
-    /// change is the smallest step worth a re-render.
+    /// Called on a timer while a video plays, so it only updates the playing
+    /// copy and the pending map; [`Self::flush_progress`] sends it, at the
+    /// points where losing the position would actually matter. A whole second
+    /// of change is the smallest step worth a re-render.
     pub fn record_progress(mut self, video_id: &str, seconds: u64) -> bool {
-        // Checked through a peek first. Taking the write guard notifies every
-        // subscriber when it drops, changed or not - and the library's
-        // subscribers include the effect that persists the whole cache.
-        let unchanged = self
-            .library
-            .peek()
-            .videos
-            .iter()
-            .find(|video| video.id == video_id)
-            .is_none_or(|video| video.progress_seconds == seconds);
-        if unchanged {
+        let Some(mut active) = self.active_video.peek().clone() else {
+            return false;
+        };
+        if active.id != video_id || active.progress_seconds == seconds {
             return false;
         }
+        active.progress_seconds = seconds;
+        // Treated as watched once it is effectively over, which is what the
+        // card's progress bar and the "hide watched" filter both key on.
+        if active.duration_seconds > 0
+            && seconds + PROGRESS_WATCHED_TAIL_SECONDS >= active.duration_seconds
         {
-            let mut library = self.library.write();
-            let Some(video) = library.videos.iter_mut().find(|video| video.id == video_id) else {
-                return false;
-            };
-            if video.progress_seconds == seconds {
-                return false;
-            }
-            video.progress_seconds = seconds;
-            // Treated as watched once it is effectively over, which is what the
-            // card's progress bar and the "hide watched" filter both key on.
-            if video.duration_seconds > 0
-                && seconds + PROGRESS_WATCHED_TAIL_SECONDS >= video.duration_seconds
-            {
-                video.watched = true;
-            }
-            library.cache_revision += 1;
+            active.watched = true;
         }
+        self.pending_progress.write().insert(
+            active.id.clone(),
+            VideoProgress {
+                video_id: active.id.clone(),
+                watched: active.watched,
+                progress_seconds: active.progress_seconds,
+                audio_only: active.audio_only,
+            },
+        );
+        self.active_video.set(Some(active));
         true
     }
 
-    /// Push the remembered positions to the server.
-    ///
-    /// Separate from [`Self::record_progress`] so the timer can run often while
-    /// the network call stays rare: on pause, on leaving the video, and on a
-    /// slower interval than the tick itself.
-    pub fn flush_progress(self) {
-        self.sync_in_background();
+    /// Send the remembered positions to the server, and show them on every
+    /// cached list holding those videos.
+    pub fn flush_progress(mut self) {
+        let pending = std::mem::take(&mut *self.pending_progress.write());
+        if pending.is_empty() {
+            return;
+        }
+        let progress = pending.into_values().collect::<Vec<_>>();
+        for entry in &progress {
+            let entry = entry.clone();
+            self.apply_to_videos(&entry.video_id.clone(), move |video| {
+                video.progress_seconds = entry.progress_seconds;
+                video.watched = entry.watched;
+            });
+        }
+        // No invalidation: the lists already show what was sent.
+        spawn(async move {
+            if api::save_progress(progress).await.is_err() {
+                self.show_toast("Could not save your place in that video", Color::Warning);
+            }
+        });
+    }
+
+    fn save_one_progress(self, video: &Video) {
+        let progress = vec![VideoProgress {
+            video_id: video.id.clone(),
+            watched: video.watched,
+            progress_seconds: video.progress_seconds,
+            audio_only: video.audio_only,
+        }];
+        spawn(async move {
+            if api::save_progress(progress).await.is_err() {
+                self.show_toast("Could not save that", Color::Warning);
+            }
+        });
     }
 
     /// Play this video without its video stream, and remember that choice for
     /// this video specifically.
-    pub fn set_audio_only(mut self, video_id: &str, audio_only: bool) -> bool {
-        {
-            let mut library = self.library.write();
-            let Some(video) = library.videos.iter_mut().find(|video| video.id == video_id) else {
-                return false;
-            };
-            if video.audio_only == audio_only {
-                return false;
-            }
-            video.audio_only = audio_only;
-            library.cache_revision += 1;
+    pub fn set_audio_only(self, video: &Video, audio_only: bool) -> bool {
+        if video.audio_only == audio_only {
+            return false;
         }
-        // Also mirror onto the playing copy so the player re-reads it without
-        // waiting for a library round trip.
-        if let Some(active) = (self.active_video)()
-            && active.id == video_id
-        {
-            let mut updated = active;
-            updated.audio_only = audio_only;
-            self.active_video.set(Some(updated));
-        }
-        self.sync_in_background();
+        self.apply_to_videos(&video.id, move |video| video.audio_only = audio_only);
+        self.save_one_progress(&Video {
+            audio_only,
+            ..video.clone()
+        });
         true
     }
 
-    pub fn show_toast(self, message: impl Into<String>, color: Color) {
-        if let Some(toaster) = *self.toaster.peek() {
-            // Most notices confirm an action that can be repeated at once -
-            // a swipe, a toggle - so the latest replaces rather than queues.
-            toaster.show(ToastOptions::new(message).color(color).replace());
-        }
+    pub fn mark_watched(self, video: &Video, watched: bool) {
+        let progress_seconds = if watched { video.duration_seconds } else { 0 };
+        self.apply_to_videos(&video.id, move |video| {
+            video.watched = watched;
+            video.progress_seconds = progress_seconds;
+        });
+        self.save_one_progress(&Video {
+            watched,
+            progress_seconds,
+            ..video.clone()
+        });
     }
 
-    pub fn add_to_playlist(mut self, video_id: &str, playlist_id: &str) -> Option<PlaylistSave> {
-        let mut library = self.library.write();
-        let playlist_name = {
-            let playlist = library
-                .playlists
-                .iter_mut()
-                .find(|playlist| playlist.id == playlist_id)?;
-            if playlist.video_ids.iter().any(|id| id == video_id) {
-                return Some(PlaylistSave::AlreadyThere(playlist.name.clone()));
+    // -----------------------------------------------------------------------
+    // Playlists
+    // -----------------------------------------------------------------------
+
+    pub fn add_to_playlist(self, video: &Video, playlist_id: &str) -> Option<PlaylistSave> {
+        let playlist = self.peek_viewer(|viewer| viewer.playlist(playlist_id).cloned())?;
+        if playlist.video_ids.iter().any(|id| id == &video.id) {
+            return Some(PlaylistSave::AlreadyThere(playlist.name));
+        }
+        let video_id = video.id.clone();
+        self.edit_viewer(|viewer| {
+            if let Some(playlist) = viewer.playlists.iter_mut().find(|p| p.id == playlist_id) {
+                playlist.video_ids.insert(0, video_id.clone());
             }
-            playlist.video_ids.insert(0, video_id.to_string());
-            playlist.name.clone()
-        };
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        Some(PlaylistSave::Saved(playlist_name))
+        });
+        let added = video.clone();
+        update_cached(get_playlist, (playlist_id.to_string(),), |contents| {
+            if let Some(contents) = contents {
+                contents.playlist.video_ids.insert(0, added.id.clone());
+                contents.videos.insert(0, added);
+            }
+        });
+        self.send(
+            DataChange::Playlists,
+            api::set_in_playlist(playlist_id.to_string(), video.id.clone(), true),
+        );
+        Some(PlaylistSave::Saved(playlist.name))
     }
 
-    pub fn create_playlist(mut self, name: String) -> String {
-        let id = format!("local-{}", self.library.peek().cache_revision + 1);
-        {
-            let mut library = self.library.write();
-            library.playlists.push(Playlist {
-                id: id.clone(),
-                name,
-                video_ids: Vec::new(),
-            });
-            library.cache_revision += 1;
+    pub fn remove_from_playlist(self, video_id: &str, playlist_id: &str) -> bool {
+        let present = self.peek_viewer(|viewer| {
+            viewer
+                .playlist(playlist_id)
+                .is_some_and(|playlist| playlist.video_ids.iter().any(|id| id == video_id))
+        });
+        if !present {
+            return false;
         }
-        self.sync_in_background();
+        self.edit_viewer(|viewer| {
+            if let Some(playlist) = viewer.playlists.iter_mut().find(|p| p.id == playlist_id) {
+                playlist.video_ids.retain(|id| id != video_id);
+            }
+        });
+        update_cached(get_playlist, (playlist_id.to_string(),), |contents| {
+            if let Some(contents) = contents {
+                contents.playlist.video_ids.retain(|id| id != video_id);
+                contents.videos.retain(|video| video.id != video_id);
+            }
+        });
+        self.send(
+            DataChange::Playlists,
+            api::set_in_playlist(playlist_id.to_string(), video_id.to_string(), false),
+        );
+        true
+    }
+
+    /// Create a playlist, returning its id. The id is made here so the
+    /// playlist can be used before the server has answered.
+    pub fn create_playlist(self, name: String) -> String {
+        let id = format!("pl-{}", random_suffix());
+        let playlist = crate::models::Playlist {
+            id: id.clone(),
+            name: name.clone(),
+            video_ids: Vec::new(),
+        };
+        self.edit_viewer(|viewer| viewer.playlists.push(playlist));
+        self.send(DataChange::Playlists, api::save_playlist(id.clone(), name));
         id
     }
 
     pub fn delete_playlist(mut self, playlist_id: &str) -> Option<String> {
-        let mut library = self.library.write();
-        let index = library
-            .playlists
-            .iter()
-            .position(|playlist| playlist.id == playlist_id)?;
-        let removed = library.playlists.remove(index);
-        // A marker for a deleted playlist would resolve to nothing and be swept
-        // up on the next advance anyway, but leaving it there means the queue
-        // page lists a playlist that no longer exists.
-        library
-            .queue
-            .retain(|entry| queued_playlist_id(entry) != Some(playlist_id));
-        library.cache_revision += 1;
-        drop(library);
+        let name =
+            self.peek_viewer(|viewer| viewer.playlist(playlist_id).map(|p| p.name.clone()))?;
+        self.edit_viewer(|viewer| {
+            viewer
+                .playlists
+                .retain(|playlist| playlist.id != playlist_id);
+            viewer
+                .queue
+                .retain(|entry| queued_playlist_id(entry) != Some(playlist_id));
+        });
         let mut settings = self.settings.write();
         if settings.swipe_right_playlist_id == playlist_id {
             settings.swipe_right_playlist_id = "watch-later".into();
@@ -345,146 +479,110 @@ impl AppState {
         }
         settings.playlist_views.remove(playlist_id);
         drop(settings);
-        self.sync_in_background();
-        Some(removed.name)
+        let id = playlist_id.to_string();
+        self.send(DataChange::Playlists, async move {
+            api::delete_playlist(id).await?;
+            invalidate(DataChange::Queue);
+            Ok(())
+        });
+        Some(name)
     }
 
-    pub fn remove_from_playlist(mut self, video_id: &str, playlist_id: &str) -> bool {
-        let mut library = self.library.write();
-        let Some(playlist) = library
-            .playlists
-            .iter_mut()
-            .find(|playlist| playlist.id == playlist_id)
-        else {
-            return false;
-        };
-        let before = playlist.video_ids.len();
-        playlist.video_ids.retain(|id| id != video_id);
-        if playlist.video_ids.len() == before {
-            return false;
-        }
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        true
+    /// Drop every already-watched video from a playlist. The server decides
+    /// which, since it knows what every device has watched; the count comes
+    /// back in a toast.
+    pub fn remove_watched_from_playlist(self, playlist_id: &str) {
+        let id = playlist_id.to_string();
+        spawn(async move {
+            let result = api::remove_watched_from_playlist(id).await;
+            invalidate(DataChange::Playlists);
+            match result {
+                Ok(0) => self.show_toast("Nothing watched to remove", Color::Neutral),
+                Ok(removed) => self.show_toast(
+                    format!(
+                        "Removed {removed} watched {}",
+                        if removed == 1 { "video" } else { "videos" }
+                    ),
+                    Color::Success,
+                ),
+                Err(_) => self.show_toast("Could not remove watched videos", Color::Danger),
+            }
+        });
     }
 
-    /// Drop every already-watched video from a playlist, returning how many
-    /// were removed.
-    pub fn remove_watched_from_playlist(mut self, playlist_id: &str) -> usize {
-        let mut library = self.library.write();
-        let watched_ids = library
-            .videos
-            .iter()
-            .filter(|video| video.watched)
-            .map(|video| video.id.clone())
-            .collect::<Vec<_>>();
-        let Some(playlist) = library
-            .playlists
-            .iter_mut()
-            .find(|playlist| playlist.id == playlist_id)
-        else {
-            return 0;
-        };
-        let before = playlist.video_ids.len();
-        playlist.video_ids.retain(|id| !watched_ids.contains(id));
-        let removed = before - playlist.video_ids.len();
-        if removed == 0 {
-            return 0;
-        }
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        removed
+    // -----------------------------------------------------------------------
+    // Subscriptions and groups
+    // -----------------------------------------------------------------------
+
+    /// Whether this account follows the channel.
+    pub fn follows(self, channel_id: &str) -> bool {
+        self.with_viewer(|viewer| viewer.follows(channel_id).is_some())
     }
 
-    pub fn mark_watched(mut self, video_id: &str, watched: bool) {
-        let mut library = self.library.write();
-        let changed =
-            if let Some(video) = library.videos.iter_mut().find(|video| video.id == video_id) {
-                video.watched = watched;
-                video.progress_seconds = if watched { video.duration_seconds } else { 0 };
-                true
-            } else {
-                false
-            };
-        if changed {
-            library.cache_revision += 1;
-            drop(library);
-            self.sync_in_background();
-        }
-    }
-
-    pub fn toggle_subscription(mut self, channel_id: &str) -> Option<bool> {
-        let mut library = self.library.write();
-        let channel = library
-            .channels
-            .iter_mut()
-            .find(|channel| channel.id == channel_id)?;
-        channel.subscribed = !channel.subscribed;
-        let subscribed = channel.subscribed;
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        Some(subscribed)
-    }
-
-    /// [`Self::toggle_subscription`] for a channel the library may not hold
-    /// yet - one met through a video opened from search or a related list.
-    /// It is added unfollowed first, so the toggle always has something to
-    /// flip rather than the button silently doing nothing.
-    pub fn toggle_subscription_for(mut self, channel: &Channel) -> bool {
-        let known = self
-            .library
-            .peek()
-            .channels
-            .iter()
-            .any(|known| known.id == channel.id);
-        if !known {
-            self.library.write().channels.push(Channel {
-                subscribed: false,
-                ..channel.clone()
-            });
-        }
-        self.toggle_subscription(&channel.id).unwrap_or(false)
+    /// Follow or unfollow a channel. Returns the new answer.
+    pub fn toggle_subscription_for(self, channel: &Channel) -> bool {
+        let current = self.peek_viewer(|viewer| viewer.follows(&channel.id).cloned());
+        let subscribed = current.is_none();
+        let content = current
+            .map(|channel| channel.subscription_content)
+            .unwrap_or(channel.subscription_content);
+        self.set_subscriptions(vec![SubscriptionChange {
+            channel: channel.clone(),
+            subscribed,
+            content,
+        }]);
+        subscribed
     }
 
     /// Narrow (or widen) which of a channel's uploads reach the feed. Leaves
     /// the subscription itself alone: this is a filter, not an unsubscribe.
-    pub fn set_subscription_content(
-        mut self,
-        channel_id: &str,
-        content: SubscriptionContent,
-    ) -> bool {
-        let mut library = self.library.write();
-        let Some(channel) = library
-            .channels
-            .iter_mut()
-            .find(|channel| channel.id == channel_id)
-        else {
+    pub fn set_subscription_content(self, channel_id: &str, content: SubscriptionContent) -> bool {
+        let Some(channel) = self.peek_viewer(|viewer| viewer.follows(channel_id).cloned()) else {
             return false;
         };
         if channel.subscription_content == content {
             return false;
         }
-        channel.subscription_content = content;
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+        self.set_subscriptions(vec![SubscriptionChange {
+            channel,
+            subscribed: true,
+            content,
+        }]);
         true
     }
 
-    /// Apply a parsed subscription export to the library.
-    ///
-    /// Channels already known are subscribed in place so their cached metadata
-    /// and videos survive. Unknown channels are written as stubs carrying only
-    /// the id and name from the export: the next sync fills in the avatar,
-    /// handle, and uploads, which is the same path a freshly discovered channel
-    /// takes.
-    pub fn import_subscriptions(mut self, parsed: ParsedImport) -> ImportSummary {
-        let mut summary = ImportSummary::default();
-        let mut library = self.library.write();
+    fn set_subscriptions(self, changes: Vec<SubscriptionChange>) {
+        let shown = changes.clone();
+        self.edit_viewer(move |viewer| {
+            for change in shown {
+                viewer
+                    .subscriptions
+                    .retain(|channel| channel.id != change.channel.id);
+                if change.subscribed {
+                    viewer.subscriptions.push(Channel {
+                        subscribed: true,
+                        subscription_content: change.content,
+                        ..change.channel
+                    });
+                }
+            }
+            viewer
+                .subscriptions
+                .sort_by_key(|channel| channel.name.to_lowercase());
+        });
+        self.send(DataChange::Subscriptions, api::set_subscriptions(changes));
+    }
 
+    /// Apply a parsed subscription export.
+    ///
+    /// Channels already followed are counted, not rewritten. Unknown channels
+    /// are sent as stubs carrying only the id and name from the export: the
+    /// server adds them to the catalog, and the next refresh fills in the
+    /// avatar, handle and uploads.
+    pub fn import_subscriptions(self, parsed: ParsedImport) -> ImportSummary {
+        let mut summary = ImportSummary::default();
+        let viewer = self.peek_viewer(Clone::clone);
+        let mut changes = Vec::new();
         for entry in parsed.subscriptions {
             // Handle-only records cannot be matched or fetched offline. They
             // are counted rather than silently dropped so the toast can say so.
@@ -492,72 +590,82 @@ impl AppState {
                 summary.unresolved += 1;
                 continue;
             }
-            match library
-                .channels
-                .iter_mut()
-                .find(|channel| channel.id == entry.channel_id)
-            {
-                Some(channel) => {
-                    let was_subscribed = channel.subscribed;
-                    channel.subscribed = true;
-                    channel.subscription_content = entry.content;
-                    if channel.name.trim().is_empty() && !entry.name.is_empty() {
-                        channel.name = entry.name;
-                    }
-                    if was_subscribed {
-                        summary.already_subscribed += 1;
-                    } else {
-                        summary.subscribed += 1;
-                    }
-                }
-                None => {
-                    library.channels.push(Channel {
-                        id: entry.channel_id,
-                        name: entry.name,
-                        handle: entry.handle,
-                        avatar_url: None,
-                        subscriber_count: String::new(),
-                        subscribed: true,
-                        description: String::new(),
-                        banner_url: None,
-                        subscription_content: entry.content,
-                    });
-                    summary.subscribed += 1;
-                }
+            if viewer.follows(&entry.channel_id).is_some() {
+                summary.already_subscribed += 1;
+                continue;
             }
+            summary.subscribed += 1;
+            changes.push(SubscriptionChange {
+                channel: Channel {
+                    id: entry.channel_id,
+                    name: entry.name,
+                    handle: entry.handle,
+                    avatar_url: None,
+                    subscriber_count: String::new(),
+                    subscribed: true,
+                    description: String::new(),
+                    banner_url: None,
+                    subscription_content: entry.content,
+                },
+                subscribed: true,
+                content: entry.content,
+            });
         }
 
         // Groups only ever arrive from Tawny's own export. Matching on name
         // keeps a re-import from stacking duplicates of the same group.
+        let mut groups = Vec::new();
         for group in parsed.groups {
-            match library
+            match viewer
                 .subscription_groups
-                .iter_mut()
+                .iter()
                 .find(|existing| existing.name.eq_ignore_ascii_case(&group.name))
             {
                 Some(existing) => {
+                    let mut merged = existing.clone();
                     for channel_id in group.channel_ids {
-                        if !existing.channel_ids.contains(&channel_id) {
-                            existing.channel_ids.push(channel_id);
+                        if !merged.channel_ids.contains(&channel_id) {
+                            merged.channel_ids.push(channel_id);
                         }
+                    }
+                    if merged != *existing {
+                        groups.push(merged);
                     }
                 }
                 None => {
                     summary.groups += 1;
-                    library.subscription_groups.push(group);
+                    groups.push(group);
                 }
             }
         }
 
-        if summary.changed() {
-            library.cache_revision += 1;
-            drop(library);
-            self.sync_in_background();
+        if !changes.is_empty() {
+            self.set_subscriptions(changes);
+        }
+        if !groups.is_empty() {
+            self.save_groups(groups);
         }
         summary
     }
 
-    pub fn create_subscription_group(mut self, name: String) -> String {
+    fn save_groups(self, groups: Vec<SubscriptionGroup>) {
+        let shown = groups.clone();
+        self.edit_viewer(move |viewer| {
+            for group in shown {
+                match viewer
+                    .subscription_groups
+                    .iter_mut()
+                    .find(|existing| existing.id == group.id)
+                {
+                    Some(existing) => *existing = group,
+                    None => viewer.subscription_groups.push(group),
+                }
+            }
+        });
+        self.send(DataChange::Groups, api::save_groups(groups));
+    }
+
+    pub fn create_subscription_group(self, name: String) -> String {
         let slug = name
             .to_lowercase()
             .chars()
@@ -571,224 +679,76 @@ impl AppState {
             .collect::<String>()
             .trim_matches('-')
             .to_string();
-        let revision = self.library.peek().cache_revision + 1;
+        let suffix = random_suffix();
         let id = if slug.is_empty() {
-            format!("group-{revision}")
+            format!("group-{suffix}")
         } else {
-            format!("{slug}-{revision}")
+            format!("{slug}-{suffix}")
         };
-        {
-            let mut library = self.library.write();
-            library.subscription_groups.push(SubscriptionGroup {
-                id: id.clone(),
-                name,
-                channel_ids: Vec::new(),
-            });
-            library.cache_revision += 1;
-        }
-        self.sync_in_background();
+        self.save_groups(vec![SubscriptionGroup {
+            id: id.clone(),
+            name,
+            channel_ids: Vec::new(),
+        }]);
         id
     }
 
-    pub fn delete_subscription_group(mut self, group_id: &str) -> Option<String> {
-        let mut library = self.library.write();
-        let index = library
-            .subscription_groups
-            .iter()
-            .position(|group| group.id == group_id)?;
-        let group = library.subscription_groups.remove(index);
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        Some(group.name)
-    }
-
-    pub fn toggle_channel_in_group(mut self, group_id: &str, channel_id: &str) -> Option<bool> {
-        let mut library = self.library.write();
-        let group = library
-            .subscription_groups
-            .iter_mut()
-            .find(|group| group.id == group_id)?;
-        let included = if group.channel_ids.iter().any(|id| id == channel_id) {
-            group.channel_ids.retain(|id| id != channel_id);
-            false
-        } else {
-            group.channel_ids.push(channel_id.to_string());
-            true
-        };
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        Some(included)
-    }
-
-    pub fn ingest_search_results(mut self, results: &SearchResults) {
-        let mut library = self.library.write();
-        let mut changed = false;
-
-        for discovered in &results.channels {
-            if let Some(channel) = library
-                .channels
-                .iter_mut()
-                .find(|channel| channel.id == discovered.id)
-            {
-                changed |= channel.merge_metadata_from(discovered);
-            } else {
-                library.channels.push(discovered.clone());
-                changed = true;
-            }
-        }
-
-        for discovered in &results.videos {
-            if !library
-                .channels
+    pub fn delete_subscription_group(self, group_id: &str) -> Option<String> {
+        let name = self.peek_viewer(|viewer| {
+            viewer
+                .subscription_groups
                 .iter()
-                .any(|channel| channel.id == discovered.channel_id)
-            {
-                let handle = format!(
-                    "@{}",
-                    discovered
-                        .channel_name
-                        .to_lowercase()
-                        .chars()
-                        .filter(|character| character.is_ascii_alphanumeric())
-                        .collect::<String>()
-                );
-                library.channels.push(Channel {
-                    id: discovered.channel_id.clone(),
-                    name: discovered.channel_name.clone(),
-                    handle,
-                    avatar_url: None,
-                    subscriber_count: String::new(),
-                    subscribed: false,
-                    description: String::new(),
-                    banner_url: None,
-                    subscription_content: SubscriptionContent::All,
-                });
-                changed = true;
-            }
-            if !library.videos.iter().any(|video| video.id == discovered.id) {
-                library.videos.push(discovered.clone());
-                changed = true;
-            }
-        }
-
-        if changed {
-            library.cache_revision += 1;
-            drop(library);
-            self.sync_in_background();
-        }
+                .find(|group| group.id == group_id)
+                .map(|group| group.name.clone())
+        })?;
+        self.edit_viewer(|viewer| {
+            viewer
+                .subscription_groups
+                .retain(|group| group.id != group_id)
+        });
+        self.send(DataChange::Groups, api::delete_group(group_id.to_string()));
+        Some(name)
     }
 
-    pub fn cache_video_details(mut self, details: &VideoDetails) {
-        let mut library = self.library.write();
-        if let Some(discovered) = &details.channel {
-            if let Some(channel) = library
-                .channels
+    /// Put a channel in a group or take it out. Returns whether it is in the
+    /// group now.
+    pub fn toggle_channel_in_group(self, group_id: &str, channel_id: &str) -> Option<bool> {
+        let included = self.peek_viewer(|viewer| {
+            viewer
+                .subscription_groups
+                .iter()
+                .find(|group| group.id == group_id)
+                .map(|group| group.channel_ids.iter().any(|id| id == channel_id))
+        })?;
+        let member = !included;
+        self.edit_viewer(|viewer| {
+            if let Some(group) = viewer
+                .subscription_groups
                 .iter_mut()
-                .find(|channel| channel.id == discovered.id)
+                .find(|group| group.id == group_id)
             {
-                channel.merge_metadata_from(discovered);
-            } else {
-                library.channels.push(discovered.clone());
+                group.channel_ids.retain(|id| id != channel_id);
+                if member {
+                    group.channel_ids.push(channel_id.to_string());
+                }
             }
-        }
-
-        let mut discovered_videos = vec![details.video.clone()];
-        discovered_videos.extend(details.related_videos.clone());
-        for discovered in discovered_videos {
-            if let Some(video) = library
-                .videos
-                .iter_mut()
-                .find(|video| video.id == discovered.id)
-            {
-                let progress_seconds = video.progress_seconds;
-                let watched = video.watched;
-                *video = discovered;
-                video.progress_seconds = progress_seconds;
-                video.watched = watched;
-            } else {
-                library.videos.push(discovered);
-            }
-        }
+        });
+        self.send(
+            DataChange::Groups,
+            api::set_in_group(group_id.to_string(), channel_id.to_string(), member),
+        );
+        Some(member)
     }
 
-    /// Merge server-resolved feed metadata without disturbing local playback
-    /// progress. Duration, live state, and Shorts classification are catalog
-    /// facts; watched/audio state belongs to this viewer.
-    pub fn cache_feed_metadata(mut self, discovered_videos: Vec<Video>) {
-        let mut library = self.library.write();
-        for discovered in discovered_videos {
-            let Some(video) = library
-                .videos
-                .iter_mut()
-                .find(|video| video.id == discovered.id)
-            else {
-                library.videos.push(discovered);
-                continue;
-            };
-            let progress_seconds = video.progress_seconds;
-            let watched = video.watched;
-            let audio_only = video.audio_only;
-            *video = discovered;
-            video.progress_seconds = progress_seconds;
-            video.watched = watched;
-            video.audio_only = audio_only;
-        }
-    }
-
-    pub fn cache_channel_details(mut self, details: &ChannelDetails) {
-        let mut library = self.library.write();
-        if let Some(channel) = library
-            .channels
-            .iter_mut()
-            .find(|channel| channel.id == details.channel.id)
-        {
-            channel.merge_metadata_from(&details.channel);
-        } else {
-            library.channels.push(details.channel.clone());
-        }
-
-        for discovered in details
-            .videos
-            .videos
-            .iter()
-            .chain(details.shorts.videos.iter())
-            .chain(details.live.videos.iter())
-        {
-            if let Some(video) = library
-                .videos
-                .iter_mut()
-                .find(|video| video.id == discovered.id)
-            {
-                let progress_seconds = video.progress_seconds;
-                let watched = video.watched;
-                *video = discovered.clone();
-                video.progress_seconds = progress_seconds;
-                video.watched = watched;
-            } else {
-                library.videos.push(discovered.clone());
-            }
-        }
-    }
-
-    /// Replace the library with a server snapshot without losing videos that
-    /// something still points at.
-    ///
-    /// The queue, playlists, and history store ids and resolve them against
-    /// `videos`. A refreshed snapshot only carries the current feed, so a video
-    /// that scrolled out of it would vanish from the queue even though its id is
-    /// still queued. Carrying those records over keeps the queue honest.
-    pub fn adopt_library(mut self, remote: LibrarySnapshot) {
-        let merged = keep_referenced_videos(&self.library.peek(), remote);
-        self.library.set(merged);
-    }
+    // -----------------------------------------------------------------------
+    // Swipes and sharing
+    // -----------------------------------------------------------------------
 
     /// Run whichever action a swipe direction is configured for.
     ///
     /// Centralised so the gesture, the desktop buttons, and the settings page
     /// all agree on what a direction means.
-    pub fn run_swipe_action(self, video_id: &str, start_side: bool) {
+    pub fn run_swipe_action(self, video: &Video, start_side: bool) {
         use crate::models::SwipeActionKind;
 
         let settings = self.settings();
@@ -801,7 +761,7 @@ impl AppState {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };
         match kind {
-            SwipeActionKind::AddToPlaylist => match self.add_to_playlist(video_id, &playlist_id) {
+            SwipeActionKind::AddToPlaylist => match self.add_to_playlist(video, &playlist_id) {
                 Some(PlaylistSave::Saved(name)) => {
                     self.show_toast(format!("Added to {name}"), Color::Success)
                 }
@@ -811,27 +771,18 @@ impl AppState {
                 None => {}
             },
             SwipeActionKind::AddToQueue => {
-                let message = self.add_to_queue(video_id, false);
+                let message = self.add_to_queue(&video.id, false);
                 self.show_toast(message, Color::Success);
             }
             SwipeActionKind::PlayNext => {
-                let message = self.add_to_queue(video_id, true);
+                let message = self.add_to_queue(&video.id, true);
                 self.show_toast(message, Color::Success);
             }
             SwipeActionKind::MarkWatched => {
-                self.mark_watched(video_id, true);
+                self.mark_watched(video, true);
                 self.show_toast("Marked watched", Color::Neutral);
             }
-            SwipeActionKind::Share => {
-                if let Some(video) = self
-                    .library()
-                    .videos
-                    .into_iter()
-                    .find(|video| video.id == video_id)
-                {
-                    self.open_share(video);
-                }
-            }
+            SwipeActionKind::Share => self.open_share(video.clone()),
         }
     }
 
@@ -857,7 +808,6 @@ impl AppState {
         }
     }
 
-    /// The label a swipe direction should show on its action panel.
     /// Which action a swipe on this side is set to, so a card can show the
     /// icon for what it will actually do.
     pub fn swipe_action_kind(self, start_side: bool) -> crate::models::SwipeActionKind {
@@ -869,42 +819,9 @@ impl AppState {
         }
     }
 
-    /// The few words a swipe action wears under its icon.
-    ///
-    /// A swipe reveals about a thumb's travel, which is no room for a
-    /// sentence. A playlist action carries the playlist's own name, since
-    /// that is the part that differs between the two directions; the rest
-    /// name themselves in a word. The full phrase stays in
-    /// [`Self::swipe_action_label`], which is what a screen reader hears.
-    pub fn swipe_action_caption(self, start_side: bool) -> String {
-        use crate::models::SwipeActionKind;
-
-        let settings = self.settings();
-        let (kind, playlist_id) = if start_side {
-            (
-                settings.swipe_right_action,
-                settings.swipe_right_playlist_id,
-            )
-        } else {
-            (settings.swipe_left_action, settings.swipe_left_playlist_id)
-        };
-        match kind {
-            SwipeActionKind::AddToPlaylist => self.with_library(|library| {
-                library
-                    .playlists
-                    .iter()
-                    .find(|playlist| playlist.id == playlist_id)
-                    .map(|playlist| playlist.name.clone())
-                    .unwrap_or_else(|| SwipeActionKind::AddToPlaylist.trigger_label().to_string())
-            }),
-            other => other.trigger_label().to_string(),
-        }
-    }
-
     /// What a swipe on this side says it will do, named in full: a playlist
     /// action carries the playlist's own name, and the rest speak for
-    /// themselves. This is the accessible name; the card shows the shorter
-    /// [`Self::swipe_action_caption`].
+    /// themselves. This is the accessible name.
     pub fn swipe_action_label(self, start_side: bool) -> String {
         use crate::models::SwipeActionKind;
 
@@ -918,17 +835,14 @@ impl AppState {
             (settings.swipe_left_action, settings.swipe_left_playlist_id)
         };
         match kind {
-            SwipeActionKind::AddToPlaylist => self.with_library(|library| {
-                let name = library
-                    .playlists
-                    .iter()
-                    .find(|playlist| playlist.id == playlist_id)
-                    .map(|playlist| playlist.name.clone());
-                match name {
+            SwipeActionKind::AddToPlaylist => {
+                match self
+                    .with_viewer(|viewer| viewer.playlist(&playlist_id).map(|p| p.name.clone()))
+                {
                     Some(name) => format!("Add to {name}"),
                     None => SwipeActionKind::AddToPlaylist.label().to_string(),
                 }
-            }),
+            }
             other => other.label().to_string(),
         }
     }
@@ -960,45 +874,31 @@ impl AppState {
         }
     }
 
-    /// A playlist's videos in the order its page is showing them, with the
-    /// watched filter *not* applied - see [`PlaylistView::arrange`].
+    // -----------------------------------------------------------------------
+    // Runs: the queue, and a playlist playing through it
+    // -----------------------------------------------------------------------
+
+    /// The running playlist's videos in the order its page is showing them,
+    /// with the watched filter *not* applied - see [`PlaylistView::arrange`].
+    /// Empty when `playlist_id` is not the one running.
     pub fn playlist_run_order(self, playlist_id: &str) -> Vec<Video> {
         let settings = self.settings();
         let view = self.playlist_view(playlist_id);
-        let mut videos = self.with_library(|library| {
-            let Some(playlist) = library
-                .playlists
-                .iter()
-                .find(|playlist| playlist.id == playlist_id)
-            else {
-                return Vec::new();
-            };
-            let by_id = library
-                .videos
-                .iter()
-                .map(|video| (video.id.as_str(), video))
-                .collect::<std::collections::HashMap<_, _>>();
-            playlist
-                .video_ids
-                .iter()
-                .filter_map(|id| by_id.get(id.as_str()).map(|video| (*video).clone()))
-                .collect::<Vec<Video>>()
-        });
+        let mut videos = match &*self.run_playlist.peek() {
+            Some(Ok(Some(contents))) if contents.playlist.id == playlist_id => {
+                contents.videos.clone()
+            }
+            _ => Vec::new(),
+        };
         view.arrange(&mut videos, &settings);
         videos
     }
 
-    /// The entry a playlist run plays after `current_video_id`.
-    ///
-    /// Position is found in the arranged order, which still contains the current
-    /// video even once it counts as watched; the watched filter is applied only to
-    /// the candidates ahead of it. See [`PlaylistView::next_after`].
     fn next_in_playlist_run(self, playlist_id: &str, current_video_id: &str) -> Option<String> {
         self.playlist_view(playlist_id)
             .next_after(&self.playlist_run_order(playlist_id), current_video_id)
     }
 
-    /// The entry a playlist run plays before `current_video_id`.
     fn previous_in_playlist_run(self, playlist_id: &str, current_video_id: &str) -> Option<String> {
         self.playlist_view(playlist_id)
             .previous_before(&self.playlist_run_order(playlist_id), current_video_id)
@@ -1012,7 +912,7 @@ impl AppState {
     /// one whose playlist has been deleted - resolves to nothing and is reported
     /// as spent so the caller can drop it.
     fn resolve_next_in_run(self, finished_video_id: &str) -> (Option<String>, Vec<String>) {
-        let queue = self.with_library(|library| library.queue.clone());
+        let queue = self.peek_viewer(|viewer| viewer.queue.clone());
         let mut spent_markers = Vec::new();
         for entry in queue {
             match queued_playlist_id(&entry) {
@@ -1033,6 +933,9 @@ impl AppState {
     ///
     /// Pass an empty id to ask what the run starts with.
     pub fn next_in_run(self, current_video_id: &str) -> Option<String> {
+        // Subscribes: a control showing "next" follows the queue.
+        let _ = self.viewer.read();
+        let _ = self.run_playlist.read();
         self.resolve_next_in_run(current_video_id).0
     }
 
@@ -1048,20 +951,15 @@ impl AppState {
     /// entry that stays queued would be chosen again the moment it ends. A
     /// playlist marker is the exception - it is the run, not a place in it, so it
     /// stays until the playlist is spent.
-    pub fn take_next_queued(mut self, finished_video_id: &str) -> Option<String> {
+    pub fn take_next_queued(self, finished_video_id: &str) -> Option<String> {
         let (next, spent_markers) = self.resolve_next_in_run(finished_video_id);
         let video_id = next?;
-        let mut library = self.library.write();
-        // The finished video is done either way, whether or not it was queued,
-        // and the one taken never stays behind as a duplicate further down. A
-        // playlist marker is neither, so a run keeps its place in the queue.
-        library.queue.retain(|entry| {
-            entry != finished_video_id && entry != &video_id && !spent_markers.contains(entry)
+        self.edit_queue(|queue| {
+            queue.retain(|entry| {
+                entry != finished_video_id && entry != &video_id && !spent_markers.contains(entry)
+            });
         });
-        library.cache_revision += 1;
-        drop(library);
         self.push_back_stack(finished_video_id);
-        self.sync_in_background();
         Some(video_id)
     }
 
@@ -1074,6 +972,7 @@ impl AppState {
         if !(self.run_back_stack)().is_empty() {
             return true;
         }
+        let _ = self.run_playlist.read();
         self.queued_playlist_run()
             .and_then(|playlist_id| self.previous_in_playlist_run(&playlist_id, current_video_id))
             .is_some()
@@ -1082,11 +981,9 @@ impl AppState {
     /// The playlist the queue is running, as (id, name), when it still exists.
     pub fn running_playlist(self) -> Option<(String, String)> {
         let playlist_id = self.queued_playlist_run()?;
-        self.with_library(|library| {
-            library
-                .playlists
-                .iter()
-                .find(|playlist| playlist.id == playlist_id)
+        self.with_viewer(|viewer| {
+            viewer
+                .playlist(&playlist_id)
                 .map(|playlist| (playlist.id.clone(), playlist.name.clone()))
         })
     }
@@ -1098,6 +995,7 @@ impl AppState {
     /// `remaining` is what the run will actually still play.
     pub fn playlist_run_status(self) -> Option<PlaylistRunStatus> {
         let (playlist_id, name) = self.running_playlist()?;
+        let _ = self.run_playlist.read();
         let view = self.playlist_view(&playlist_id);
         let order = self.playlist_run_order(&playlist_id);
         let current_id = self
@@ -1130,8 +1028,8 @@ impl AppState {
 
     /// The playlist the queue is currently running, if any.
     fn queued_playlist_run(self) -> Option<String> {
-        self.with_library(|library| {
-            library
+        self.with_viewer(|viewer| {
+            viewer
                 .queue
                 .iter()
                 .find_map(|entry| queued_playlist_id(entry).map(str::to_string))
@@ -1154,12 +1052,10 @@ impl AppState {
         if previous == current_video_id {
             return None;
         }
-        let mut library = self.library.write();
-        library.queue.retain(|id| id != current_video_id);
-        library.queue.insert(0, current_video_id.to_string());
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+        self.edit_queue(|queue| {
+            queue.retain(|id| id != current_video_id);
+            queue.insert(0, current_video_id.to_string());
+        });
         Some(previous)
     }
 
@@ -1169,32 +1065,26 @@ impl AppState {
     /// now, not after whatever was queued by hand last week. Only one playlist
     /// runs at a time, because two markers would interleave in an order neither
     /// playlist's page could show.
-    pub fn start_playlist_run(mut self, playlist_id: &str) {
+    pub fn start_playlist_run(self, playlist_id: &str) {
         let marker = playlist_queue_entry(playlist_id);
-        let mut library = self.library.write();
-        library
-            .queue
-            .retain(|entry| queued_playlist_id(entry).is_none());
-        library.queue.insert(0, marker);
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+        self.edit_queue(|queue| {
+            queue.retain(|entry| queued_playlist_id(entry).is_none());
+            queue.insert(0, marker);
+        });
     }
 
     /// Stop running a playlist, leaving anything queued by hand in place.
-    pub fn clear_playlist_run(mut self) -> bool {
-        let mut library = self.library.write();
-        let before = library.queue.len();
-        library
-            .queue
-            .retain(|entry| queued_playlist_id(entry).is_none());
-        if library.queue.len() == before {
-            return false;
+    pub fn clear_playlist_run(self) -> bool {
+        let running = self.peek_viewer(|viewer| {
+            viewer
+                .queue
+                .iter()
+                .any(|entry| queued_playlist_id(entry).is_some())
+        });
+        if running {
+            self.edit_queue(|queue| queue.retain(|entry| queued_playlist_id(entry).is_none()));
         }
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        true
+        running
     }
 
     fn push_back_stack(mut self, video_id: &str) {
@@ -1209,38 +1099,40 @@ impl AppState {
         }
     }
 
+    /// Change the queue: shown at once, and the whole list sent as the answer.
+    fn edit_queue(self, edit: impl FnOnce(&mut Vec<String>)) {
+        let mut queue = self.peek_viewer(|viewer| viewer.queue.clone());
+        edit(&mut queue);
+        let shown = queue.clone();
+        self.edit_viewer(move |viewer| viewer.queue = shown);
+        self.send(DataChange::Queue, api::set_queue(queue));
+    }
+
     /// Append a whole run of videos to the queue, in the order given.
-    ///
-    /// One write and one sync rather than one of each per video: queueing a
-    /// playlist through `add_to_queue` would hit the server once per entry.
     ///
     /// Ids already in the queue are moved rather than duplicated, because the
     /// run is what the viewer just chose to watch, in the order they chose it;
     /// a stale copy earlier in the queue would play them out of that order.
-    pub fn queue_run(mut self, video_ids: &[String]) -> usize {
+    pub fn queue_run(self, video_ids: &[String]) -> usize {
         if video_ids.is_empty() {
             return 0;
         }
-        let mut library = self.library.write();
-        library.queue.retain(|id| !video_ids.contains(id));
-        library.queue.extend(video_ids.iter().cloned());
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+        self.edit_queue(|queue| {
+            queue.retain(|id| !video_ids.contains(id));
+            queue.extend(video_ids.iter().cloned());
+        });
         video_ids.len()
     }
 
-    pub fn add_to_queue(mut self, video_id: &str, play_next: bool) -> String {
-        let mut library = self.library.write();
-        library.queue.retain(|id| id != video_id);
-        if play_next {
-            library.queue.insert(0, video_id.to_string());
-        } else {
-            library.queue.push(video_id.to_string());
-        }
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+    pub fn add_to_queue(self, video_id: &str, play_next: bool) -> String {
+        self.edit_queue(|queue| {
+            queue.retain(|id| id != video_id);
+            if play_next {
+                queue.insert(0, video_id.to_string());
+            } else {
+                queue.push(video_id.to_string());
+            }
+        });
         if play_next {
             "Playing next".into()
         } else {
@@ -1248,128 +1140,138 @@ impl AppState {
         }
     }
 
-    pub fn remove_from_queue(mut self, video_id: &str) -> bool {
-        let mut library = self.library.write();
-        let before = library.queue.len();
-        library.queue.retain(|id| id != video_id);
-        if library.queue.len() == before {
-            return false;
+    pub fn remove_from_queue(self, video_id: &str) -> bool {
+        let queued = self.peek_viewer(|viewer| viewer.queue.iter().any(|id| id == video_id));
+        if queued {
+            self.edit_queue(|queue| queue.retain(|id| id != video_id));
         }
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
-        true
+        queued
     }
 
-    pub fn clear_queue(mut self) {
-        let mut library = self.library.write();
-        library.queue.clear();
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+    pub fn clear_queue(self) {
+        self.edit_queue(Vec::clear);
     }
 
-    pub fn record_history(mut self, video_id: &str) {
-        // A peek, not the write guard: see `record_progress`. Reopening the
-        // video already at the top is the usual case - expanding the mini
-        // player - and it landed a full re-render and cache write mid-morph.
-        if self
-            .library
-            .peek()
-            .history
-            .first()
-            .is_some_and(|entry| entry.video_id == video_id && entry.played_at == "Just now")
-        {
+    pub fn record_history(self, video_id: &str) {
+        // Reopening the video already at the top is the usual case - expanding
+        // the mini player - and needs nothing sent.
+        let already_first = self.peek_viewer(|viewer| {
+            viewer
+                .history
+                .first()
+                .is_some_and(|entry| entry.video_id == video_id)
+        });
+        if already_first {
             return;
         }
-        let mut library = self.library.write();
-        library.history.retain(|entry| entry.video_id != video_id);
-        library.history.insert(
-            0,
-            HistoryEntry {
-                video_id: video_id.to_string(),
-                played_at: "Just now".into(),
-            },
+        let entry = HistoryEntry {
+            video_id: video_id.to_string(),
+            played_at: "Just now".into(),
+        };
+        self.edit_viewer(move |viewer| {
+            viewer.history.retain(|old| old.video_id != entry.video_id);
+            viewer.history.insert(0, entry);
+            viewer.history.truncate(HISTORY_LIMIT);
+        });
+        self.send(
+            DataChange::History,
+            api::record_history(video_id.to_string()),
         );
-        library.history.truncate(250);
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
     }
 
-    pub fn clear_history(mut self) {
-        let mut library = self.library.write();
-        library.history.clear();
-        library.cache_revision += 1;
-        drop(library);
-        self.sync_in_background();
+    pub fn clear_history(self) {
+        self.edit_viewer(|viewer| viewer.history.clear());
+        self.send(DataChange::History, api::clear_history());
     }
 }
 
-/// Carry over any video the incoming snapshot dropped but something still
-/// references, so ids in the queue, playlists, or history always resolve.
-fn keep_referenced_videos(
-    current: &LibrarySnapshot,
-    mut remote: LibrarySnapshot,
-) -> LibrarySnapshot {
-    let mut referenced = current.queue.clone();
-    referenced.extend(current.history.iter().map(|entry| entry.video_id.clone()));
-    referenced.extend(
-        current
-            .playlists
-            .iter()
-            .flat_map(|playlist| playlist.video_ids.iter().cloned()),
-    );
-    for id in referenced {
-        if remote.videos.iter().any(|video| video.id == id) {
-            continue;
-        }
-        if let Some(kept) = current.videos.iter().find(|video| video.id == id) {
-            remote.videos.push(kept.clone());
-        }
-    }
-    remote
+/// A short random id suffix, for a playlist or group made on this device
+/// before the server has seen it.
+fn random_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let mixed = nanos ^ COUNTER.fetch_add(1, Ordering::Relaxed).rotate_left(40);
+    format!("{mixed:x}")
 }
+
+/// The localStorage key the whole library used to live under. Emptied on
+/// start, so a device upgraded from that design gets its storage back.
+#[cfg(not(feature = "server"))]
+const RETIRED_LIBRARY_KEY: &str = "tawny-library-v1";
 
 #[component]
 pub fn AppStateProvider(children: Element) -> Element {
-    // Before the library, deliberately. Every library endpoint is scoped to an
-    // account now and refuses an unauthenticated caller, so a sync that starts
-    // first gets a 500 and the app silently keeps its cached copy.
+    // Before anything reads: `use_cached` persists nothing until the cache
+    // knows whose data it holds.
+    g3_cache::use_client_cache(g3_cache::CacheConfig::new("tawny"));
+    // Every read is scoped to an account and refused without one. A first
+    // launch refetches once its guest account exists (see `session`).
     let session = use_session_provider();
-    // The library is megabytes and changes every few seconds while a video
-    // plays, so its writes are spaced out; the server holds anything that
-    // matters in between. Settings are small and changed by hand.
-    let mut library = use_persistent_signal("tawny-library-v1", 10_000, LibrarySnapshot::demo);
     let settings = use_persistent_signal("tawny-settings-v1", 250, AppSettings::default);
-    let mut initial_sync_started = use_signal(|| false);
-    let mut initial_syncing = use_signal(|| false);
 
+    // Whose data the device cache holds. Not told "nobody" while the session
+    // is still being looked up: that empties the cache, so every launch would
+    // start cold. Only a sign-out, after someone was known, says so.
+    let account = session.account;
+    let mut owner_known = use_signal(|| false);
     use_effect(move || {
-        // Re-runs when the bootstrap lands, which is what actually starts this.
-        if !session.is_ready() || initial_sync_started() {
-            return;
-        }
-        initial_sync_started.set(true);
-        initial_syncing.set(true);
-        spawn(async move {
-            if let Ok(remote) = get_library().await {
-                let local = library();
-                if remote.cache_revision > local.cache_revision {
-                    library.set(keep_referenced_videos(&local, remote));
-                } else if local.cache_revision > remote.cache_revision
-                    && let Ok(merged) = sync_library(local.clone()).await
-                {
-                    library.set(keep_referenced_videos(&local, merged));
-                }
+        let owner = account.read().as_ref().map(|account| account.id.clone());
+        match owner {
+            Some(owner) => {
+                owner_known.set(true);
+                spawn(g3_cache::set_cache_owner(Some(owner)));
             }
-            initial_syncing.set(false);
+            None if *owner_known.peek() => {
+                spawn(g3_cache::set_cache_owner(None));
+            }
+            None => {}
+        }
+    });
+
+    #[cfg(not(feature = "server"))]
+    use_hook(|| {
+        spawn(async {
+            let _ = document::eval(&format!(
+                "window.localStorage.removeItem({RETIRED_LIBRARY_KEY:?});"
+            ))
+            .await;
         });
     });
 
+    let viewer = use_cached(get_viewer, ());
+
+    let running = use_memo(move || match &*viewer.read() {
+        Some(Ok(viewer)) => viewer
+            .queue
+            .iter()
+            .find_map(|entry| queued_playlist_id(entry).map(str::to_string))
+            .unwrap_or_default(),
+        _ => String::new(),
+    });
+    // Under `get_playlist`'s own key, so it shares an entry with the playlist
+    // page; with no run, answered here instead of asking the server about an
+    // empty id.
+    let run_key = g3_cache::CacheKey::of(&get_playlist, &(running(),));
+    let run_playlist = g3_cache::use_cached_key(run_key, move || {
+        let playlist_id = running.peek().clone();
+        async move {
+            if playlist_id.is_empty() {
+                Ok(None)
+            } else {
+                get_playlist(playlist_id).await
+            }
+        }
+    });
+
     use_context_provider(|| AppState {
-        library,
+        viewer,
+        run_playlist,
         settings,
+        pending_progress: Signal::new(HashMap::new()),
         toaster: Signal::new(None),
         playlist_picker_video: Signal::new(None),
         playlist_picker_open: Signal::new(false),
@@ -1389,7 +1291,7 @@ pub fn AppStateProvider(children: Element) -> Element {
         active_audio_tracks: Signal::new(Vec::new()),
         selected_audio_track: Signal::new(None),
         active_preview_frames: Signal::new(None),
-        syncing: initial_syncing,
+        syncing: Signal::new(false),
         chapters_sheet_open: Signal::new(false),
         run_back_stack: Signal::new(Vec::new()),
         feed_filter: Signal::new(FeedFilter::All),

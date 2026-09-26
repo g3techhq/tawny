@@ -2,9 +2,9 @@
 //! for data.
 //!
 //! This lives above the UI rather than inside it because of ordering: the
-//! library is per account now, so `get_library` answers 401 until a session
-//! exists. `AppStateProvider` bootstraps the session here and holds its own
-//! sync until it is [`SessionStatus::Ready`].
+//! library is per account now, so every read answers 401 until a session
+//! exists. `AppStateProvider` bootstraps the session here; a first launch
+//! refetches every cached read once its guest account exists.
 
 use dioxus::prelude::*;
 
@@ -42,10 +42,6 @@ impl Session {
     pub fn forget(&mut self) {
         self.account.set(None);
     }
-
-    pub fn is_ready(&self) -> bool {
-        (self.status)() == SessionStatus::Ready
-    }
 }
 
 /// Create the session context and bootstrap it.
@@ -71,7 +67,12 @@ pub fn use_session_provider() -> Session {
                 return;
             }
             match create_guest_account().await {
-                Ok(account) => session.adopt(account),
+                Ok(account) => {
+                    session.adopt(account);
+                    // Whatever the screens asked for before this account existed
+                    // was refused; ask again now that it does.
+                    g3_cache::invalidate_all_cached();
+                }
                 Err(error) => session
                     .status
                     .set(SessionStatus::Failed(readable(&error.to_string()))),

@@ -5,6 +5,7 @@ mod auth;
 mod cache;
 mod components;
 mod config;
+mod data_change;
 #[cfg(feature = "server")]
 mod database;
 mod models;
@@ -28,20 +29,12 @@ fn main() {
         use std::sync::Arc;
 
         use axum_session::{SessionConfig, SessionLayer, SessionStore};
-        use axum_session_auth::{AuthConfig, AuthSessionLayer};
-        use dioxus::server::axum::extract::DefaultBodyLimit;
+        use axum_session_auth::AuthConfig;
+        use dioxus::server::axum::middleware::from_fn_with_state;
         use dioxus::server::axum::routing::get;
         use dioxus::server::axum::{Extension, Router};
-
-        /// `/api/v1/library/sync` POSTs the entire library snapshot, which grows
-        /// with the cache: at 11k cached videos it is already past axum's 2 MB
-        /// default, and a rejected body surfaced as a 500 from a panicking
-        /// `unwrap` inside dioxus-fullstack rather than a readable error.
-        ///
-        /// Ordinary edits now go to `/api/v1/library/state` instead and are
-        /// kilobytes, so only first load and pull-to-refresh still send a full
-        /// snapshot - but those two do, and they keep growing.
-        const LIBRARY_SYNC_BODY_LIMIT: usize = 64 * 1024 * 1024;
+        use g3_auth::{AuthGuard, AuthSessionLayer, SurrealSessionPool, require_session};
+        use surrealdb::engine::any::Any;
 
         let state = server::AppServerState::initialize()
             .await
@@ -49,17 +42,26 @@ fn main() {
         server::spawn_subscription_poller(state.clone());
 
         let db = Arc::clone(&state.db);
-        let session_config = SessionConfig::default().with_cookie_path("/");
+        let session_config = SessionConfig::default()
+            .with_cookie_path("/")
+            .with_secure(!cfg!(debug_assertions));
         let session_store = SessionStore::new(
-            Some(auth::SurrealSessionPool::new(Arc::clone(&db))),
+            Some(SurrealSessionPool::new(Arc::clone(&db))),
             session_config,
         )
         .await
         .expect("create Tawny session store");
-        let auth_config = AuthConfig::<String>::default();
-        let health_state = state.clone();
+        // Every page is public: the client signs a first-time visitor in as a
+        // guest from whichever page they opened. Server functions are not,
+        // unless marked `#[g3_auth::public]`.
+        let guard = AuthGuard::for_routes(app::Route::Feed {});
 
-        Ok(dioxus::server::router(App)
+        // Routes that answer without a session, outside the session layers.
+        // Probes should not allocate a viewer session; YouTube's hub has no
+        // cookie; and a proxy token is itself the capability, which a native
+        // media element fetches without the app's cookie.
+        let sessionless = Router::new()
+            .route("/api/v1/health", get(server::health))
             .route(
                 "/api/v1/playback/proxy/{token}",
                 get(server::playback_proxy).options(server::playback_proxy_options),
@@ -68,24 +70,22 @@ fn main() {
                 "/api/v1/websub/youtube",
                 get(server::youtube_websub_verify).post(server::youtube_websub_notification),
             )
-            .layer(DefaultBodyLimit::max(LIBRARY_SYNC_BODY_LIMIT))
+            .layer(Extension(state.clone()));
+
+        Ok(dioxus::server::router(App)
             .layer(Extension(state))
+            .layer(Extension(Arc::clone(&db)))
+            .layer(from_fn_with_state(
+                guard,
+                require_session::<auth::AppUser, Any>,
+            ))
             .layer(
-                AuthSessionLayer::<
-                    auth::SessionUser,
-                    String,
-                    auth::SurrealSessionPool<surrealdb::engine::any::Any>,
-                    Arc<surrealdb::Surreal<surrealdb::engine::any::Any>>,
-                >::new(Some(db))
-                .with_config(auth_config),
+                AuthSessionLayer::<auth::AppUser, Any>::new(Some(db))
+                    .with_config(AuthConfig::<String>::default()),
             )
             .layer(SessionLayer::new(session_store))
-            // Probes should not allocate or load a viewer session.
-            .merge(
-                Router::new()
-                    .route("/api/v1/health", get(server::health))
-                    .layer(Extension(health_state)),
-            ))
+            .layer(g3_cache::cdn_cache_guard("/api"))
+            .merge(sessionless))
     });
 }
 

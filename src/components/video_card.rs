@@ -95,13 +95,7 @@ pub fn VideoCard(
     let end_action = app_state.swipe_action_label(false);
     let start_kind = app_state.swipe_action_kind(true);
     let end_kind = app_state.swipe_action_kind(false);
-    let channel_avatar_url = app_state.with_library(|library| {
-        library
-            .channels
-            .iter()
-            .find(|channel| channel.id == video.channel_id)
-            .and_then(|channel| channel.avatar_url.clone())
-    });
+    let channel_avatar_url = video.channel_avatar_url.clone();
     let progress = video.progress_percent();
     let stats = video.stats_label();
 
@@ -145,11 +139,11 @@ pub fn VideoCard(
         }
     });
     let desktop_remove = remove.clone();
-    let start_id = video.id.clone();
-    let end_id = video.id.clone();
-    let desktop_start_id = video.id.clone();
-    let desktop_end_id = video.id.clone();
-    let swipe_id = video.id.clone();
+    let start_video = video.clone();
+    let end_video = video.clone();
+    let desktop_start_video = video.clone();
+    let desktop_end_video = video.clone();
+    let swipe_video = video.clone();
     let short = short.unwrap_or(false);
 
     rsx! {
@@ -172,19 +166,19 @@ pub fn VideoCard(
                     SwipeAction {
                         color: Color::Accent,
                         aria_label: "{start_action}",
-                        onclick: move |_| app_state.run_swipe_action(&start_id, true),
+                        onclick: move |_| app_state.run_swipe_action(&start_video, true),
                         {swipe_icon(start_kind, 26)}
                     }
                 },
                 end_actions: rsx! {
                     SwipeAction {
                         aria_label: "{end_action}",
-                        onclick: move |_| app_state.run_swipe_action(&end_id, false),
+                        onclick: move |_| app_state.run_swipe_action(&end_video, false),
                         {swipe_icon(end_kind, 26)}
                     }
                 },
                 on_activate: move |swipe: SwipeState| {
-                    app_state.run_swipe_action(&swipe_id, swipe.side == SwipeSide::Start);
+                    app_state.run_swipe_action(&swipe_video, swipe.side == SwipeSide::Start);
                 },
                 Card {
                     variant: CardVariant::Flat,
@@ -266,14 +260,14 @@ pub fn VideoCard(
                 r#type: "button",
                 class: "video-card-edge-action video-card-edge-action-start",
                 aria_label: "{start_action}",
-                onclick: move |_| app_state.run_swipe_action(&desktop_start_id, true),
+                onclick: move |_| app_state.run_swipe_action(&desktop_start_video, true),
                 {swipe_icon(start_kind, 24)}
             }
             button {
                 r#type: "button",
                 class: "video-card-edge-action video-card-edge-action-end",
                 aria_label: "{end_action}",
-                onclick: move |_| app_state.run_swipe_action(&desktop_end_id, false),
+                onclick: move |_| app_state.run_swipe_action(&desktop_end_video, false),
                 {swipe_icon(end_kind, 24)}
             }
             // On a mouse the end edge action covers the thumbnail's right

@@ -1,6 +1,6 @@
 use crate::models::{
     CaptionTrack, Channel, ChannelDetails, ChannelMediaPage, ChannelMediaTab, CommentsPage,
-    FeedRefreshResult, HistoryEntry, LibrarySnapshot, LibraryUserState, PlaybackByteRange,
+    FeedRefreshResult, HistoryEntry, PlaybackByteRange, PlaybackFailure, PlaybackFailureOrigin,
     PlaybackProtocol, PlaybackSession, PlaybackSource, PlaybackTrack, PlaybackTrackKind, Playlist,
     SearchResults, SponsorCategory, SponsorSegment, SubscriptionContent, SubscriptionGroup, Video,
     VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames, VideoProgress,
@@ -16,6 +16,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use dioxus::fullstack::FullstackContext;
 use futures_util::FutureExt;
+use g3_cache::ServerCache;
 use hmac::{Hmac, Mac};
 use quick_xml::{Reader, events::Event};
 use rustypipe::{
@@ -48,6 +49,8 @@ use surrealdb::{
 };
 use surrealdb_types::SurrealValue;
 
+mod viewer;
+
 #[derive(Clone)]
 pub struct AppServerState {
     pub(crate) db: Arc<Surreal<Any>>,
@@ -71,12 +74,6 @@ pub struct AppServerState {
     playback_sessions: Arc<std::sync::Mutex<HashMap<String, CachedPlayback>>>,
     sync_lock: Arc<tokio::sync::Mutex<()>>,
     search_lock: Arc<tokio::sync::Mutex<()>>,
-    search_cache: Arc<tokio::sync::RwLock<HashMap<(String, String), CachedSearch>>>,
-    /// Keyed by video id and the category set asked for, because those are
-    /// different answers for the same video.
-    sponsor_cache: Arc<
-        tokio::sync::RwLock<HashMap<(String, String), (std::time::Instant, Vec<SponsorSegment>)>>,
-    >,
     /// A self-hosted SponsorBlock mirror, when one is configured.
     sponsor_api_url: Option<String>,
 }
@@ -100,7 +97,7 @@ struct CachedPlayback {
 }
 
 type SharedPlaybackResolve = futures_util::future::Shared<
-    futures_util::future::BoxFuture<'static, Result<ResolvedPlayback, String>>,
+    futures_util::future::BoxFuture<'static, Result<ResolvedPlayback, PlaybackFailure>>,
 >;
 
 #[derive(Clone)]
@@ -121,12 +118,6 @@ struct ResolvedPlayback {
 const PLAYBACK_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 /// Plenty for every client's current and next video.
 const PLAYBACK_SESSION_LIMIT: usize = 64;
-
-#[derive(Clone)]
-struct CachedSearch {
-    result: SearchResults,
-    cached_at: std::time::Instant,
-}
 
 const FEED_RECONCILE_BATCH_SIZE: usize = 48;
 const FEED_RSS_CONCURRENCY: usize = 32;
@@ -155,6 +146,10 @@ const CHANNEL_METADATA_CONCURRENCY: usize = 4;
 /// Channel pages one backfill pass may request.
 const CHANNEL_METADATA_BATCH: usize = 100;
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+/// Search results by query and filter. Shared by every account: the results
+/// are YouTube's, and follow state is applied per viewer on the way out.
+static SEARCHES: ServerCache<(String, String), SearchResults> =
+    ServerCache::new(SEARCH_CACHE_TTL, 2_000);
 
 fn reconciliation_limit(total: usize, has_accelerated_source: bool) -> usize {
     if has_accelerated_source {
@@ -417,6 +412,7 @@ fn ytdlp_flat_playlist_videos(
             is_live: false,
             is_short: true,
             audio_only: false,
+            channel_avatar_url: None,
         })
         .collect()
 }
@@ -529,13 +525,6 @@ struct DbSubscriptionGroup {
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
-struct DbLibraryState {
-    cache_revision: i64,
-    queue_json: String,
-    history_json: String,
-}
-
-#[derive(Debug, Deserialize, SurrealValue)]
 struct DbVideoDetailCache {
     payload_json: String,
 }
@@ -574,6 +563,7 @@ impl From<DbVideo> for Video {
             is_live: value.is_live,
             is_short: value.is_short,
             audio_only: value.audio_only.unwrap_or(false),
+            channel_avatar_url: None,
         }
     }
 }
@@ -749,8 +739,6 @@ impl AppServerState {
             playback_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             search_lock: Arc::new(tokio::sync::Mutex::new(())),
-            search_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            sponsor_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             sponsor_api_url: std::env::var("TAWNY_SPONSORBLOCK_URL")
                 .ok()
                 .map(|url| url.trim_end_matches('/').to_string())
@@ -886,26 +874,6 @@ impl AppServerState {
         Ok(results)
     }
 
-    /// Where this account has reached in each video it has touched.
-    async fn user_progress(&self, owner: &str) -> Result<HashMap<String, DbVideoProgress>> {
-        if owner.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let rows: Vec<DbVideoProgress> = self
-            .db
-            .query(
-                "SELECT video_id, watched, progress_seconds, audio_only FROM video_progress WHERE owner = type::record($owner)",
-            )
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?
-            .take(0)?;
-        Ok(rows
-            .into_iter()
-            .map(|row| (row.video_id.clone(), row))
-            .collect())
-    }
-
     /// Recompute `channel.subscribed` from the per-user table.
     ///
     /// That column is no longer anyone's opinion - it means "someone on this
@@ -935,116 +903,6 @@ impl AppServerState {
         Ok(())
     }
 
-    pub async fn library_snapshot(&self, owner: &str) -> Result<LibrarySnapshot> {
-        let channels: Vec<DbChannel> = self
-            .db
-            .query(
-                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel ORDER BY name",
-            )
-            .await?
-            .take(0)?;
-        let videos: Vec<DbVideo> = self
-            .db
-            .query(
-                "SELECT video_id, title, channel_id, channel_name, thumbnail_url, published_at, published_sort, duration_seconds, view_count, is_live, is_short, progress_seconds, watched, audio_only FROM video ORDER BY published_sort DESC",
-            )
-            .await?
-            .take(0)?;
-        // Playlists, groups and the queue/history blob belong to one account.
-        // The channel and video rows above do not: they are YouTube's facts,
-        // and two accounts on one server should not fetch and store the same
-        // upload twice.
-        // An empty owner is the shared catalog on its own, for the two paths
-        // with no viewer to speak for: the subscription poller and WebSub
-        // ingest. They want channel and video rows and nothing else.
-        //
-        // The guard is load-bearing rather than tidy: `type::record("")` is a
-        // runtime error ("Found  for the Record ID but this is not a valid
-        // table name"), so without it every poll fails.
-        let (playlists, subscription_groups, states) = if owner.is_empty() {
-            (Vec::new(), Vec::new(), Vec::new())
-        } else {
-            let playlists: Vec<DbPlaylist> = self
-                .db
-                .query("SELECT playlist_id, name, video_ids FROM playlist WHERE owner = type::record($owner) ORDER BY name")
-                .bind(("owner", owner.to_string()))
-                .await?
-                .check()?
-                .take(0)?;
-            let subscription_groups: Vec<DbSubscriptionGroup> = self
-                .db
-                .query("SELECT group_id, name, channel_ids FROM subscription_group WHERE owner = type::record($owner) ORDER BY name")
-                .bind(("owner", owner.to_string()))
-                .await?
-                .check()?
-                .take(0)?;
-            let states: Vec<DbLibraryState> = self
-                .db
-                .query("SELECT cache_revision, queue_json, history_json FROM library_state WHERE owner = type::record($owner) LIMIT 1")
-                .bind(("owner", owner.to_string()))
-                .await?
-                .check()?
-                .take(0)?;
-            (playlists, subscription_groups, states)
-        };
-        let state = states.into_iter().next();
-        let queue = state
-            .as_ref()
-            .and_then(|state| serde_json::from_str(&state.queue_json).ok())
-            .unwrap_or_default();
-        let history: Vec<HistoryEntry> = state
-            .as_ref()
-            .and_then(|state| serde_json::from_str(&state.history_json).ok())
-            .unwrap_or_default();
-
-        // The shared rows carry whatever the last writer left in their
-        // per-user columns, which for a second account is somebody else's
-        // history. Overlay this account's own rows over them, and default the
-        // rest to untouched rather than inheriting.
-        let subscriptions = self.user_subscriptions(owner).await?;
-        let progress = self.user_progress(owner).await?;
-
-        let mut videos = videos.into_iter().map(Into::into).collect::<Vec<Video>>();
-        for video in &mut videos {
-            match progress.get(&video.id) {
-                Some(row) => {
-                    video.watched = row.watched;
-                    video.progress_seconds = row.progress_seconds.max(0) as u64;
-                    video.audio_only = row.audio_only;
-                }
-                None => {
-                    video.watched = false;
-                    video.progress_seconds = 0;
-                    video.audio_only = false;
-                }
-            }
-        }
-        videos.sort_by_key(|video| std::cmp::Reverse(video_published_epoch(&video.published_at)));
-
-        let mut channels = channels.into_iter().map(Channel::from).collect::<Vec<_>>();
-        for channel in &mut channels {
-            let (subscribed, content) = subscriptions
-                .get(&channel.id)
-                .copied()
-                .unwrap_or((false, SubscriptionContent::default()));
-            channel.subscribed = subscribed;
-            channel.subscription_content = content;
-        }
-
-        Ok(LibrarySnapshot {
-            channels,
-            videos,
-            playlists: playlists.into_iter().map(Into::into).collect(),
-            subscription_groups: subscription_groups.into_iter().map(Into::into).collect(),
-            queue,
-            history,
-            last_synced_at: Some("Just now".into()),
-            cache_revision: state
-                .map(|state| state.cache_revision.max(0) as u64)
-                .unwrap_or_default(),
-        })
-    }
-
     async fn reachable_ytdlp_po_provider_url(&self) -> Option<&str> {
         let provider_url = self.ytdlp_po_provider_url.as_deref()?;
         let ping_url = format!("{provider_url}/ping");
@@ -1070,60 +928,6 @@ impl AppServerState {
                 None
             }
         }
-    }
-
-    /// Replace this account's subscription rows, and report which channels
-    /// changed hands.
-    ///
-    /// One delete plus one bulk insert rather than a statement per channel: a
-    /// full sync carries every subscription a viewer has, which is hundreds of
-    /// rows, and a query each would be hundreds of round trips.
-    async fn write_user_subscriptions(
-        &self,
-        owner: &str,
-        incoming: &[(String, bool, SubscriptionContent)],
-    ) -> Result<Vec<String>> {
-        let prior = self.user_subscriptions(owner).await?;
-        // A channel counts as changed when this account's answer moved. An
-        // unknown channel only counts when the answer is yes, so a first sync
-        // does not report every channel the viewer has ever declined.
-        let changed = incoming
-            .iter()
-            .filter(|(channel_id, subscribed, _)| {
-                prior
-                    .get(channel_id)
-                    .map(|(was, _)| was != subscribed)
-                    .unwrap_or(*subscribed)
-            })
-            .map(|(channel_id, _, _)| channel_id.clone())
-            .collect::<Vec<_>>();
-
-        self.db
-            .query("DELETE user_subscription WHERE owner = type::record($owner)")
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?;
-        if !incoming.is_empty() {
-            let rows = incoming
-                .iter()
-                .map(|(channel_id, subscribed, content)| {
-                    serde_json::json!({
-                        "owner": owner,
-                        "channel_id": channel_id,
-                        "subscribed": subscribed,
-                        "content": content.as_storage(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            self.db
-                .query(
-                    "INSERT INTO user_subscription (SELECT channel_id, subscribed, content, type::record(owner) AS owner, time::now() AS updated_at FROM $rows)",
-                )
-                .bind(("rows", rows))
-                .await?
-                .check()?;
-        }
-        Ok(changed)
     }
 
     /// Merge this account's watch progress for the videos it sent.
@@ -1153,129 +957,6 @@ impl AppServerState {
                 .check()?;
         }
         Ok(())
-    }
-
-    /// Replace this account's queue, history and revision marker.
-    async fn write_library_state(
-        &self,
-        owner: &str,
-        cache_revision: u64,
-        queue: &[String],
-        history: &[HistoryEntry],
-    ) -> Result<()> {
-        // Delete then create, under the caller's sync lock. The unique index on
-        // the owner makes a duplicate impossible rather than merely unlikely.
-        self.db
-            .query("DELETE library_state WHERE owner = type::record($owner)")
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?;
-        self.db
-            .query(
-                r#"CREATE library_state SET
-                    owner = type::record($owner),
-                    cache_revision = $cache_revision,
-                    queue_json = $queue_json,
-                    history_json = $history_json,
-                    updated_at = time::now()"#,
-            )
-            .bind(("owner", owner.to_string()))
-            .bind(("cache_revision", cache_revision as i64))
-            .bind(("queue_json", serde_json::to_string(queue)?))
-            .bind(("history_json", serde_json::to_string(history)?))
-            .await?
-            .check()?;
-        Ok(())
-    }
-
-    pub async fn sync_library(
-        &self,
-        owner: &str,
-        snapshot: LibrarySnapshot,
-    ) -> Result<LibrarySnapshot> {
-        let guard = self.sync_lock.lock().await;
-        let server_revision = self.library_revision(owner).await?;
-        if snapshot.cache_revision <= server_revision {
-            return self.library_snapshot(owner).await;
-        }
-
-        // Merged, not overwritten. The client's copy of a channel it imported is
-        // still the stub from the export file, and writing it over the row would
-        // blank the avatar and subscriber count the server has since fetched.
-        for channel in &snapshot.channels {
-            self.upsert_discovered_channel(channel).await?;
-        }
-        for video in &snapshot.videos {
-            self.upsert_video(video, video_sort_key(video)).await?;
-        }
-        let subscriptions = snapshot
-            .channels
-            .iter()
-            .map(|channel| {
-                (
-                    channel.id.clone(),
-                    channel.subscribed,
-                    channel.subscription_content,
-                )
-            })
-            .collect::<Vec<_>>();
-        let changed_ids = self.write_user_subscriptions(owner, &subscriptions).await?;
-        self.write_user_progress(owner, &LibraryUserState::from(&snapshot).progress)
-            .await?;
-
-        for playlist in &snapshot.playlists {
-            self.upsert_playlist(owner, playlist).await?;
-        }
-        let playlist_ids = snapshot
-            .playlists
-            .iter()
-            .map(|playlist| playlist.id.clone())
-            .collect::<Vec<_>>();
-        // Scoped to the owner: without it, one account saving a playlist would
-        // delete every other account's.
-        self.db
-            .query("DELETE playlist WHERE owner = type::record($owner) AND playlist_id NOT IN $playlist_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("playlist_ids", playlist_ids))
-            .await?
-            .check()?;
-        for group in &snapshot.subscription_groups {
-            self.upsert_subscription_group(owner, group).await?;
-        }
-        let group_ids = snapshot
-            .subscription_groups
-            .iter()
-            .map(|group| group.id.clone())
-            .collect::<Vec<_>>();
-        self.db
-            .query("DELETE subscription_group WHERE owner = type::record($owner) AND group_id NOT IN $group_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("group_ids", group_ids))
-            .await?
-            .check()?;
-
-        self.write_library_state(
-            owner,
-            snapshot.cache_revision,
-            &snapshot.queue,
-            &snapshot.history,
-        )
-        .await?;
-
-        self.refresh_channel_interest(&changed_ids).await?;
-
-        drop(guard);
-
-        let changed_channels = snapshot
-            .channels
-            .iter()
-            .filter(|channel| changed_ids.contains(&channel.id))
-            .filter(|channel| channel.id.starts_with("UC") && !channel.id.starts_with("UC-tawny"))
-            .cloned()
-            .collect::<Vec<_>>();
-        self.spawn_subscription_changes(changed_channels);
-
-        self.library_snapshot(owner).await
     }
 
     /// Hand newly changed channels to the WebSub and feed machinery.
@@ -1313,102 +994,6 @@ impl AppServerState {
                 state.process_subscription_changes(channels).await;
             }
         });
-    }
-
-    /// Apply the client-owned half of the library.
-    ///
-    /// The counterpart to [`Self::sync_library`] for the common case: a single
-    /// mutation such as marking a video watched. It touches only rows the client
-    /// can actually change, where the full snapshot path rewrote every cached
-    /// channel and video on every keystroke-sized edit.
-    pub async fn apply_user_state(&self, owner: &str, user: LibraryUserState) -> Result<u64> {
-        let guard = self.sync_lock.lock().await;
-        let server_revision = self.library_revision(owner).await?;
-        if user.cache_revision <= server_revision {
-            return Ok(server_revision);
-        }
-
-        // Nothing here touches the shared catalog any more. Subscriptions and
-        // watch progress used to be written straight onto the `channel` and
-        // `video` rows, which meant every account on an instance shared one
-        // set of subscriptions and one viewing history; both now live in
-        // tables keyed by owner.
-        let subscriptions = user
-            .subscriptions
-            .iter()
-            .map(|subscription| {
-                (
-                    subscription.channel_id.clone(),
-                    subscription.subscribed,
-                    subscription.content,
-                )
-            })
-            .collect::<Vec<_>>();
-        let changed_ids = self.write_user_subscriptions(owner, &subscriptions).await?;
-        self.write_user_progress(owner, &user.progress).await?;
-
-        for playlist in &user.playlists {
-            self.upsert_playlist(owner, playlist).await?;
-        }
-        let playlist_ids = user
-            .playlists
-            .iter()
-            .map(|playlist| playlist.id.clone())
-            .collect::<Vec<_>>();
-        // Scoped to the owner. Without it, one account saving a playlist would
-        // delete every other account's.
-        self.db
-            .query("DELETE playlist WHERE owner = type::record($owner) AND playlist_id NOT IN $playlist_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("playlist_ids", playlist_ids))
-            .await?
-            .check()?;
-
-        for group in &user.subscription_groups {
-            self.upsert_subscription_group(owner, group).await?;
-        }
-        let group_ids = user
-            .subscription_groups
-            .iter()
-            .map(|group| group.id.clone())
-            .collect::<Vec<_>>();
-        self.db
-            .query("DELETE subscription_group WHERE owner = type::record($owner) AND group_id NOT IN $group_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("group_ids", group_ids))
-            .await?
-            .check()?;
-
-        self.write_library_state(owner, user.cache_revision, &user.queue, &user.history)
-            .await?;
-
-        // The derived flag on `channel` has to catch up before anything reads
-        // it to decide what to poll.
-        self.refresh_channel_interest(&changed_ids).await?;
-
-        drop(guard);
-
-        // Subscribing still has to kick off WebSub and a first feed fetch, and
-        // that side of it needs the full channel records - re-read, so they
-        // carry the instance-wide flag rather than this account's answer.
-        if !changed_ids.is_empty() {
-            let changed_channels: Vec<DbChannel> = self
-                .db
-                .query("SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel WHERE channel_id IN $ids")
-                .bind(("ids", changed_ids))
-                .await?
-                .take(0)?;
-            let changed_channels = changed_channels
-                .into_iter()
-                .map(Channel::from)
-                .filter(|channel| {
-                    channel.id.starts_with("UC") && !channel.id.starts_with("UC-tawny")
-                })
-                .collect::<Vec<_>>();
-            self.spawn_subscription_changes(changed_channels);
-        }
-
-        Ok(user.cache_revision)
     }
 
     async fn process_subscription_changes(&self, changed_channels: Vec<Channel>) {
@@ -1457,23 +1042,6 @@ impl AppServerState {
                 }
             };
         let _ = tokio::join!(websub_job, feed_job);
-    }
-
-    async fn library_revision(&self, owner: &str) -> Result<u64> {
-        if owner.is_empty() {
-            return Ok(0);
-        }
-        let states: Vec<DbLibraryState> = self
-            .db
-            .query("SELECT cache_revision, queue_json, history_json FROM library_state WHERE owner = type::record($owner) LIMIT 1")
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?
-            .take(0)?;
-        Ok(states
-            .first()
-            .map(|state| state.cache_revision.max(0) as u64)
-            .unwrap_or_default())
     }
 
     async fn register_proxy_target(
@@ -1706,45 +1274,79 @@ impl AppServerState {
         &self,
         service_url: &str,
         video_id: &str,
-    ) -> std::result::Result<Vec<YtdlpFormat>, String> {
-        let url = ytdlp_service_video_url(service_url, video_id)
-            .ok_or_else(|| format!("the yt-dlp service URL {service_url} is invalid"))?;
-        let response = self.ytdlp_http.get(url).send().await.map_err(|error| {
-            format!("the yt-dlp service at {service_url} is unreachable ({error})")
+    ) -> std::result::Result<Vec<YtdlpFormat>, PlaybackFailure> {
+        let url = ytdlp_service_video_url(service_url, video_id).ok_or_else(|| {
+            PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The extractor service URL is not a valid URL.",
+            )
+            .remedy("Fix TAWNY_YTDLP_SERVICE_URL in the server's environment and restart it.")
+            .detail(service_url)
         })?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "the yt-dlp service answered {} for this video",
-                response.status()
-            ));
+        let response = self.ytdlp_http.get(url).send().await.map_err(|error| {
+            PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "Tawny could not reach its extractor service.",
+            )
+            .remedy(
+                "Start the extractor container (docker compose up -d extractor) and check that \
+                 TAWNY_YTDLP_SERVICE_URL points at it.",
+            )
+            .detail(format!("{service_url}: {error}"))
+        })?;
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|error| {
+            PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The extractor service's answer was cut off.",
+            )
+            .remedy("Try again. If it keeps happening, check the extractor container's log.")
+            .detail(error.to_string())
+        })?;
+        if !status.is_success() {
+            return Err(extractor_status_failure(status, &bytes));
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| format!("the yt-dlp service's answer could not be read ({error})"))?;
         serde_json::from_slice::<YtdlpDump>(&bytes)
             .map(formats_from_ytdlp_dump)
-            .map_err(|error| format!("the yt-dlp service's answer could not be parsed ({error})"))
+            .map_err(|error| {
+                PlaybackFailure::new(
+                    PlaybackFailureOrigin::Bug,
+                    "Tawny could not understand yt-dlp's answer.",
+                )
+                .remedy(
+                    "Report it with the detail below. A yt-dlp upgrade that changed its output \
+                     is the usual cause.",
+                )
+                .detail(error.to_string())
+            })
     }
 
     /// Every format yt-dlp found, or why there are none. The reason is shown
     /// to the viewer, so it names the cause rather than the symptom.
-    async fn ytdlp_formats(&self, video_id: &str) -> std::result::Result<Vec<YtdlpFormat>, String> {
+    async fn ytdlp_formats(
+        &self,
+        video_id: &str,
+    ) -> std::result::Result<Vec<YtdlpFormat>, PlaybackFailure> {
         let formats = self.run_ytdlp(video_id).await;
-        if let Err(reason) = &formats {
-            eprintln!("yt-dlp gave no formats for {video_id}: {reason}");
+        if let Err(failure) = &formats {
+            eprintln!("yt-dlp gave no formats for {video_id}: {failure}");
         }
         formats
     }
 
-    async fn run_ytdlp(&self, video_id: &str) -> std::result::Result<Vec<YtdlpFormat>, String> {
+    async fn run_ytdlp(
+        &self,
+        video_id: &str,
+    ) -> std::result::Result<Vec<YtdlpFormat>, PlaybackFailure> {
         if let Some(service_url) = self.ytdlp_service_url.as_deref() {
             return self.ytdlp_service_formats(service_url, video_id).await;
         }
         let Some(binary) = self.ytdlp_bin.as_ref() else {
-            return Err(
-                "no yt-dlp is configured (set TAWNY_YTDLP_SERVICE_URL or TAWNY_YTDLP_BIN)".into(),
-            );
+            return Err(PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The server has no extractor configured.",
+            )
+            .remedy("Set TAWNY_YTDLP_SERVICE_URL (or TAWNY_YTDLP_BIN) and restart the server."));
         };
         let mut command = tokio::process::Command::new(binary);
         command.args([
@@ -1761,17 +1363,33 @@ impl AppServerState {
         let output = match tokio::time::timeout(Duration::from_secs(30), output).await {
             Ok(Ok(output)) if output.status.success() => output,
             Ok(Ok(output)) => {
-                return Err(format!(
-                    "yt-dlp failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
+                return Err(classify_ytdlp_error(&String::from_utf8_lossy(
+                    &output.stderr,
+                )));
             }
-            Ok(Err(error)) => return Err(format!("yt-dlp could not be run ({error})")),
-            Err(_) => return Err("yt-dlp timed out".into()),
+            Ok(Err(error)) => {
+                return Err(PlaybackFailure::new(
+                    PlaybackFailureOrigin::Setup,
+                    "The server could not run yt-dlp.",
+                )
+                .remedy("Check that TAWNY_YTDLP_BIN points at a working yt-dlp.")
+                .detail(error.to_string()));
+            }
+            Err(_) => return Err(extraction_timed_out()),
         };
         serde_json::from_slice::<YtdlpDump>(&output.stdout)
             .map(formats_from_ytdlp_dump)
-            .map_err(|error| format!("yt-dlp's output could not be parsed ({error})"))
+            .map_err(|error| {
+                PlaybackFailure::new(
+                    PlaybackFailureOrigin::Bug,
+                    "Tawny could not understand yt-dlp's answer.",
+                )
+                .remedy(
+                    "Report it with the detail below. A yt-dlp upgrade that changed its output \
+                     is the usual cause.",
+                )
+                .detail(error.to_string())
+            })
     }
 
     /// The itag-to-URL view the extractor-layout path still needs.
@@ -1803,13 +1421,13 @@ impl AppServerState {
         video_id: &str,
         _prefer_sabr: bool,
         fresh: bool,
-    ) -> Result<PlaybackSession> {
+    ) -> std::result::Result<PlaybackSession, PlaybackFailure> {
         let resolve = self.shared_playback_resolve(video_id, fresh);
         let resolved = resolve.clone().await;
         if !resolved.as_ref().is_ok_and(|resolved| resolved.reusable) {
             self.forget_playback_resolve(video_id, &resolve);
         }
-        let resolved = resolved.map_err(|error| anyhow!(error))?;
+        let resolved = resolved?;
         Ok(self.proxy_session(resolved.session).await)
     }
 
@@ -1836,15 +1454,16 @@ impl AppServerState {
         }
         let state = self.clone();
         let id = video_id.to_string();
-        let task = tokio::spawn(async move {
-            state
-                .resolve_playback(&id)
-                .await
-                .map_err(|error| format!("{error:#}"))
-        });
+        let task = tokio::spawn(async move { state.resolve_playback(&id).await });
         let resolve = async move {
-            task.await
-                .unwrap_or_else(|error| Err(format!("playback resolve aborted: {error}")))
+            task.await.unwrap_or_else(|error| {
+                Err(PlaybackFailure::new(
+                    PlaybackFailureOrigin::Bug,
+                    "The playback resolver crashed.",
+                )
+                .remedy("Try again. If it keeps happening, report it with the detail below.")
+                .detail(error.to_string()))
+            })
         }
         .boxed()
         .shared();
@@ -1874,7 +1493,10 @@ impl AppServerState {
     }
 
     /// Resolve playback from scratch. The session is not yet proxied.
-    async fn resolve_playback(&self, video_id: &str) -> Result<ResolvedPlayback> {
+    async fn resolve_playback(
+        &self,
+        video_id: &str,
+    ) -> std::result::Result<ResolvedPlayback, PlaybackFailure> {
         let fallback_url = embed_url(video_id);
         let mut provider_sources: Vec<PlaybackSource> = Vec::new();
         // Run both extractors together: rustypipe supplies the stream layout
@@ -2079,9 +1701,9 @@ impl AppServerState {
         // An error, not a session: the player shows this message, and the
         // viewer learns the cause (a stopped sidecar, say) instead of meeting
         // gated URLs that freeze a minute in.
-        let reason = no_stream_reason(ytdlp_failure.as_deref(), ytdlp_formats.len());
-        eprintln!("playback for {video_id}: {reason}");
-        Err(anyhow!(reason))
+        let failure = no_stream_failure(ytdlp_failure, ytdlp_formats.len());
+        eprintln!("playback for {video_id}: {failure}");
+        Err(failure)
     }
 
     async fn seed_demo_if_empty(&self) -> Result<()> {
@@ -2095,7 +1717,7 @@ impl AppServerState {
         if !existing.is_empty() {
             return Ok(());
         }
-        let demo = LibrarySnapshot::demo();
+        let demo = crate::models::DemoLibrary::demo();
         for channel in &demo.channels {
             self.upsert_channel(channel).await?;
         }
@@ -2487,7 +2109,13 @@ impl AppServerState {
     }
 
     pub async fn video_details(&self, owner: &str, video_id: &str) -> Result<VideoDetails> {
-        let details = self.video_details_for_anyone(owner, video_id).await?;
+        let mut details = self.video_details_for_anyone(owner, video_id).await?;
+        // The details are cached for every account; the progress in them is
+        // this one's.
+        self.overlay_viewer(owner, std::slice::from_mut(&mut details.video))
+            .await?;
+        self.overlay_viewer(owner, &mut details.related_videos)
+            .await?;
         self.with_owner_follow_state(owner, details).await
     }
 
@@ -2498,31 +2126,33 @@ impl AppServerState {
             return Ok(self.proxy_captions(cached).await);
         }
         let stale = self.read_video_details_cache(video_id, false).await?;
-        let library = self.library_snapshot(owner).await?;
-        let local_video = library
-            .videos
-            .iter()
-            .find(|video| video.id == video_id)
-            .cloned();
-        let local_channel = local_video.as_ref().and_then(|video| {
-            library
-                .channels
-                .iter()
-                .find(|channel| channel.id == video.channel_id)
-                .cloned()
-        });
-        let local_related = library
-            .videos
-            .iter()
-            .filter(|video| video.id != video_id)
-            .take(8)
-            .cloned()
-            .collect::<Vec<_>>();
+        let _ = owner;
+        let local_video = self
+            .videos_by_id("", &[video_id.to_string()])
+            .await?
+            .into_iter()
+            .next();
+        let (local_channel, local_related) = match &local_video {
+            Some(video) => (
+                self.catalog_channel(&video.channel_id).await?,
+                // The channel's other uploads stand in for related videos.
+                self.catalog_channel_videos(&video.channel_id, 9)
+                    .await?
+                    .into_iter()
+                    .filter(|related| related.id != video_id)
+                    .take(8)
+                    .collect(),
+            ),
+            None => (None, Vec::new()),
+        };
 
-        if let Ok(details) = self
+        if let Ok(mut details) = self
             .fetch_direct_video_details(video_id, local_video.clone(), local_channel.clone())
             .await
         {
+            self.keep_finer_dates(std::slice::from_mut(&mut details.video))
+                .await?;
+            self.keep_finer_dates(&mut details.related_videos).await?;
             if let Some(channel) = &details.channel {
                 self.upsert_discovered_channel(channel).await?;
             }
@@ -2666,6 +2296,7 @@ impl AppServerState {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             };
             let video = self.enrich_video_player(video).await;
             let published = video.published_at.clone();
@@ -2711,6 +2342,19 @@ impl AppServerState {
     }
 
     pub async fn channel_details(&self, owner: &str, channel_id: &str) -> Result<ChannelDetails> {
+        let mut details = self.channel_details_unviewed(owner, channel_id).await?;
+        for page in [&mut details.videos, &mut details.shorts, &mut details.live] {
+            self.overlay_viewer(owner, &mut page.videos).await?;
+        }
+        Ok(details)
+    }
+
+    /// [`Self::channel_details`] before this viewer's progress is applied.
+    async fn channel_details_unviewed(
+        &self,
+        owner: &str,
+        channel_id: &str,
+    ) -> Result<ChannelDetails> {
         let query = self.youtube.query();
         let (rss_result, videos_result, shorts_result, live_result) = tokio::join!(
             youtube_call(query.channel_rss(channel_id), "extract channel RSS"),
@@ -2813,20 +2457,20 @@ impl AppServerState {
             });
         }
 
-        let library = self.library_snapshot(owner).await?;
-        let channel = library
-            .channels
-            .into_iter()
-            .find(|channel| channel.id == channel_id)
+        let mut channel = self
+            .catalog_channel(channel_id)
+            .await?
             .ok_or_else(|| anyhow!("channel is unavailable"))?;
+        let (subscribed, content) = self
+            .user_follows(owner, channel_id)
+            .await?
+            .unwrap_or((false, channel.subscription_content));
+        channel.subscribed = subscribed;
+        channel.subscription_content = content;
         let mut videos = Vec::new();
         let mut shorts = Vec::new();
         let mut live = Vec::new();
-        for video in library
-            .videos
-            .into_iter()
-            .filter(|video| video.channel_id == channel_id)
-        {
+        for video in self.catalog_channel_videos(channel_id, 200).await? {
             if video.is_short {
                 shorts.push(video);
             } else if video.is_live {
@@ -2884,12 +2528,8 @@ impl AppServerState {
             .await?
             .ok_or_else(|| anyhow!("channel page is exhausted"))?;
             let channel_name = self
-                // Just the cached name; nothing here is the viewer's.
-                .library_snapshot("")
+                .catalog_channel(channel_id)
                 .await?
-                .channels
-                .into_iter()
-                .find(|channel| channel.id == channel_id)
                 .map(|channel| channel.name)
                 .unwrap_or_else(|| "YouTube channel".into());
             let result = rusty_page(channel_id, tab, &page, &channel_name);
@@ -2935,37 +2575,21 @@ impl AppServerState {
             _ => "all",
         };
         let cache_key = (query.to_lowercase(), filter.to_string());
-        if let Some(cached) = self.search_cache.read().await.get(&cache_key)
-            && cached.cached_at.elapsed() < SEARCH_CACHE_TTL
-        {
-            return Ok(cached.result.clone());
+        // Identical searches share one upstream request, and searches take
+        // turns: type-ahead bursts and several clients never reach YouTube at
+        // once.
+        let searched = SEARCHES
+            .try_get_with(cache_key, async {
+                let _turn = self.search_lock.lock().await;
+                self.search_direct(query, filter).await
+            })
+            .await;
+        match searched {
+            Ok(result) => Ok(result),
+            // Never into the shared cache: this searches the catalog for the
+            // asking account, with its own progress.
+            Err(_) => self.search_cached(owner, query, filter).await,
         }
-
-        // Coalesce bursts from repeated submits or several clients. The cache is checked
-        // again after taking the lock so identical searches produce one upstream request.
-        let _guard = self.search_lock.lock().await;
-        if let Some(cached) = self.search_cache.read().await.get(&cache_key)
-            && cached.cached_at.elapsed() < SEARCH_CACHE_TTL
-        {
-            return Ok(cached.result.clone());
-        }
-
-        let result = match self.search_direct(query, filter).await {
-            Ok(result) => result,
-            // Never into the shared cache: this searches the asking account's
-            // own library, and cached under the query alone it was served to
-            // every other account that searched the same words.
-            Err(_) => return self.search_cached(owner, query, filter).await,
-        };
-
-        self.search_cache.write().await.insert(
-            cache_key,
-            CachedSearch {
-                result: result.clone(),
-                cached_at: std::time::Instant::now(),
-            },
-        );
-        Ok(result)
     }
 
     pub async fn search_page(
@@ -3023,32 +2647,43 @@ impl AppServerState {
         })
     }
 
+    /// Search what the catalog already holds, for when YouTube cannot be
+    /// reached. Matched in the database and capped, never by loading it all.
     async fn search_cached(&self, owner: &str, query: &str, filter: &str) -> Result<SearchResults> {
-        let snapshot = self.library_snapshot(owner).await?;
+        const LIMIT: i64 = 60;
         let needle = query.to_lowercase();
-        let videos = if filter == "channels" {
+        let mut videos = if filter == "channels" {
             Vec::new()
         } else {
-            snapshot
-                .videos
-                .into_iter()
-                .filter(|video| {
-                    video.title.to_lowercase().contains(&needle)
-                        || video.channel_name.to_lowercase().contains(&needle)
-                })
-                .collect()
+            let rows: Vec<DbVideo> = self
+                .db
+                .query(format!(
+                    "SELECT {} FROM video WHERE string::contains(string::lowercase(title), $needle) OR string::contains(string::lowercase(channel_name), $needle) ORDER BY published_sort DESC LIMIT $limit",
+                    viewer::VIDEO_COLUMNS
+                ))
+                .bind(("needle", needle.clone()))
+                .bind(("limit", LIMIT))
+                .await?
+                .check()?
+                .take(0)?;
+            rows.into_iter().map(Video::from).collect::<Vec<_>>()
         };
+        self.overlay_viewer(owner, &mut videos).await?;
         let channels = if filter == "videos" {
             Vec::new()
         } else {
-            snapshot
-                .channels
-                .into_iter()
-                .filter(|channel| {
-                    channel.name.to_lowercase().contains(&needle)
-                        || channel.handle.to_lowercase().contains(&needle)
-                })
-                .collect()
+            let rows: Vec<DbChannel> = self
+                .db
+                .query(format!(
+                    "SELECT {} FROM channel WHERE string::contains(string::lowercase(name), $needle) OR string::contains(string::lowercase(handle), $needle) LIMIT $limit",
+                    viewer::CHANNEL_COLUMNS
+                ))
+                .bind(("needle", needle))
+                .bind(("limit", LIMIT))
+                .await?
+                .check()?
+                .take(0)?;
+            rows.into_iter().map(Channel::from).collect()
         };
         Ok(SearchResults {
             query: query.to_string(),
@@ -3547,7 +3182,6 @@ impl AppServerState {
         let refreshed_channels = covered_channels.len();
         let failed_channels = total_channels.saturating_sub(refreshed_channels);
         Ok(FeedRefreshResult {
-            library: self.library_snapshot(owner).await?,
             imported,
             refreshed_channels,
             failed_channels,
@@ -3632,11 +3266,9 @@ impl AppServerState {
         }
         // Catalog only: a WebSub push belongs to the instance, not to a viewer,
         // and all it needs from here is the channel's cached metadata.
-        let library = self.library_snapshot("").await?;
-        let channel = library
-            .channels
-            .into_iter()
-            .find(|channel| channel.id == channel_id)
+        let channel = self
+            .catalog_channel(&channel_id)
+            .await?
             .ok_or_else(|| anyhow!("WebSub channel is not cached"))?;
 
         let mut hints = Vec::with_capacity(entries.len());
@@ -4287,6 +3919,7 @@ fn rusty_video_item_to_video(
         is_live: item.is_live,
         is_short: force_short || item.is_short,
         audio_only: false,
+        channel_avatar_url: None,
     }
 }
 
@@ -4349,16 +3982,256 @@ fn embed_url(video_id: &str) -> String {
 }
 
 /// What the viewer is told when no ungated stream could be found.
-fn no_stream_reason(ytdlp_failure: Option<&str>, ytdlp_format_count: usize) -> String {
+fn no_stream_failure(
+    ytdlp_failure: Option<PlaybackFailure>,
+    ytdlp_format_count: usize,
+) -> PlaybackFailure {
     match ytdlp_failure {
-        Some(failure) => format!("No playable stream: {failure}."),
-        None if ytdlp_format_count == 0 => {
-            "No playable stream: yt-dlp found no formats for this video.".into()
-        }
-        None => format!(
-            "No playable stream: none of yt-dlp's {ytdlp_format_count} formats could be played."
+        Some(failure) => failure,
+        None if ytdlp_format_count == 0 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Unknown,
+            "yt-dlp read the video but found no streams in it.",
+        )
+        .remedy(
+            "This happens with DRM-protected videos such as rented films, which Tawny cannot \
+             play. Otherwise report it with the video link.",
         ),
+        None => PlaybackFailure::new(
+            PlaybackFailureOrigin::Bug,
+            format!(
+                "yt-dlp found {ytdlp_format_count} streams, but Tawny could not build a playable \
+                 source from any of them."
+            ),
+        )
+        .remedy("Report it with the video link; the server log has the per-stream detail."),
     }
+}
+
+fn extraction_timed_out() -> PlaybackFailure {
+    PlaybackFailure::new(
+        PlaybackFailureOrigin::Setup,
+        "Extracting the video took too long and was stopped.",
+    )
+    .remedy(
+        "Try again. If it keeps timing out, the server is slow to reach YouTube or the extractor \
+         is overloaded.",
+    )
+}
+
+/// The extractor sidecar's non-success answers. Each status is one it sends
+/// deliberately (see `docker/extractor/server.py`), and only 502 means yt-dlp
+/// itself failed - with yt-dlp's own error in the body.
+fn extractor_status_failure(status: reqwest::StatusCode, body: &[u8]) -> PlaybackFailure {
+    #[derive(Deserialize, Default)]
+    struct ExtractorError {
+        #[serde(default)]
+        error: String,
+        #[serde(default)]
+        ytdlp_error: Option<String>,
+    }
+    let answer = serde_json::from_slice::<ExtractorError>(body).unwrap_or_default();
+    let said = if answer.error.is_empty() {
+        format!("extractor answered {status}")
+    } else {
+        format!("extractor answered {status}: {}", answer.error)
+    };
+    match status.as_u16() {
+        502 => match answer.ytdlp_error {
+            Some(error) => classify_ytdlp_error(&error),
+            // An extractor older than the one that passes yt-dlp's error on.
+            None => PlaybackFailure::new(
+                PlaybackFailureOrigin::Unknown,
+                "yt-dlp failed, but the extractor did not say why.",
+            )
+            .remedy(
+                "The extractor container is out of date: rebuild it (docker compose up -d --build \
+                 extractor) so it reports yt-dlp's error. Its log has the reason meanwhile.",
+            )
+            .detail(said),
+        },
+        503 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Setup,
+            "The PO-token provider the extractor depends on is not running.",
+        )
+        .remedy("Start the pot-provider container and check its log.")
+        .detail(said),
+        429 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Setup,
+            "The extractor is busy with other videos.",
+        )
+        .remedy(
+            "Try again in a moment. If it happens often, raise YTDLP_CONCURRENCY for the \
+             extractor.",
+        )
+        .detail(said),
+        504 => extraction_timed_out().detail(said),
+        400 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Bug,
+            "The extractor rejected the video ID Tawny sent it.",
+        )
+        .remedy(
+            "If you typed or pasted this link, check the video ID. Otherwise report it with the \
+             link.",
+        )
+        .detail(said),
+        _ => PlaybackFailure::new(
+            PlaybackFailureOrigin::Unknown,
+            "The extractor service answered with an unexpected error.",
+        )
+        .remedy("Check the extractor container's log.")
+        .detail(said),
+    }
+}
+
+/// The last `ERROR:` line of yt-dlp's stderr, without the `[youtube] <id>:`
+/// prefix that only repeats what the viewer already knows.
+fn ytdlp_error_line(stderr: &str) -> &str {
+    let line = stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with("ERROR:"))
+        .or_else(|| {
+            stderr
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+        })
+        .unwrap_or("");
+    let line = line.strip_prefix("ERROR:").unwrap_or(line).trim_start();
+    match line
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once("] "))
+    {
+        Some((_, rest)) => match rest.split_once(": ") {
+            Some((id, message)) if !id.contains(' ') => message,
+            _ => rest,
+        },
+        None => line,
+    }
+}
+
+/// Sort yt-dlp's error into whose problem it is.
+///
+/// The phrases are YouTube's own playability reasons, which yt-dlp passes on
+/// verbatim, plus yt-dlp's own wording when it cannot parse YouTube's page.
+/// Anything unmatched stays `Unknown` rather than guessed at: calling a
+/// Tawny bug "YouTube's fault" would hide it.
+fn classify_ytdlp_error(stderr: &str) -> PlaybackFailure {
+    use PlaybackFailureOrigin::{Setup, Unknown, Youtube};
+    let reason = ytdlp_error_line(stderr);
+    let lower = reason.to_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+    let failure = if has(&[
+        "not made this video available in your country",
+        "in your country",
+        "geo restrict",
+    ]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube blocks this video in the server's country.",
+        )
+        .remedy(
+            "Nothing in Tawny can fix this. It would only play through a server (or proxy) \
+                 in a country where the uploader allows it.",
+        )
+    } else if has(&["not a bot"]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube has flagged the server as a bot and is refusing to serve it.",
+        )
+        .remedy(
+            "Check that the pot-provider container is healthy, then wait: these blocks usually \
+             lift within hours. If it persists, the server's IP address is blocked and \
+             extraction has to go through another one.",
+        )
+    } else if has(&["private video"]) {
+        PlaybackFailure::new(Youtube, "This video is private.").remedy(
+            "Only accounts the uploader invited can watch it; Tawny has no YouTube account.",
+        )
+    } else if has(&[
+        "confirm your age",
+        "age-restricted",
+        "inappropriate for some users",
+    ]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube only shows this video to signed-in adults.",
+        )
+        .remedy("Tawny does not sign in to YouTube, so it cannot play age-restricted videos.")
+    } else if has(&["members-only", "members only", "join this channel"]) {
+        PlaybackFailure::new(
+            Youtube,
+            "This video is only for the channel's paying members.",
+        )
+    } else if has(&[
+        "premieres in",
+        "live event will begin",
+        "premiere will begin",
+        "is upcoming",
+    ]) {
+        PlaybackFailure::new(Youtube, "This video has not started yet.")
+            .remedy("Try again once the premiere or live stream begins.")
+    } else if has(&["removed by the uploader"]) {
+        PlaybackFailure::new(Youtube, "The uploader has removed this video.")
+    } else if has(&["account associated with this video has been terminated"]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube terminated the account that uploaded this video.",
+        )
+    } else if has(&["violating youtube", "copyright", "terms of service"]) {
+        PlaybackFailure::new(Youtube, "YouTube has taken this video down.")
+    } else if has(&["http error 429", "too many requests"]) {
+        PlaybackFailure::new(Youtube, "YouTube is rate-limiting the server.").remedy(
+            "Wait a few minutes and try again. Lowering YTDLP_CONCURRENCY makes it less likely.",
+        )
+    } else if has(&["video unavailable", "not available", "no longer available"]) {
+        // YouTube's catch-all. The watch page shows the same "Video
+        // unavailable" to a browser on the server's network, so this is
+        // YouTube's decision, not an extraction mistake - but it gives no
+        // reason, and a regional or rights block is the usual one.
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube says this video is unavailable and gives no reason.",
+        )
+        .remedy(
+            "It is usually blocked in the server's region or for rights reasons. Nothing in \
+                 Tawny can fix that; it may still play on YouTube from somewhere else.",
+        )
+    } else if has(&[
+        "unable to extract",
+        "signature",
+        "nsig",
+        "n challenge",
+        "latest version",
+        "please report this issue",
+    ]) {
+        PlaybackFailure::new(
+            Setup,
+            "yt-dlp could not read YouTube's page; YouTube has probably changed it.",
+        )
+        .remedy(
+            "Update yt-dlp: raise YTDLP_VERSION to the latest release and rebuild the \
+                 extractor (docker compose up -d --build extractor).",
+        )
+    } else if has(&[
+        "timed out",
+        "unable to download",
+        "connection",
+        "name resolution",
+        "network is unreachable",
+    ]) {
+        PlaybackFailure::new(Setup, "The server could not reach YouTube.")
+            .remedy("Check the server's internet connection, then try again.")
+    } else {
+        PlaybackFailure::new(
+            Unknown,
+            "yt-dlp failed with an error Tawny does not recognise.",
+        )
+        .remedy("Try again. If it keeps failing, report it with the detail below.")
+    };
+    failure.detail(reason)
 }
 
 /// Ordering for playback sources, lowest first.
@@ -4686,23 +4559,17 @@ struct SegmentRangeKey {
     size: u64,
 }
 
-static SEGMENT_RANGE_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<HashMap<SegmentRangeKey, SegmentRanges>>,
-> = std::sync::OnceLock::new();
+/// Byte ranges by exact file. They are a fact about the file, so they never
+/// go stale; the bound is on memory, not freshness.
+static SEGMENT_RANGES: ServerCache<SegmentRangeKey, SegmentRanges> =
+    ServerCache::new(Duration::from_secs(24 * 60 * 60), 20_000);
 
-fn cached_segment_ranges(key: &SegmentRangeKey) -> Option<SegmentRanges> {
-    SEGMENT_RANGE_CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .ok()?
-        .get(key)
-        .copied()
+async fn cached_segment_ranges(key: &SegmentRangeKey) -> Option<SegmentRanges> {
+    SEGMENT_RANGES.get(key).await
 }
 
-fn store_segment_ranges(key: SegmentRangeKey, ranges: SegmentRanges) {
-    if let Ok(mut cache) = SEGMENT_RANGE_CACHE.get_or_init(Default::default).lock() {
-        cache.insert(key, ranges);
-    }
+async fn store_segment_ranges(key: SegmentRangeKey, ranges: SegmentRanges) {
+    SEGMENT_RANGES.insert(key, ranges).await;
 }
 
 /// Read enough of a stream to find its index.
@@ -4716,7 +4583,9 @@ async fn probe_segment_ranges(
     key: Option<SegmentRangeKey>,
     url: &str,
 ) -> Option<SegmentRanges> {
-    if let Some(cached) = key.as_ref().and_then(cached_segment_ranges) {
+    if let Some(key) = key.as_ref()
+        && let Some(cached) = cached_segment_ranges(key).await
+    {
         return Some(cached);
     }
     // One format that stalls is dropped from the manifest rather than holding
@@ -4737,7 +4606,7 @@ async fn probe_segment_ranges(
     .ok()??;
     let ranges = segment_ranges(&head)?;
     if let Some(key) = key {
-        store_segment_ranges(key, ranges);
+        store_segment_ranges(key, ranges).await;
     }
     Some(ranges)
 }
@@ -5030,10 +4899,14 @@ fn normalize_rusty_video_details(
         channel_id: channel.id.clone(),
         channel_name: channel.name.clone(),
         thumbnail_url,
+        // The machine date first. The text is localised ("Aug 2, 2013",
+        // "Premiered ..."), and a date that cannot be sorted on sank the video
+        // to the bottom of every newest-first list the moment it was opened.
+        // `published_label` renders this as the same "Aug 2, 2013".
         published_at: details
-            .publish_date_txt
-            .clone()
-            .or_else(|| details.publish_date.map(|date| date.to_string()))
+            .publish_date
+            .map(|date| date.to_string())
+            .or_else(|| details.publish_date_txt.clone())
             .unwrap_or_else(|| "From YouTube".into()),
         duration_seconds: duration,
         view_count: compact_count(details.view_count as i64, " views"),
@@ -5059,6 +4932,7 @@ fn normalize_rusty_video_details(
                 })
             }),
         audio_only: false,
+        channel_avatar_url: None,
     };
     let captions = player
         .as_ref()
@@ -5264,6 +5138,9 @@ fn video_published_epoch(value: &str) -> i64 {
     {
         return date.midnight().assume_utc().unix_timestamp();
     }
+    if let Some(date) = crate::models::text_date(value) {
+        return date.midnight().assume_utc().unix_timestamp();
+    }
 
     let lower = value.to_ascii_lowercase();
     let now = SystemTime::now()
@@ -5333,6 +5210,7 @@ fn feed_entry_video(entry: &FeedEntry, channel: &Channel) -> Video {
         is_live: false,
         is_short: false,
         audio_only: false,
+        channel_avatar_url: None,
     }
 }
 
@@ -5512,12 +5390,13 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{Playlist, SubscriptionGroup, playlist_queue_entry, queued_playlist_id};
+    use crate::models::{playlist_queue_entry, queued_playlist_id};
 
     use super::DbVideo;
     use super::{
         AppServerState, SegmentRangeKey, SegmentRanges, cached_segment_ranges, canonical_sort_key,
-        center_vtt_cues, ebml_vint, extract_chapters, health, mp4_segment_ranges, no_stream_reason,
+        center_vtt_cues, classify_ytdlp_error, ebml_vint, extract_chapters,
+        extractor_status_failure, health, mp4_segment_ranges, no_stream_failure,
         parse_youtube_feed, playback_proxy, playback_proxy_options, reconciliation_limit,
         requested_byte_range, segment_ranges, sniff_media_type, store_segment_ranges,
         url_path_ends_with, video_published_epoch, webm_segment_ranges, websub_channel_from_topic,
@@ -5526,6 +5405,7 @@ mod tests {
     };
     use crate::models::PlaybackProtocol;
     use crate::models::Video;
+    use crate::models::{PlaybackFailure, PlaybackFailureOrigin};
     use axum::extract::Path;
     use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
     use std::time::Duration;
@@ -5564,6 +5444,31 @@ mod tests {
             .id
     }
 
+    /// The seeded demo channels, as the catalog holds them.
+    fn demo_channels() -> Vec<crate::models::Channel> {
+        crate::models::DemoLibrary::demo().channels
+    }
+
+    /// Set whether `owner` follows `channel`.
+    async fn set_follow(
+        state: &AppServerState,
+        owner: &str,
+        channel: &crate::models::Channel,
+        subscribed: bool,
+    ) {
+        state
+            .set_subscriptions(
+                owner,
+                vec![crate::models::SubscriptionChange {
+                    channel: channel.clone(),
+                    subscribed,
+                    content: crate::models::SubscriptionContent::All,
+                }],
+            )
+            .await
+            .expect("set a follow for the test");
+    }
+
     #[tokio::test]
     async fn permits_android_webview_media_requests() {
         let response = playback_proxy_options().await;
@@ -5581,8 +5486,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dubbed_audio_tracks_do_not_share_segment_ranges() {
+    #[tokio::test]
+    async fn dubbed_audio_tracks_do_not_share_segment_ranges() {
         // One itag, two languages, two files with different headers.
         let original = SegmentRanges {
             init_end: 258,
@@ -5601,14 +5506,17 @@ mod tests {
             size,
         };
         // XKSjCOKDtpk's Japanese and Turkish itag 140 are the same length.
-        store_segment_ranges(key("ja", 34_831_565), original);
-        store_segment_ranges(key("tr", 34_831_565), dub);
+        store_segment_ranges(key("ja", 34_831_565), original).await;
+        store_segment_ranges(key("tr", 34_831_565), dub).await;
         assert_eq!(
-            cached_segment_ranges(&key("ja", 34_831_565)),
+            cached_segment_ranges(&key("ja", 34_831_565)).await,
             Some(original)
         );
-        assert_eq!(cached_segment_ranges(&key("tr", 34_831_565)), Some(dub));
-        assert_eq!(cached_segment_ranges(&key("en", 34_830_834)), None);
+        assert_eq!(
+            cached_segment_ranges(&key("tr", 34_831_565)).await,
+            Some(dub)
+        );
+        assert_eq!(cached_segment_ranges(&key("en", 34_830_834)).await, None);
     }
 
     #[test]
@@ -5871,8 +5779,22 @@ mod tests {
     async fn serves_video_details_for_a_seeded_video() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video_id = snapshot.videos[0].id.clone();
+        // A demo video whose channel has others, so the offline fallback has
+        // related videos to offer.
+        let demo = crate::models::DemoLibrary::demo();
+        let video_id = demo
+            .videos
+            .iter()
+            .find(|video| {
+                demo.videos
+                    .iter()
+                    .filter(|other| other.channel_id == video.channel_id)
+                    .count()
+                    > 1
+            })
+            .expect("a demo channel with two videos")
+            .id
+            .clone();
         let details = state.video_details(&owner, &video_id).await.unwrap();
         assert_eq!(details.video.id, video_id);
         // Seeded videos use real YouTube ids, so direct extraction may or may
@@ -5904,6 +5826,7 @@ mod tests {
             is_live: false,
             is_short: false,
             audio_only: false,
+            channel_avatar_url: None,
         };
         state
             .upsert_feed_hint(&video, video.published_at.clone())
@@ -5954,6 +5877,7 @@ mod tests {
             is_live: false,
             is_short: false,
             audio_only: false,
+            channel_avatar_url: None,
         };
         let unknown = Video {
             id: "unknown-length".into(),
@@ -5979,21 +5903,16 @@ mod tests {
     async fn visible_duration_hydration_is_scoped_to_the_viewers_feed() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video = snapshot
+        let video = crate::models::DemoLibrary::demo()
             .videos
-            .iter()
+            .into_iter()
             .find(|video| video.duration_seconds > 0)
-            .cloned()
             .expect("seeded catalog has a measured video");
-        snapshot
-            .channels
-            .iter_mut()
+        let channel = demo_channels()
+            .into_iter()
             .find(|channel| channel.id == video.channel_id)
-            .expect("video channel is cached")
-            .subscribed = true;
-        snapshot.cache_revision += 1;
-        state.sync_library(&owner, snapshot).await.unwrap();
+            .expect("video channel is cached");
+        set_follow(&state, &owner, &channel, true).await;
 
         let resolved = state
             .hydrate_video_durations(
@@ -6024,23 +5943,20 @@ mod tests {
     async fn a_saved_video_is_hydrated_without_following_its_channel() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video = snapshot
+        let video = crate::models::DemoLibrary::demo()
             .videos
-            .iter()
+            .into_iter()
             .find(|video| video.duration_seconds > 0)
-            .cloned()
             .expect("seeded catalog has a measured video");
-        for channel in &mut snapshot.channels {
-            channel.subscribed = false;
-        }
-        snapshot.playlists.push(Playlist {
-            id: "saved-from-elsewhere".into(),
-            name: "Saved".into(),
-            video_ids: vec![video.id.clone()],
-        });
-        snapshot.cache_revision += 1;
-        state.sync_library(&owner, snapshot).await.unwrap();
+        // Saved to a playlist, without following the channel.
+        state
+            .save_playlist(&owner, "saved-from-elsewhere", "Saved")
+            .await
+            .unwrap();
+        state
+            .set_in_playlist(&owner, "saved-from-elsewhere", &video.id, true)
+            .await
+            .unwrap();
 
         let resolved = state
             .hydrate_video_durations(&owner, vec![video.id.clone()])
@@ -6066,23 +5982,25 @@ mod tests {
     async fn a_queued_playlist_run_survives_a_round_trip() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video_id = snapshot.videos[0].id.clone();
-        snapshot.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Watch later".into(),
-            video_ids: vec![video_id.clone()],
-        });
-        snapshot.queue = vec![playlist_queue_entry("watch-later"), video_id.clone()];
-        snapshot.cache_revision += 1;
+        let video_id = crate::models::DemoLibrary::demo().videos[0].id.clone();
+        state
+            .save_playlist(&owner, "watch-later", "Watch later")
+            .await
+            .unwrap();
+        state
+            .set_queue(
+                &owner,
+                &[playlist_queue_entry("watch-later"), video_id.clone()],
+            )
+            .await
+            .unwrap();
 
-        let synced = state.sync_library(&owner, snapshot).await.unwrap();
+        let reread = state.viewer(&owner).await.unwrap();
         assert_eq!(
-            synced.queue,
+            reread.queue,
             vec![playlist_queue_entry("watch-later"), video_id],
             "the run marker keeps its place among the queued videos"
         );
-        let reread = state.library_snapshot(&owner).await.unwrap();
         assert_eq!(
             queued_playlist_id(&reread.queue[0]),
             Some("watch-later"),
@@ -6106,69 +6024,84 @@ mod tests {
                 assert!(session.fallback_url.contains("youtube-nocookie.com"));
                 assert!(session.primary.url.contains("/api/v1/playback/proxy/"));
             }
-            Err(error) => assert!(
-                error.to_string().starts_with("No playable stream"),
-                "{error:#}"
-            ),
+            Err(failure) => assert!(!failure.summary.is_empty(), "{failure}"),
         }
     }
 
     #[test]
     fn names_why_no_stream_could_be_played() {
+        let unreachable = PlaybackFailure::new(PlaybackFailureOrigin::Setup, "unreachable");
+        assert_eq!(no_stream_failure(Some(unreachable.clone()), 0), unreachable);
         assert_eq!(
-            no_stream_reason(
-                Some("the yt-dlp service at http://127.0.0.1:8090 is unreachable (refused)"),
-                0
-            ),
-            "No playable stream: the yt-dlp service at http://127.0.0.1:8090 is unreachable (refused)."
+            no_stream_failure(None, 0).origin,
+            PlaybackFailureOrigin::Unknown
         );
-        assert!(no_stream_reason(None, 0).contains("found no formats"));
-        assert!(no_stream_reason(None, 12).contains("none of yt-dlp's 12 formats"));
+        let unplayable = no_stream_failure(None, 12);
+        assert_eq!(unplayable.origin, PlaybackFailureOrigin::Bug);
+        assert!(unplayable.summary.contains("12 streams"));
     }
 
-    #[tokio::test]
-    async fn syncs_revisioned_library_state() {
-        let state = AppServerState::initialize().await.unwrap();
-        let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        // A new account owns no playlists or groups. The seeded catalog is
-        // shared, but everything personal starts empty and is created by the
-        // client on first run - which is the whole point of the scoping.
-        assert!(snapshot.playlists.is_empty());
-        assert!(snapshot.subscription_groups.is_empty());
-        assert!(!snapshot.videos.is_empty(), "the catalog is still shared");
-
-        let video_id = snapshot.videos[0].id.clone();
-        snapshot.subscription_groups.push(SubscriptionGroup {
-            id: "favorites".into(),
-            name: "Favorites".into(),
-            channel_ids: vec![snapshot.channels[0].id.clone()],
-        });
-        snapshot.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Watch later".into(),
-            video_ids: vec![video_id.clone()],
-        });
-        snapshot.queue.insert(0, video_id.clone());
-        snapshot.videos[0].watched = true;
-        snapshot.videos[0].progress_seconds = snapshot.videos[0].duration_seconds;
-        snapshot.cache_revision += 1;
-
-        let synced = state.sync_library(&owner, snapshot).await.unwrap();
-        assert_eq!(synced.queue.first(), Some(&video_id));
-        assert!(synced.videos.iter().any(|video| video.watched));
-        assert!(
-            synced
-                .subscription_groups
-                .iter()
-                .any(|group| group.name == "Favorites")
+    #[test]
+    fn sorts_ytdlp_errors_by_whose_problem_they_are() {
+        use PlaybackFailureOrigin::{Setup, Unknown, Youtube};
+        let cases = [
+            // Verbatim from the extractor log on 2026-09-25 (ysz5S6PUM-U).
+            ("ERROR: [youtube] ysz5S6PUM-U: Video unavailable", Youtube),
+            (
+                "ERROR: [youtube] abcdefghijk: The uploader has not made this video available in your country",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Sign in to confirm you\u{2019}re not a bot. Use --cookies",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Private video. Sign in if you've been granted access",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Sign in to confirm your age. This video may be inappropriate for some users.",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Premieres in 3 hours",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Unable to extract yt initial data; please report this issue",
+                Setup,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Unable to download API page: timed out",
+                Setup,
+            ),
+            ("ERROR: something new entirely", Unknown),
+        ];
+        for (stderr, origin) in cases {
+            assert_eq!(classify_ytdlp_error(stderr).origin, origin, "{stderr}");
+        }
+        let unavailable = classify_ytdlp_error(
+            "WARNING: noise\nERROR: [youtube] ysz5S6PUM-U: Video unavailable\n",
         );
+        assert_eq!(unavailable.detail.as_deref(), Some("Video unavailable"));
+        assert!(unavailable.remedy.is_some());
+    }
 
-        let mut stale = synced.clone();
-        stale.cache_revision -= 1;
-        stale.queue.clear();
-        let server_wins = state.sync_library(&owner, stale).await.unwrap();
-        assert_eq!(server_wins.queue.first(), Some(&video_id));
+    #[test]
+    fn reads_the_extractors_status_answers() {
+        let failed = extractor_status_failure(
+            reqwest::StatusCode::BAD_GATEWAY,
+            br#"{"error": "yt-dlp extraction failed", "ytdlp_error": "ERROR: [youtube] ysz5S6PUM-U: Video unavailable"}"#,
+        );
+        assert_eq!(failed.origin, PlaybackFailureOrigin::Youtube);
+        let old_extractor = extractor_status_failure(
+            reqwest::StatusCode::BAD_GATEWAY,
+            br#"{"error": "yt-dlp extraction failed"}"#,
+        );
+        assert_eq!(old_extractor.origin, PlaybackFailureOrigin::Unknown);
+        assert!(old_extractor.remedy.unwrap().contains("rebuild"));
+        let no_provider = extractor_status_failure(reqwest::StatusCode::SERVICE_UNAVAILABLE, b"");
+        assert_eq!(no_provider.origin, PlaybackFailureOrigin::Setup);
     }
 
     /// The property the whole per-user rewrite exists for.
@@ -6183,38 +6116,38 @@ mod tests {
         let first = test_owner(&state).await;
         let second = test_owner(&state).await;
 
-        let mut mine = state.library_snapshot(&first).await.unwrap();
-        let video_id = mine.videos[0].id.clone();
-        let channel_id = mine.channels[0].id.clone();
-        mine.videos[0].watched = true;
-        mine.videos[0].progress_seconds = 42;
-        mine.channels[0].subscribed = true;
-        mine.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Mine".into(),
-            video_ids: vec![video_id.clone()],
-        });
-        mine.cache_revision += 1;
-        let mine = state.sync_library(&first, mine).await.unwrap();
+        let video_id = crate::models::DemoLibrary::demo().videos[0].id.clone();
+        let channel = demo_channels()[0].clone();
+        set_follow(&state, &first, &channel, true).await;
+        state
+            .save_progress(
+                &first,
+                &[crate::models::VideoProgress {
+                    video_id: video_id.clone(),
+                    watched: true,
+                    progress_seconds: 42,
+                    audio_only: false,
+                }],
+            )
+            .await
+            .unwrap();
+        state
+            .save_playlist(&first, "watch-later", "Mine")
+            .await
+            .unwrap();
+        state
+            .set_in_playlist(&first, "watch-later", &video_id, true)
+            .await
+            .unwrap();
+        state.record_history(&first, &video_id).await.unwrap();
+        state
+            .set_queue(&first, std::slice::from_ref(&video_id))
+            .await
+            .unwrap();
 
-        assert!(mine.videos.iter().any(|video| video.watched));
-        assert!(mine.channels.iter().any(|channel| channel.subscribed));
-        assert_eq!(mine.playlists.len(), 1);
-
-        let theirs = state.library_snapshot(&second).await.unwrap();
+        let theirs = state.viewer(&second).await.unwrap();
         assert!(
-            theirs.videos.iter().all(|video| !video.watched),
-            "watch progress leaked between accounts"
-        );
-        assert!(
-            theirs
-                .videos
-                .iter()
-                .all(|video| video.progress_seconds == 0),
-            "playback position leaked between accounts"
-        );
-        assert!(
-            theirs.channels.iter().all(|channel| !channel.subscribed),
+            theirs.subscriptions.is_empty(),
             "subscriptions leaked between accounts"
         );
         assert!(
@@ -6227,61 +6160,31 @@ mod tests {
         );
         // The catalog is deliberately shared: the same upload must not be
         // fetched and stored twice because two people follow the channel.
-        assert!(theirs.videos.iter().any(|video| video.id == video_id));
-        assert!(
-            theirs
-                .channels
-                .iter()
-                .any(|channel| channel.id == channel_id)
+        let seen = state
+            .videos_by_id(&second, std::slice::from_ref(&video_id))
+            .await
+            .unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(!seen[0].watched, "watch progress leaked between accounts");
+        assert_eq!(
+            seen[0].progress_seconds, 0,
+            "playback position leaked between accounts"
         );
 
-        // The second account can hold the same client-chosen playlist id.
-        let mut ours = theirs;
-        ours.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Theirs".into(),
-            video_ids: Vec::new(),
-        });
-        ours.cache_revision += 1;
-        let ours = state.sync_library(&second, ours).await.unwrap();
+        // The second account can hold the same client-chosen playlist id...
+        state
+            .save_playlist(&second, "watch-later", "Theirs")
+            .await
+            .unwrap();
+        let ours = state.viewer(&second).await.unwrap();
         assert_eq!(ours.playlists.len(), 1);
         assert_eq!(ours.playlists[0].name, "Theirs");
 
         // ...without disturbing the first account's playlist of the same id.
-        let mine_again = state.library_snapshot(&first).await.unwrap();
+        let mine_again = state.viewer(&first).await.unwrap();
         assert_eq!(mine_again.playlists.len(), 1);
         assert_eq!(mine_again.playlists[0].name, "Mine");
-    }
-
-    /// The viewerless path the poller and WebSub ingest take.
-    ///
-    /// Regression test: these call `library_snapshot("")`, and the per-account
-    /// queries inside it bind `type::record($owner)`, which is a *runtime*
-    /// error on an empty string rather than a compile error. Every other test
-    /// passes a real account, so nothing here was exercised until a live poll
-    /// failed with "Found  for the Record ID but this is not a valid table
-    /// name".
-    #[tokio::test]
-    async fn the_catalog_only_snapshot_needs_no_account() {
-        let state = AppServerState::initialize().await.unwrap();
-
-        let catalog = state.library_snapshot("").await.unwrap();
-        assert!(
-            !catalog.videos.is_empty(),
-            "the shared catalog is still read"
-        );
-        assert!(!catalog.channels.is_empty());
-        // Nothing personal belongs to nobody.
-        assert!(catalog.playlists.is_empty());
-        assert!(catalog.subscription_groups.is_empty());
-        assert!(catalog.queue.is_empty());
-        assert!(catalog.history.is_empty());
-        assert_eq!(catalog.cache_revision, 0);
-        assert!(catalog.videos.iter().all(|video| !video.watched));
-        assert!(catalog.channels.iter().all(|channel| !channel.subscribed));
-
-        // And the whole poll, which is what actually broke.
-        state.poll_subscriptions_once().await.unwrap();
+        assert_eq!(mine_again.playlists[0].video_ids, [video_id]);
     }
 
     /// Unsubscribing must not silence a channel other accounts still follow.
@@ -6291,30 +6194,22 @@ mod tests {
         let first = test_owner(&state).await;
         let second = test_owner(&state).await;
 
-        let subscribe = |owner: String, subscribed: bool| {
-            let state = state.clone();
-            async move {
-                let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-                snapshot.channels[0].subscribed = subscribed;
-                snapshot.cache_revision += 1;
-                state.sync_library(&owner, snapshot).await.unwrap()
-            }
-        };
+        let channel = demo_channels()[0].clone();
+        let channel_id = channel.id.clone();
 
-        let first_view = subscribe(first.clone(), true).await;
-        let channel_id = first_view.channels[0].id.clone();
-        subscribe(second.clone(), true).await;
+        set_follow(&state, &first, &channel, true).await;
+        set_follow(&state, &second, &channel, true).await;
         assert!(state.channel_is_subscribed(&channel_id).await.unwrap());
 
         // One leaves; the instance still has a reason to poll.
-        subscribe(first.clone(), false).await;
+        set_follow(&state, &first, &channel, false).await;
         assert!(
             state.channel_is_subscribed(&channel_id).await.unwrap(),
             "the last remaining follower lost their feed"
         );
 
         // Both gone, and only then does the instance stop caring.
-        subscribe(second.clone(), false).await;
+        set_follow(&state, &second, &channel, false).await;
         assert!(!state.channel_is_subscribed(&channel_id).await.unwrap());
     }
 
@@ -6327,17 +6222,15 @@ mod tests {
         let follower = test_owner(&state).await;
         let other = test_owner(&state).await;
 
-        let mut snapshot = state.library_snapshot(&follower).await.unwrap();
-        snapshot.channels[0].subscribed = true;
-        snapshot.cache_revision += 1;
-        let synced = state.sync_library(&follower, snapshot).await.unwrap();
-        let channel = synced.channels[0].clone();
-        let video = synced
+        let channel = demo_channels()[0].clone();
+        set_follow(&state, &follower, &channel, true).await;
+        let demo = crate::models::DemoLibrary::demo();
+        let video = demo
             .videos
             .iter()
             .find(|video| video.channel_id == channel.id)
             .cloned()
-            .unwrap_or_else(|| synced.videos[0].clone());
+            .unwrap_or_else(|| demo.videos[0].clone());
         use crate::models::{Channel, CommentsPage, VideoDetails};
         let cached_with = |subscribed: bool| VideoDetails {
             video: video.clone(),
@@ -6383,12 +6276,9 @@ mod tests {
         let follower = test_owner(&state).await;
         let other = test_owner(&state).await;
 
-        let mut snapshot = state.library_snapshot(&follower).await.unwrap();
-        snapshot.channels[0].subscribed = true;
-        snapshot.cache_revision += 1;
-        let synced = state.sync_library(&follower, snapshot).await.unwrap();
-        let followed_channel = synced.channels[0].clone();
-        let unfollowed_channel = synced.channels[1].clone();
+        let followed_channel = demo_channels()[0].clone();
+        let unfollowed_channel = demo_channels()[1].clone();
+        set_follow(&state, &follower, &followed_channel, true).await;
         // As the shared cache might hold them: flags from the instance, or
         // from whichever account searched first.
         let cached = SearchResults {
@@ -6493,37 +6383,36 @@ mod tests {
         eprintln!("live playback protocol: {:?}", playback.primary.protocol);
         assert!(playback.primary.url.contains("/api/v1/playback/proxy/"));
 
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        snapshot
-            .channels
-            .iter_mut()
-            .find(|cached| cached.id == channel.id)
-            .expect("searched channel is cached")
-            .subscribed = true;
-        snapshot.cache_revision += 1;
-        let synced = state.sync_library(&owner, snapshot).await.unwrap();
-        assert!(
-            synced
-                .channels
-                .iter()
-                .any(|cached| cached.id == channel.id && cached.subscribed)
-        );
+        state
+            .set_subscriptions(
+                &owner,
+                vec![crate::models::SubscriptionChange {
+                    channel: channel.clone(),
+                    subscribed: true,
+                    content: crate::models::SubscriptionContent::All,
+                }],
+            )
+            .await
+            .unwrap();
+        let viewer = state.viewer(&owner).await.unwrap();
+        assert!(viewer.follows(&channel.id).is_some());
 
         let refresh = state.refresh_feed(&owner).await.unwrap();
         assert_eq!(refresh.failed_channels, 0);
-        assert!(
-            refresh
-                .library
-                .videos
-                .iter()
-                .any(|video| video.channel_id == channel.id)
-        );
-        let channel_feed = refresh
-            .library
+        let query = crate::models::FeedQuery {
+            group: crate::models::FeedGroup::All,
+            kind: crate::models::FeedFilter::All,
+            duration: None,
+            hide_watched: false,
+            thresholds: (&crate::models::AppSettings::default()).into(),
+        };
+        let feed = state.feed_page(&owner, &query, 0).await.unwrap();
+        let channel_feed = feed
             .videos
             .iter()
             .filter(|video| video.channel_id == channel.id)
             .collect::<Vec<_>>();
+        assert!(!channel_feed.is_empty());
         assert!(
             channel_feed
                 .windows(2)
@@ -6638,6 +6527,10 @@ mod tests {
 /// Segments change when someone submits or votes, which is slow enough that an
 /// hour is generous and short enough that a correction lands the same evening.
 const SPONSOR_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+/// Segments by video and the category set asked for, because those are
+/// different answers for the same video.
+static SPONSOR_SEGMENTS: ServerCache<(String, String), Vec<SponsorSegment>> =
+    ServerCache::new(SPONSOR_CACHE_TTL, 10_000);
 
 /// The public instance. Self-hosters who run their own can point at it.
 const SPONSOR_API_DEFAULT: &str = "https://sponsor.ajay.app";
@@ -6689,10 +6582,8 @@ impl AppServerState {
             video_id.to_string(),
             sponsor_cache_discriminator(categories),
         );
-        if let Some(cached) = self.sponsor_cache.read().await.get(&cache_key)
-            && cached.0.elapsed() < SPONSOR_CACHE_TTL
-        {
-            return Ok(cached.1.clone());
+        if let Some(cached) = SPONSOR_SEGMENTS.get(&cache_key).await {
+            return Ok(cached);
         }
 
         let digest = hex::encode(Sha256::digest(video_id.as_bytes()));
@@ -6738,10 +6629,7 @@ impl AppServerState {
         key: (String, String),
         segments: Vec<SponsorSegment>,
     ) {
-        self.sponsor_cache
-            .write()
-            .await
-            .insert(key, (std::time::Instant::now(), segments));
+        SPONSOR_SEGMENTS.insert(key, segments).await;
     }
 }
 

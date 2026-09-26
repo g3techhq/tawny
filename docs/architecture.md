@@ -5,33 +5,49 @@
 ```text
 YouTube Innertube/RSS ──► source normalization
           │                       │
-YouTube WebSub ──────────► SurrealDB/SurrealKV ◄── library sync
+YouTube WebSub ──────────► SurrealDB/SurrealKV
           │                       │
           └──► yt-dlp sidecar ◄── PO-token provider
                                   │
-                           Dioxus server functions
+                   Dioxus server functions (g3-auth guard)
                                   │
-                         Tawny clients + local snapshot
+                Tawny clients + g3-cache (IndexedDB / redb)
                                   │
                        playback proxy/embed fallback
 ```
 
 Tawny is self-contained as a Compose project. The Dioxus server handles the Piped-like application work while two deployment-local sidecars isolate yt-dlp and PO-token churn from the Rust process. SurrealDB, the provider, the yt-dlp API, and the production Tawny image are defined together; no public Piped or third-party instance is contacted.
 
-The client owns interaction state, watch progress, swipe destinations, and an immediately available cached snapshot. The server owns subscription polling and the canonical multi-device data model. Playback resolution is isolated behind its own module because YouTube delivery behavior changes independently from feed and library behavior.
+The server owns every account's data: follows, playlists, groups, queue, history and watch progress. The client holds what its screens last saw of that data, and owns only per-device settings and the playing video's position between saves. Playback resolution is isolated behind its own module because YouTube delivery behavior changes independently from feed and library behavior.
 
-## Client cache
+## Data on the client
 
-The client persists `LibrarySnapshot` and `AppSettings` in the platform WebView's local storage. Dioxus uses that WebView surface on web, desktop, Android, and iOS, giving all six targets the same behavior with no platform-specific database bridge. The server separately caches normalized video details for two hours in SurrealDB and retains stale details for offline fallback.
+The client never holds the catalog, the shared set of every channel and video the instance has met. Each screen asks the server for what it shows, through `g3-cache`:
 
-The cache follows stale-while-revalidate semantics:
+| Read | Server function | Holds |
+|---|---|---|
+| The viewer | `get_viewer` | Followed channels (without descriptions), playlists as ids, groups, queue, history ids. Read by nearly every screen, from `AppState`. |
+| Feed | `get_feed_page(query, page)` | One page of 24. Groups, kind, length and watched filters are applied in SurrealDB. Each page is its own read, so "load more" appends. |
+| Playlist | `get_playlist(id)` | The playlist and its videos. Shared with a running playlist, so what autoplay walks is what the page shows. |
+| Playlists page | `get_playlist_previews` | Counts and cover thumbnails. |
+| Queue, history | `get_videos(ids)` | The videos behind the viewer's ids. |
+| Channel, video | `get_channel_details`, `get_video_details` | As before, cached per id. |
 
-1. render the local snapshot immediately;
-2. request the server snapshot in the background;
-3. push a newer local library revision or accept the newer server revision;
-4. keep the local snapshot if the server is unavailable.
+Every video the server hands out carries the asking viewer's progress and its channel's avatar.
 
-Local storage is appropriate for the initial bounded feed. Before offline downloads, large histories, transcripts, or thousands of cached videos are enabled, migrate the same repository boundary to IndexedDB on web and a native store on mobile/desktop. SurrealDB 3 supports `kv-indxdb` in browser builds and SurrealKV in native builds, so an embedded-Surreal implementation remains a viable follow-up once its mobile footprint is measured.
+`g3-cache` persists each read to IndexedDB on web and a redb file on desktop and mobile, so a relaunch shows the last answer at once and refetches behind it; a mounted screen also refetches when the app regains focus. Offline, the screens you have opened show what they last showed. The cache is keyed to the signed-in account and emptied when it changes.
+
+### Changing data
+
+A change is shown at once and then made on the server:
+
+1. `AppState` edits the cached reads it touches with `update_cached` (the viewer, a playlist, every cached list holding a video);
+2. it sends a "set to" server function: `set_subscriptions`, `set_in_playlist`, `save_playlist`, `set_queue`, `record_history`, `save_progress` and so on;
+3. `data_change::invalidate` refetches the reads that change could affect, which replaces the guess with the server's answer and undoes it if the server refused.
+
+Mutations say what the viewer saw rather than toggling (`set_in_playlist(id, video, true)`), so a device acting on stale state cannot undo another device's change. The queue is sent whole, since it is one list arranged as a whole. Playback position is recorded locally on every tick and saved at the points where losing it would matter: pause, leaving the video, and a slower interval.
+
+`AppSettings` are per device and stay in the WebView's local storage.
 
 ## Server and SurrealDB
 
@@ -47,11 +63,15 @@ The 15-minute worker uses a tiered policy rather than fully extracting every sub
 
 If `TAWNY_PUBLIC_URL` or `TAWNY_WEBSUB_CALLBACK_URL` is a public HTTPS address, subscribing also requests a YouTube WebSub lease. The callback verifies the hub challenge/topic/token, validates `X-Hub-Signature` with HMAC-SHA1, immediately stores the upload hint, and enriches only the notified video using player metadata for duration, live state, and Shorts classification. Subscription requests are persisted so restarts do not re-register the whole library; leases older than three days are renewed with 12-way bounded concurrency. RSS reconciliation remains the recovery mechanism.
 
-Playlist, subscription, watch-state, queue, and history mutations now use optimistic local writes followed by revision-checked SurrealDB snapshot sync. The sync is serialized server-side; a stale or equal client revision receives the current server snapshot instead of overwriting it.
+Server caches are `g3-cache` `ServerCache` statics, bounded and expiring: search results for five minutes (identical searches share one upstream request, and searches take turns), SponsorBlock segments for an hour, and DASH segment ranges by exact file. Resolved playback sessions keep their own cache in `AppServerState`, because they share in-flight resolves and only reuse yt-dlp sources. Video details are cached in SurrealDB for two hours, and stale details are kept for offline fallback.
 
-Authentication uses the same Axum cookie-session stack as Greenside Partee and Media Mancer. Session rows live in SurrealDB through the shared v3 adapter; middleware resolves the signed-in `app_user` before an account-scoped server function runs. First launch creates a guest account, and registration promotes that row in place. Native clients initialize the Dioxus cookie runtime before launch, so the cookie remains outside application state.
+## Authentication
 
-Multi-user and long-offline deployments should graduate from whole-library revisions to an operation log so independent edits can merge instead of choosing one complete snapshot.
+Sessions come from `g3-auth`, the same stack as Greenside Partee and Media Mancer: cookie sessions stored in SurrealDB, resolved to an `app_user` (`auth::AppUser`) on every request. First launch creates a guest account, seeded with the demo follows and the default playlists; registration promotes that row in place. Native clients initialize the Dioxus cookie runtime before launch, so the cookie stays outside application state.
+
+The guard (`g3_auth::require_session`) refuses every server function without a signed-in account unless it is marked `#[g3_auth::public]`: only guest creation, sign-in and sign-out are, and a test pins that list. Every page is public, because the client signs a first visit in from whichever page it opened. Health, the playback proxy and the WebSub callback sit outside the session layers: probes and YouTube's hub have no cookie, and a proxy token is itself the capability, fetched by native media elements without the app's cookie.
+
+Sessions name their account by its record key. Sessions written before g3-auth named it `app_user:<key>`; `database/presync.surql` rewrites those on start, so a signed-in device stays signed in.
 
 ## Discovery source contract
 
@@ -59,7 +79,7 @@ Direct YouTube extraction is the only remote source. It supports real video/chan
 
 Chapters come from YouTube's structured markers when present; when they are absent Tawny parses timestamps out of the description so description-only chapters still work.
 
-Results are normalized into the models in `models.rs` and deduplicated before caching. Existing subscription/watch state is preserved when metadata refreshes. Extraction failures—including an upstream extractor panic—are contained and fall through to the stale server cache and then the device snapshot, so a YouTube-side change degrades to cached data rather than an error page.
+Results are normalized into the models in `models.rs` and deduplicated before caching. Existing subscription/watch state is preserved when metadata refreshes. Extraction failures—including an upstream extractor panic—are contained and fall through to the stale server cache and then to what the device last saw, so a YouTube-side change degrades to cached data rather than an error page.
 
 ## Playback model
 
@@ -83,11 +103,10 @@ The client generates an in-memory DASH manifest for extracted representation set
 
 The current slice covers the main navigation and interaction model. LibreTube parity should be added in these bounded layers:
 
-1. operation-log sync;
-2. comment replies and richer search suggestions/filters;
-3. native SABR/UMP adapter and background playback controls;
-4. SponsorBlock, Return YouTube Dislike, DeArrow, and live chat;
-5. downloads and a larger database-backed offline cache;
-6. import/export, notification controls, and privacy settings.
+1. comment replies and richer search suggestions/filters;
+2. native SABR/UMP adapter and background playback controls;
+3. SponsorBlock, Return YouTube Dislike, DeArrow, and live chat;
+4. downloads, and suggested channels from what the viewer watches;
+5. import/export, notification controls, and privacy settings.
 
 Keeping those integrations behind source/provider traits prevents volatile YouTube details from spreading through the Dioxus UI.
