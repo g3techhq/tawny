@@ -1,7 +1,7 @@
 use crate::models::{
     Account, ChannelDetails, ChannelMediaPage, CommentsPage, Credentials, FeedRefreshResult,
-    LibrarySnapshot, LibraryUserState, PlaybackSession, SearchResults, SponsorSegment, Video,
-    VideoDetails,
+    LibrarySnapshot, LibraryUserState, PlaybackFailure, PlaybackFailureOrigin, PlaybackSession,
+    SearchResults, SponsorSegment, Video, VideoDetails,
 };
 use dioxus::prelude::*;
 
@@ -83,11 +83,53 @@ pub async fn resolve_playback(
     video_id: String,
     prefer_sabr: bool,
     fresh: bool,
-) -> Result<PlaybackSession> {
-    Ok(state
-        .playback_session(&video_id, prefer_sabr, fresh)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?)
+) -> Result<PlaybackSession, PlaybackFailure> {
+    // A typed error, so the player learns whose problem it is and what fixes
+    // it rather than a flattened message.
+    state.playback_session(&video_id, prefer_sabr, fresh).await
+}
+
+/// What the typed server function error needs. Failures the resolver never
+/// saw - the request not arriving, or not decoding - are classified here.
+impl From<ServerFnError> for PlaybackFailure {
+    fn from(error: ServerFnError) -> Self {
+        match &error {
+            ServerFnError::Request(_) | ServerFnError::StreamError(_) => PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The Tawny server could not be reached.",
+            )
+            .remedy("Check your connection and that the server is running, then try again."),
+            ServerFnError::ServerError { .. } => PlaybackFailure::new(
+                PlaybackFailureOrigin::Unknown,
+                "The server could not start playback.",
+            )
+            .remedy("Check the server log for the cause."),
+            _ => PlaybackFailure::new(
+                PlaybackFailureOrigin::Bug,
+                "The app and the server disagreed about the playback request.",
+            )
+            .remedy(
+                "Reload the app, since it may be older than the server. If it persists, report \
+                 it with the detail below.",
+            ),
+        }
+        .detail(error.to_string())
+    }
+}
+
+impl dioxus::fullstack::AsStatusCode for PlaybackFailure {
+    fn as_status_code(&self) -> dioxus::fullstack::StatusCode {
+        use dioxus::fullstack::StatusCode;
+        match self.origin {
+            // The upstream refused or a dependency is down: a gateway failure.
+            PlaybackFailureOrigin::Youtube | PlaybackFailureOrigin::Setup => {
+                StatusCode::BAD_GATEWAY
+            }
+            PlaybackFailureOrigin::Bug | PlaybackFailureOrigin::Unknown => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
+    }
 }
 
 #[get(

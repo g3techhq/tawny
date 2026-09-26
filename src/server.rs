@@ -1,9 +1,10 @@
 use crate::models::{
     CaptionTrack, Channel, ChannelDetails, ChannelMediaPage, ChannelMediaTab, CommentsPage,
     FeedRefreshResult, HistoryEntry, LibrarySnapshot, LibraryUserState, PlaybackByteRange,
-    PlaybackProtocol, PlaybackSession, PlaybackSource, PlaybackTrack, PlaybackTrackKind, Playlist,
-    SearchResults, SponsorCategory, SponsorSegment, SubscriptionContent, SubscriptionGroup, Video,
-    VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames, VideoProgress,
+    PlaybackFailure, PlaybackFailureOrigin, PlaybackProtocol, PlaybackSession, PlaybackSource,
+    PlaybackTrack, PlaybackTrackKind, Playlist, SearchResults, SponsorCategory, SponsorSegment,
+    SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoComment, VideoDetails,
+    VideoPreviewFrames, VideoProgress,
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -100,7 +101,7 @@ struct CachedPlayback {
 }
 
 type SharedPlaybackResolve = futures_util::future::Shared<
-    futures_util::future::BoxFuture<'static, Result<ResolvedPlayback, String>>,
+    futures_util::future::BoxFuture<'static, Result<ResolvedPlayback, PlaybackFailure>>,
 >;
 
 #[derive(Clone)]
@@ -1706,45 +1707,79 @@ impl AppServerState {
         &self,
         service_url: &str,
         video_id: &str,
-    ) -> std::result::Result<Vec<YtdlpFormat>, String> {
-        let url = ytdlp_service_video_url(service_url, video_id)
-            .ok_or_else(|| format!("the yt-dlp service URL {service_url} is invalid"))?;
-        let response = self.ytdlp_http.get(url).send().await.map_err(|error| {
-            format!("the yt-dlp service at {service_url} is unreachable ({error})")
+    ) -> std::result::Result<Vec<YtdlpFormat>, PlaybackFailure> {
+        let url = ytdlp_service_video_url(service_url, video_id).ok_or_else(|| {
+            PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The extractor service URL is not a valid URL.",
+            )
+            .remedy("Fix TAWNY_YTDLP_SERVICE_URL in the server's environment and restart it.")
+            .detail(service_url)
         })?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "the yt-dlp service answered {} for this video",
-                response.status()
-            ));
+        let response = self.ytdlp_http.get(url).send().await.map_err(|error| {
+            PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "Tawny could not reach its extractor service.",
+            )
+            .remedy(
+                "Start the extractor container (docker compose up -d extractor) and check that \
+                 TAWNY_YTDLP_SERVICE_URL points at it.",
+            )
+            .detail(format!("{service_url}: {error}"))
+        })?;
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|error| {
+            PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The extractor service's answer was cut off.",
+            )
+            .remedy("Try again. If it keeps happening, check the extractor container's log.")
+            .detail(error.to_string())
+        })?;
+        if !status.is_success() {
+            return Err(extractor_status_failure(status, &bytes));
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| format!("the yt-dlp service's answer could not be read ({error})"))?;
         serde_json::from_slice::<YtdlpDump>(&bytes)
             .map(formats_from_ytdlp_dump)
-            .map_err(|error| format!("the yt-dlp service's answer could not be parsed ({error})"))
+            .map_err(|error| {
+                PlaybackFailure::new(
+                    PlaybackFailureOrigin::Bug,
+                    "Tawny could not understand yt-dlp's answer.",
+                )
+                .remedy(
+                    "Report it with the detail below. A yt-dlp upgrade that changed its output \
+                     is the usual cause.",
+                )
+                .detail(error.to_string())
+            })
     }
 
     /// Every format yt-dlp found, or why there are none. The reason is shown
     /// to the viewer, so it names the cause rather than the symptom.
-    async fn ytdlp_formats(&self, video_id: &str) -> std::result::Result<Vec<YtdlpFormat>, String> {
+    async fn ytdlp_formats(
+        &self,
+        video_id: &str,
+    ) -> std::result::Result<Vec<YtdlpFormat>, PlaybackFailure> {
         let formats = self.run_ytdlp(video_id).await;
-        if let Err(reason) = &formats {
-            eprintln!("yt-dlp gave no formats for {video_id}: {reason}");
+        if let Err(failure) = &formats {
+            eprintln!("yt-dlp gave no formats for {video_id}: {failure}");
         }
         formats
     }
 
-    async fn run_ytdlp(&self, video_id: &str) -> std::result::Result<Vec<YtdlpFormat>, String> {
+    async fn run_ytdlp(
+        &self,
+        video_id: &str,
+    ) -> std::result::Result<Vec<YtdlpFormat>, PlaybackFailure> {
         if let Some(service_url) = self.ytdlp_service_url.as_deref() {
             return self.ytdlp_service_formats(service_url, video_id).await;
         }
         let Some(binary) = self.ytdlp_bin.as_ref() else {
-            return Err(
-                "no yt-dlp is configured (set TAWNY_YTDLP_SERVICE_URL or TAWNY_YTDLP_BIN)".into(),
-            );
+            return Err(PlaybackFailure::new(
+                PlaybackFailureOrigin::Setup,
+                "The server has no extractor configured.",
+            )
+            .remedy("Set TAWNY_YTDLP_SERVICE_URL (or TAWNY_YTDLP_BIN) and restart the server."));
         };
         let mut command = tokio::process::Command::new(binary);
         command.args([
@@ -1761,17 +1796,33 @@ impl AppServerState {
         let output = match tokio::time::timeout(Duration::from_secs(30), output).await {
             Ok(Ok(output)) if output.status.success() => output,
             Ok(Ok(output)) => {
-                return Err(format!(
-                    "yt-dlp failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
+                return Err(classify_ytdlp_error(&String::from_utf8_lossy(
+                    &output.stderr,
+                )));
             }
-            Ok(Err(error)) => return Err(format!("yt-dlp could not be run ({error})")),
-            Err(_) => return Err("yt-dlp timed out".into()),
+            Ok(Err(error)) => {
+                return Err(PlaybackFailure::new(
+                    PlaybackFailureOrigin::Setup,
+                    "The server could not run yt-dlp.",
+                )
+                .remedy("Check that TAWNY_YTDLP_BIN points at a working yt-dlp.")
+                .detail(error.to_string()));
+            }
+            Err(_) => return Err(extraction_timed_out()),
         };
         serde_json::from_slice::<YtdlpDump>(&output.stdout)
             .map(formats_from_ytdlp_dump)
-            .map_err(|error| format!("yt-dlp's output could not be parsed ({error})"))
+            .map_err(|error| {
+                PlaybackFailure::new(
+                    PlaybackFailureOrigin::Bug,
+                    "Tawny could not understand yt-dlp's answer.",
+                )
+                .remedy(
+                    "Report it with the detail below. A yt-dlp upgrade that changed its output \
+                     is the usual cause.",
+                )
+                .detail(error.to_string())
+            })
     }
 
     /// The itag-to-URL view the extractor-layout path still needs.
@@ -1803,13 +1854,13 @@ impl AppServerState {
         video_id: &str,
         _prefer_sabr: bool,
         fresh: bool,
-    ) -> Result<PlaybackSession> {
+    ) -> std::result::Result<PlaybackSession, PlaybackFailure> {
         let resolve = self.shared_playback_resolve(video_id, fresh);
         let resolved = resolve.clone().await;
         if !resolved.as_ref().is_ok_and(|resolved| resolved.reusable) {
             self.forget_playback_resolve(video_id, &resolve);
         }
-        let resolved = resolved.map_err(|error| anyhow!(error))?;
+        let resolved = resolved?;
         Ok(self.proxy_session(resolved.session).await)
     }
 
@@ -1836,15 +1887,16 @@ impl AppServerState {
         }
         let state = self.clone();
         let id = video_id.to_string();
-        let task = tokio::spawn(async move {
-            state
-                .resolve_playback(&id)
-                .await
-                .map_err(|error| format!("{error:#}"))
-        });
+        let task = tokio::spawn(async move { state.resolve_playback(&id).await });
         let resolve = async move {
-            task.await
-                .unwrap_or_else(|error| Err(format!("playback resolve aborted: {error}")))
+            task.await.unwrap_or_else(|error| {
+                Err(PlaybackFailure::new(
+                    PlaybackFailureOrigin::Bug,
+                    "The playback resolver crashed.",
+                )
+                .remedy("Try again. If it keeps happening, report it with the detail below.")
+                .detail(error.to_string()))
+            })
         }
         .boxed()
         .shared();
@@ -1874,7 +1926,10 @@ impl AppServerState {
     }
 
     /// Resolve playback from scratch. The session is not yet proxied.
-    async fn resolve_playback(&self, video_id: &str) -> Result<ResolvedPlayback> {
+    async fn resolve_playback(
+        &self,
+        video_id: &str,
+    ) -> std::result::Result<ResolvedPlayback, PlaybackFailure> {
         let fallback_url = embed_url(video_id);
         let mut provider_sources: Vec<PlaybackSource> = Vec::new();
         // Run both extractors together: rustypipe supplies the stream layout
@@ -2079,9 +2134,9 @@ impl AppServerState {
         // An error, not a session: the player shows this message, and the
         // viewer learns the cause (a stopped sidecar, say) instead of meeting
         // gated URLs that freeze a minute in.
-        let reason = no_stream_reason(ytdlp_failure.as_deref(), ytdlp_formats.len());
-        eprintln!("playback for {video_id}: {reason}");
-        Err(anyhow!(reason))
+        let failure = no_stream_failure(ytdlp_failure, ytdlp_formats.len());
+        eprintln!("playback for {video_id}: {failure}");
+        Err(failure)
     }
 
     async fn seed_demo_if_empty(&self) -> Result<()> {
@@ -4349,16 +4404,256 @@ fn embed_url(video_id: &str) -> String {
 }
 
 /// What the viewer is told when no ungated stream could be found.
-fn no_stream_reason(ytdlp_failure: Option<&str>, ytdlp_format_count: usize) -> String {
+fn no_stream_failure(
+    ytdlp_failure: Option<PlaybackFailure>,
+    ytdlp_format_count: usize,
+) -> PlaybackFailure {
     match ytdlp_failure {
-        Some(failure) => format!("No playable stream: {failure}."),
-        None if ytdlp_format_count == 0 => {
-            "No playable stream: yt-dlp found no formats for this video.".into()
-        }
-        None => format!(
-            "No playable stream: none of yt-dlp's {ytdlp_format_count} formats could be played."
+        Some(failure) => failure,
+        None if ytdlp_format_count == 0 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Unknown,
+            "yt-dlp read the video but found no streams in it.",
+        )
+        .remedy(
+            "This happens with DRM-protected videos such as rented films, which Tawny cannot \
+             play. Otherwise report it with the video link.",
         ),
+        None => PlaybackFailure::new(
+            PlaybackFailureOrigin::Bug,
+            format!(
+                "yt-dlp found {ytdlp_format_count} streams, but Tawny could not build a playable \
+                 source from any of them."
+            ),
+        )
+        .remedy("Report it with the video link; the server log has the per-stream detail."),
     }
+}
+
+fn extraction_timed_out() -> PlaybackFailure {
+    PlaybackFailure::new(
+        PlaybackFailureOrigin::Setup,
+        "Extracting the video took too long and was stopped.",
+    )
+    .remedy(
+        "Try again. If it keeps timing out, the server is slow to reach YouTube or the extractor \
+         is overloaded.",
+    )
+}
+
+/// The extractor sidecar's non-success answers. Each status is one it sends
+/// deliberately (see `docker/extractor/server.py`), and only 502 means yt-dlp
+/// itself failed - with yt-dlp's own error in the body.
+fn extractor_status_failure(status: reqwest::StatusCode, body: &[u8]) -> PlaybackFailure {
+    #[derive(Deserialize, Default)]
+    struct ExtractorError {
+        #[serde(default)]
+        error: String,
+        #[serde(default)]
+        ytdlp_error: Option<String>,
+    }
+    let answer = serde_json::from_slice::<ExtractorError>(body).unwrap_or_default();
+    let said = if answer.error.is_empty() {
+        format!("extractor answered {status}")
+    } else {
+        format!("extractor answered {status}: {}", answer.error)
+    };
+    match status.as_u16() {
+        502 => match answer.ytdlp_error {
+            Some(error) => classify_ytdlp_error(&error),
+            // An extractor older than the one that passes yt-dlp's error on.
+            None => PlaybackFailure::new(
+                PlaybackFailureOrigin::Unknown,
+                "yt-dlp failed, but the extractor did not say why.",
+            )
+            .remedy(
+                "The extractor container is out of date: rebuild it (docker compose up -d --build \
+                 extractor) so it reports yt-dlp's error. Its log has the reason meanwhile.",
+            )
+            .detail(said),
+        },
+        503 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Setup,
+            "The PO-token provider the extractor depends on is not running.",
+        )
+        .remedy("Start the pot-provider container and check its log.")
+        .detail(said),
+        429 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Setup,
+            "The extractor is busy with other videos.",
+        )
+        .remedy(
+            "Try again in a moment. If it happens often, raise YTDLP_CONCURRENCY for the \
+             extractor.",
+        )
+        .detail(said),
+        504 => extraction_timed_out().detail(said),
+        400 => PlaybackFailure::new(
+            PlaybackFailureOrigin::Bug,
+            "The extractor rejected the video ID Tawny sent it.",
+        )
+        .remedy(
+            "If you typed or pasted this link, check the video ID. Otherwise report it with the \
+             link.",
+        )
+        .detail(said),
+        _ => PlaybackFailure::new(
+            PlaybackFailureOrigin::Unknown,
+            "The extractor service answered with an unexpected error.",
+        )
+        .remedy("Check the extractor container's log.")
+        .detail(said),
+    }
+}
+
+/// The last `ERROR:` line of yt-dlp's stderr, without the `[youtube] <id>:`
+/// prefix that only repeats what the viewer already knows.
+fn ytdlp_error_line(stderr: &str) -> &str {
+    let line = stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with("ERROR:"))
+        .or_else(|| {
+            stderr
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+        })
+        .unwrap_or("");
+    let line = line.strip_prefix("ERROR:").unwrap_or(line).trim_start();
+    match line
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once("] "))
+    {
+        Some((_, rest)) => match rest.split_once(": ") {
+            Some((id, message)) if !id.contains(' ') => message,
+            _ => rest,
+        },
+        None => line,
+    }
+}
+
+/// Sort yt-dlp's error into whose problem it is.
+///
+/// The phrases are YouTube's own playability reasons, which yt-dlp passes on
+/// verbatim, plus yt-dlp's own wording when it cannot parse YouTube's page.
+/// Anything unmatched stays `Unknown` rather than guessed at: calling a
+/// Tawny bug "YouTube's fault" would hide it.
+fn classify_ytdlp_error(stderr: &str) -> PlaybackFailure {
+    use PlaybackFailureOrigin::{Setup, Unknown, Youtube};
+    let reason = ytdlp_error_line(stderr);
+    let lower = reason.to_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+    let failure = if has(&[
+        "not made this video available in your country",
+        "in your country",
+        "geo restrict",
+    ]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube blocks this video in the server's country.",
+        )
+        .remedy(
+            "Nothing in Tawny can fix this. It would only play through a server (or proxy) \
+                 in a country where the uploader allows it.",
+        )
+    } else if has(&["not a bot"]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube has flagged the server as a bot and is refusing to serve it.",
+        )
+        .remedy(
+            "Check that the pot-provider container is healthy, then wait: these blocks usually \
+             lift within hours. If it persists, the server's IP address is blocked and \
+             extraction has to go through another one.",
+        )
+    } else if has(&["private video"]) {
+        PlaybackFailure::new(Youtube, "This video is private.").remedy(
+            "Only accounts the uploader invited can watch it; Tawny has no YouTube account.",
+        )
+    } else if has(&[
+        "confirm your age",
+        "age-restricted",
+        "inappropriate for some users",
+    ]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube only shows this video to signed-in adults.",
+        )
+        .remedy("Tawny does not sign in to YouTube, so it cannot play age-restricted videos.")
+    } else if has(&["members-only", "members only", "join this channel"]) {
+        PlaybackFailure::new(
+            Youtube,
+            "This video is only for the channel's paying members.",
+        )
+    } else if has(&[
+        "premieres in",
+        "live event will begin",
+        "premiere will begin",
+        "is upcoming",
+    ]) {
+        PlaybackFailure::new(Youtube, "This video has not started yet.")
+            .remedy("Try again once the premiere or live stream begins.")
+    } else if has(&["removed by the uploader"]) {
+        PlaybackFailure::new(Youtube, "The uploader has removed this video.")
+    } else if has(&["account associated with this video has been terminated"]) {
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube terminated the account that uploaded this video.",
+        )
+    } else if has(&["violating youtube", "copyright", "terms of service"]) {
+        PlaybackFailure::new(Youtube, "YouTube has taken this video down.")
+    } else if has(&["http error 429", "too many requests"]) {
+        PlaybackFailure::new(Youtube, "YouTube is rate-limiting the server.").remedy(
+            "Wait a few minutes and try again. Lowering YTDLP_CONCURRENCY makes it less likely.",
+        )
+    } else if has(&["video unavailable", "not available", "no longer available"]) {
+        // YouTube's catch-all. The watch page shows the same "Video
+        // unavailable" to a browser on the server's network, so this is
+        // YouTube's decision, not an extraction mistake - but it gives no
+        // reason, and a regional or rights block is the usual one.
+        PlaybackFailure::new(
+            Youtube,
+            "YouTube says this video is unavailable and gives no reason.",
+        )
+        .remedy(
+            "It is usually blocked in the server's region or for rights reasons. Nothing in \
+                 Tawny can fix that; it may still play on YouTube from somewhere else.",
+        )
+    } else if has(&[
+        "unable to extract",
+        "signature",
+        "nsig",
+        "n challenge",
+        "latest version",
+        "please report this issue",
+    ]) {
+        PlaybackFailure::new(
+            Setup,
+            "yt-dlp could not read YouTube's page; YouTube has probably changed it.",
+        )
+        .remedy(
+            "Update yt-dlp: raise YTDLP_VERSION to the latest release and rebuild the \
+                 extractor (docker compose up -d --build extractor).",
+        )
+    } else if has(&[
+        "timed out",
+        "unable to download",
+        "connection",
+        "name resolution",
+        "network is unreachable",
+    ]) {
+        PlaybackFailure::new(Setup, "The server could not reach YouTube.")
+            .remedy("Check the server's internet connection, then try again.")
+    } else {
+        PlaybackFailure::new(
+            Unknown,
+            "yt-dlp failed with an error Tawny does not recognise.",
+        )
+        .remedy("Try again. If it keeps failing, report it with the detail below.")
+    };
+    failure.detail(reason)
 }
 
 /// Ordering for playback sources, lowest first.
@@ -5030,10 +5325,14 @@ fn normalize_rusty_video_details(
         channel_id: channel.id.clone(),
         channel_name: channel.name.clone(),
         thumbnail_url,
+        // The machine date first. The text is localised ("Aug 2, 2013",
+        // "Premiered ..."), and a date that cannot be sorted on sank the video
+        // to the bottom of every newest-first list the moment it was opened.
+        // `published_label` renders this as the same "Aug 2, 2013".
         published_at: details
-            .publish_date_txt
-            .clone()
-            .or_else(|| details.publish_date.map(|date| date.to_string()))
+            .publish_date
+            .map(|date| date.to_string())
+            .or_else(|| details.publish_date_txt.clone())
             .unwrap_or_else(|| "From YouTube".into()),
         duration_seconds: duration,
         view_count: compact_count(details.view_count as i64, " views"),
@@ -5262,6 +5561,9 @@ fn video_published_epoch(value: &str) -> i64 {
         && let Ok(format) = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
         && let Ok(date) = Date::parse(&value[..10], &format)
     {
+        return date.midnight().assume_utc().unix_timestamp();
+    }
+    if let Some(date) = crate::models::text_date(value) {
         return date.midnight().assume_utc().unix_timestamp();
     }
 
@@ -5517,7 +5819,8 @@ mod tests {
     use super::DbVideo;
     use super::{
         AppServerState, SegmentRangeKey, SegmentRanges, cached_segment_ranges, canonical_sort_key,
-        center_vtt_cues, ebml_vint, extract_chapters, health, mp4_segment_ranges, no_stream_reason,
+        center_vtt_cues, classify_ytdlp_error, ebml_vint, extract_chapters,
+        extractor_status_failure, health, mp4_segment_ranges, no_stream_failure,
         parse_youtube_feed, playback_proxy, playback_proxy_options, reconciliation_limit,
         requested_byte_range, segment_ranges, sniff_media_type, store_segment_ranges,
         url_path_ends_with, video_published_epoch, webm_segment_ranges, websub_channel_from_topic,
@@ -5526,6 +5829,7 @@ mod tests {
     };
     use crate::models::PlaybackProtocol;
     use crate::models::Video;
+    use crate::models::{PlaybackFailure, PlaybackFailureOrigin};
     use axum::extract::Path;
     use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
     use std::time::Duration;
@@ -6106,24 +6410,84 @@ mod tests {
                 assert!(session.fallback_url.contains("youtube-nocookie.com"));
                 assert!(session.primary.url.contains("/api/v1/playback/proxy/"));
             }
-            Err(error) => assert!(
-                error.to_string().starts_with("No playable stream"),
-                "{error:#}"
-            ),
+            Err(failure) => assert!(!failure.summary.is_empty(), "{failure}"),
         }
     }
 
     #[test]
     fn names_why_no_stream_could_be_played() {
+        let unreachable = PlaybackFailure::new(PlaybackFailureOrigin::Setup, "unreachable");
+        assert_eq!(no_stream_failure(Some(unreachable.clone()), 0), unreachable);
         assert_eq!(
-            no_stream_reason(
-                Some("the yt-dlp service at http://127.0.0.1:8090 is unreachable (refused)"),
-                0
-            ),
-            "No playable stream: the yt-dlp service at http://127.0.0.1:8090 is unreachable (refused)."
+            no_stream_failure(None, 0).origin,
+            PlaybackFailureOrigin::Unknown
         );
-        assert!(no_stream_reason(None, 0).contains("found no formats"));
-        assert!(no_stream_reason(None, 12).contains("none of yt-dlp's 12 formats"));
+        let unplayable = no_stream_failure(None, 12);
+        assert_eq!(unplayable.origin, PlaybackFailureOrigin::Bug);
+        assert!(unplayable.summary.contains("12 streams"));
+    }
+
+    #[test]
+    fn sorts_ytdlp_errors_by_whose_problem_they_are() {
+        use PlaybackFailureOrigin::{Setup, Unknown, Youtube};
+        let cases = [
+            // Verbatim from the extractor log on 2026-09-25 (ysz5S6PUM-U).
+            ("ERROR: [youtube] ysz5S6PUM-U: Video unavailable", Youtube),
+            (
+                "ERROR: [youtube] abcdefghijk: The uploader has not made this video available in your country",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Sign in to confirm you\u{2019}re not a bot. Use --cookies",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Private video. Sign in if you've been granted access",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Sign in to confirm your age. This video may be inappropriate for some users.",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Premieres in 3 hours",
+                Youtube,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Unable to extract yt initial data; please report this issue",
+                Setup,
+            ),
+            (
+                "ERROR: [youtube] abcdefghijk: Unable to download API page: timed out",
+                Setup,
+            ),
+            ("ERROR: something new entirely", Unknown),
+        ];
+        for (stderr, origin) in cases {
+            assert_eq!(classify_ytdlp_error(stderr).origin, origin, "{stderr}");
+        }
+        let unavailable = classify_ytdlp_error(
+            "WARNING: noise\nERROR: [youtube] ysz5S6PUM-U: Video unavailable\n",
+        );
+        assert_eq!(unavailable.detail.as_deref(), Some("Video unavailable"));
+        assert!(unavailable.remedy.is_some());
+    }
+
+    #[test]
+    fn reads_the_extractors_status_answers() {
+        let failed = extractor_status_failure(
+            reqwest::StatusCode::BAD_GATEWAY,
+            br#"{"error": "yt-dlp extraction failed", "ytdlp_error": "ERROR: [youtube] ysz5S6PUM-U: Video unavailable"}"#,
+        );
+        assert_eq!(failed.origin, PlaybackFailureOrigin::Youtube);
+        let old_extractor = extractor_status_failure(
+            reqwest::StatusCode::BAD_GATEWAY,
+            br#"{"error": "yt-dlp extraction failed"}"#,
+        );
+        assert_eq!(old_extractor.origin, PlaybackFailureOrigin::Unknown);
+        assert!(old_extractor.remedy.unwrap().contains("rebuild"));
+        let no_provider = extractor_status_failure(reqwest::StatusCode::SERVICE_UNAVAILABLE, b"");
+        assert_eq!(no_provider.origin, PlaybackFailureOrigin::Setup);
     }
 
     #[tokio::test]

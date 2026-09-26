@@ -161,7 +161,12 @@ class Handler(BaseHTTPRequestHandler):
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             print(f"yt-dlp failed for {resource_id}: {stderr}", flush=True)
-            self.send_json(HTTPStatus.BAD_GATEWAY, {"error": "yt-dlp extraction failed"})
+            # yt-dlp's own words go back to Tawny, which sorts them into
+            # YouTube refusing the video versus something to fix here.
+            self.send_json(
+                HTTPStatus.BAD_GATEWAY,
+                {"error": "yt-dlp extraction failed", "ytdlp_error": stderr[-2000:]},
+            )
             return
         self.send_bytes(HTTPStatus.OK, result.stdout)
 

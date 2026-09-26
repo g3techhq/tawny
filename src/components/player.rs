@@ -2,9 +2,9 @@ use crate::{
     api::{get_comments_page, get_sponsor_segments, get_video_details, resolve_playback},
     app::Route,
     models::{
-        AudioTrackOption, CaptionTrack, PlaybackProtocol, PlaybackSession, PlaybackSource,
-        SponsorAction, SponsorBlockSettings, SponsorSegment, Video, VideoChapter, VideoComment,
-        VideoDetails, VideoPreviewFrames,
+        AudioTrackOption, CaptionTrack, PlaybackFailure, PlaybackFailureOrigin, PlaybackProtocol,
+        PlaybackSession, PlaybackSource, SponsorAction, SponsorBlockSettings, SponsorSegment,
+        Video, VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames,
     },
     state::AppState,
 };
@@ -193,15 +193,6 @@ fn NativePlayerBridges(title: String) -> Element {
 fn NativePlayerBridges(title: String) -> Element {
     let _ = title;
     rsx! {}
-}
-
-/// The server's message for a failed resolve, without the framework's
-/// "error running server function" wrapping.
-fn resolve_error_message(error: &dioxus::CapturedError) -> String {
-    match error.0.downcast_ref::<ServerFnError>() {
-        Some(ServerFnError::ServerError { message, .. }) => message.clone(),
-        _ => error.to_string(),
-    }
 }
 
 /// Pull the transport's own account of why playback stopped.
@@ -701,7 +692,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         .and_then(|value| value.as_ref())
         .filter(|(id, _)| *id == video.id)
         .and_then(|(_, result)| result.as_ref().err())
-        .map(resolve_error_message);
+        .cloned();
     let fallback_url = playback_session
         .as_ref()
         .map(|session| session.fallback_url.clone())
@@ -1279,16 +1270,49 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     }
                 } else {
                     div { class: "player-stage-status player-stage-error",
-                        if let Some(reason) = resolve_error.clone() {
-                            p { "{reason}" }
-                        } else if nothing_extracted {
-                            p { "No playable stream could be extracted for this video. Check the server log for the extraction error." }
-                        } else {
-                            p { "Streams were found but playback failed." }
+                    {
+                        let failure = resolve_error.clone().unwrap_or_else(|| {
+                            if nothing_extracted {
+                                PlaybackFailure::new(
+                                    PlaybackFailureOrigin::Bug,
+                                    "The server returned streams this player cannot use.",
+                                )
+                                .remedy("Report it with the video link; the server log has the stream list.")
+                            } else {
+                                // The browser failed on streams the server
+                                // handed over. The transport's detail below
+                                // says where; the cause can be either side.
+                                PlaybackFailure::new(
+                                    PlaybackFailureOrigin::Unknown,
+                                    "Streams were found, but the player could not play them.",
+                                )
+                                .remedy(
+                                    "Try again. A 403 in the detail means YouTube cut the stream off; \
+                                     anything else that repeats is likely a Tawny bug worth reporting.",
+                                )
+                                .detail(failure_detail())
+                            }
+                        });
+                        let origin_class = match failure.origin {
+                            PlaybackFailureOrigin::Youtube => "youtube",
+                            PlaybackFailureOrigin::Setup => "setup",
+                            PlaybackFailureOrigin::Bug => "bug",
+                            PlaybackFailureOrigin::Unknown => "unknown",
+                        };
+                        rsx! {
+                            span {
+                                class: "player-stage-origin player-stage-origin-{origin_class}",
+                                "{failure.origin.label()}"
+                            }
+                            p { class: "player-stage-summary", "{failure.summary}" }
+                            if let Some(remedy) = failure.remedy.clone() {
+                                p { class: "player-stage-remedy", "{remedy}" }
+                            }
+                            if let Some(detail) = failure.detail.clone() {
+                                code { class: "player-stage-detail", "{detail}" }
+                            }
                         }
-                        if !failure_detail().is_empty() {
-                            code { class: "player-stage-detail", "{failure_detail()}" }
-                        }
+                    }
                         div { class: "player-stage-actions",
                             Button {
                                 fill: ButtonFill::Solid,

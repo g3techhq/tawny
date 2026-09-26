@@ -237,6 +237,9 @@ impl Video {
         {
             return date.midnight().assume_utc().unix_timestamp();
         }
+        if let Some(date) = text_date(value) {
+            return date.midnight().assume_utc().unix_timestamp();
+        }
 
         let lower = value.to_ascii_lowercase();
         let now = SystemTime::now()
@@ -280,6 +283,36 @@ impl Video {
             return now.saturating_sub(count.saturating_mul(seconds));
         }
         0
+    }
+
+    /// How exactly `published_at` pins the upload down: 3 for a timestamp, 2 for
+    /// a calendar date, 1 for relative text ("3 days ago"), 0 for nothing usable.
+    fn publish_precision(&self) -> u8 {
+        use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+        let value = self.published_at.trim();
+        if OffsetDateTime::parse(value, &Rfc3339).is_ok() {
+            return 3;
+        }
+        let iso_date = value.len() >= 10
+            && time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+                .is_ok_and(|format| time::Date::parse(&value[..10], &format).is_ok());
+        if iso_date || text_date(value).is_some() {
+            return 2;
+        }
+        if self.published_epoch() != 0 { 1 } else { 0 }
+    }
+
+    /// Keep `previous`'s publish date when it is more exact than this one.
+    ///
+    /// A video's date does not change, but the sources describing it do: the
+    /// feed gives a timestamp, the watch page a day, a related-videos shelf "11
+    /// months ago". Taking whichever arrived last moved a video within a
+    /// newest-first playlist just for having been opened.
+    pub fn keep_finer_publish_date(&mut self, previous: &Video) {
+        if previous.publish_precision() > self.publish_precision() {
+            self.published_at = previous.published_at.clone();
+        }
     }
 
     /// The publish date as it should be shown.
@@ -331,6 +364,46 @@ impl Video {
             (false, false) => format!("{} · {date}", self.view_count.trim()),
         }
     }
+}
+
+/// A written-out English date such as "Aug 2, 2013", "Premiered Aug 2, 2013"
+/// or "Streamed live on August 2, 2013".
+///
+/// Video details used to be stored with YouTube's display text, and a date the
+/// sorts cannot read counts as 1970: the video opened last sank to the bottom
+/// of a newest-first playlist, stranding a run on it. Rows cached that way are
+/// still around, so they are read rather than refetched.
+pub fn text_date(value: &str) -> Option<time::Date> {
+    let words = value
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    words.windows(3).find_map(|window| {
+        let month = month_from_name(window[0])?;
+        let day = window[1].parse::<u8>().ok()?;
+        let year = window[2].parse::<i32>().ok().filter(|year| *year >= 1000)?;
+        time::Date::from_calendar_date(year, month, day).ok()
+    })
+}
+
+fn month_from_name(word: &str) -> Option<time::Month> {
+    use time::Month::*;
+    let prefix = word.get(..3)?.to_ascii_lowercase();
+    Some(match prefix.as_str() {
+        "jan" => January,
+        "feb" => February,
+        "mar" => March,
+        "apr" => April,
+        "may" => May,
+        "jun" => June,
+        "jul" => July,
+        "aug" => August,
+        "sep" => September,
+        "oct" => October,
+        "nov" => November,
+        "dec" => December,
+        _ => return None,
+    })
 }
 
 fn short_month(month: time::Month) -> &'static str {
@@ -1429,6 +1502,83 @@ pub struct PlaybackSession {
     pub fallback_url: String,
 }
 
+/// Whose side a playback failure is on, which decides what can be done about
+/// it: nothing (YouTube's own rules), a fix to the deployment, or a fix to
+/// Tawny's code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackFailureOrigin {
+    /// YouTube refused the video: region, privacy, age, removal, or YouTube
+    /// blocking the server itself. Tawny is working as intended.
+    Youtube,
+    /// Something Tawny runs on is down, misconfigured or out of date - a
+    /// sidecar, an environment variable, the yt-dlp pin. Whoever runs the
+    /// server can fix it.
+    Setup,
+    /// Tawny's own code got it wrong.
+    Bug,
+    /// An error Tawny does not recognise, so it cannot say whose it is.
+    Unknown,
+}
+
+impl PlaybackFailureOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Youtube => "Blocked by YouTube",
+            Self::Setup => "Server setup problem",
+            Self::Bug => "Tawny bug",
+            Self::Unknown => "Unrecognised error",
+        }
+    }
+}
+
+/// Why a video cannot be played, sent to the player instead of a bare string
+/// so it can say whose problem it is and what, if anything, fixes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaybackFailure {
+    pub origin: PlaybackFailureOrigin,
+    /// What went wrong, as one sentence.
+    pub summary: String,
+    /// What the viewer or whoever runs the server can do, when anything helps.
+    #[serde(default)]
+    pub remedy: Option<String>,
+    /// The underlying error verbatim, for bug reports and the server log.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl PlaybackFailure {
+    pub fn new(origin: PlaybackFailureOrigin, summary: impl Into<String>) -> Self {
+        Self {
+            origin,
+            summary: summary.into(),
+            remedy: None,
+            detail: None,
+        }
+    }
+
+    pub fn remedy(mut self, remedy: impl Into<String>) -> Self {
+        self.remedy = Some(remedy.into());
+        self
+    }
+
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        self.detail = (!detail.trim().is_empty()).then_some(detail);
+        self
+    }
+}
+
+impl std::fmt::Display for PlaybackFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.origin.label(), self.summary)?;
+        if let Some(detail) = &self.detail {
+            write!(f, " ({detail})")?;
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
@@ -2028,6 +2178,51 @@ mod tests {
         let mut videos = sample();
         PlaylistSort::Published.apply(&mut videos, false);
         assert_eq!(ids(&videos), ["a", "c", "b"]);
+    }
+
+    /// Opening a video stored the watch page's "Feb 1, 2024", which used to
+    /// read as 1970 and sink it to the end of Newest - leaving a run started on
+    /// it with nothing after it and everything before it.
+    #[test]
+    fn a_written_out_date_keeps_its_place_in_newest() {
+        let mut videos = sample();
+        videos[2].published_at = "Feb 1, 2024".into();
+        PlaylistSort::Published.apply(&mut videos, true);
+        assert_eq!(ids(&videos), ["b", "c", "a"]);
+        let view = PlaylistView {
+            sort: PlaylistSort::Published,
+            descending: true,
+            ..PlaylistView::default()
+        };
+        assert_eq!(view.next_after(&videos, "c").as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn text_dates_read_through_youtube_prefixes() {
+        let expected = time::Date::from_calendar_date(2013, time::Month::August, 2).ok();
+        assert_eq!(text_date("Aug 2, 2013"), expected);
+        assert_eq!(text_date("Premiered Aug 2, 2013"), expected);
+        assert_eq!(text_date("Streamed live on August 2, 2013"), expected);
+        assert_eq!(text_date("2 months ago"), None);
+        assert_eq!(text_date("From YouTube"), None);
+    }
+
+    /// The feed's timestamp outranks the watch page's day, which outranks a
+    /// related shelf's "3 years ago"; a finer date is never replaced by a coarser one.
+    #[test]
+    fn merging_details_keeps_the_finer_publish_date() {
+        let feed = video("a", "A", "2024-02-01T15:30:00Z", 0);
+        let mut detail = video("a", "A", "2024-02-01 0:00:00.0 +00:00:00", 0);
+        detail.keep_finer_publish_date(&feed);
+        assert_eq!(detail.published_at, "2024-02-01T15:30:00Z");
+
+        let mut related = video("a", "A", "3 years ago", 0);
+        related.keep_finer_publish_date(&video("a", "A", "Feb 1, 2024", 0));
+        assert_eq!(related.published_at, "Feb 1, 2024");
+
+        let mut fresh = video("a", "A", "2024-02-01T15:30:00Z", 0);
+        fresh.keep_finer_publish_date(&video("a", "A", "3 years ago", 0));
+        assert_eq!(fresh.published_at, "2024-02-01T15:30:00Z");
     }
 
     #[test]

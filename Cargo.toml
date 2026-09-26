@@ -85,12 +85,28 @@ server = [
     "sha2",
 ]
 
+# surrealdb-core is most of the database engine; even the remote client
+# depends on it for its wire types. Its debug info runs past a gigabyte and is
+# relinked on every server build, and nobody steps through it.
+[profile.dev.package.surrealdb-core]
+debug = false
+
+[profile.dev.package.surrealdb]
+debug = false
+
 [profile.wasm-dev]
 inherits = "dev"
 opt-level = 1
+# Without debug info the dev wasm drops from ~220 MB to ~18 MB, and the
+# wasm-bindgen pass dx runs on every rebuild from ~22s to ~2s. Panics and
+# stack traces keep their file, line and function names.
+debug = 0
 
 [profile.server-dev]
 inherits = "dev"
+# Line tables keep backtraces readable and cut several seconds off each dx
+# server rebuild. Switch to full debug info when attaching a debugger.
+debug = "line-tables-only"
 
 [profile.android-dev]
 inherits = "dev"

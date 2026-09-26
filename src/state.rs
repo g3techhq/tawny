@@ -702,11 +702,10 @@ impl AppState {
                 .iter_mut()
                 .find(|video| video.id == discovered.id)
             {
-                let progress_seconds = video.progress_seconds;
-                let watched = video.watched;
-                *video = discovered;
-                video.progress_seconds = progress_seconds;
-                video.watched = watched;
+                let previous = std::mem::replace(video, discovered);
+                video.progress_seconds = previous.progress_seconds;
+                video.watched = previous.watched;
+                video.keep_finer_publish_date(&previous);
             } else {
                 library.videos.push(discovered);
             }
@@ -727,13 +726,11 @@ impl AppState {
                 library.videos.push(discovered);
                 continue;
             };
-            let progress_seconds = video.progress_seconds;
-            let watched = video.watched;
-            let audio_only = video.audio_only;
-            *video = discovered;
-            video.progress_seconds = progress_seconds;
-            video.watched = watched;
-            video.audio_only = audio_only;
+            let previous = std::mem::replace(video, discovered);
+            video.progress_seconds = previous.progress_seconds;
+            video.watched = previous.watched;
+            video.audio_only = previous.audio_only;
+            video.keep_finer_publish_date(&previous);
         }
     }
 
