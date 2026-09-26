@@ -128,7 +128,6 @@ pub fn Feed() -> Element {
             };
             match result {
                 Ok(refresh) => {
-                    app_state.adopt_library(refresh.library);
                     let message = if refresh.imported == 0 {
                         "No new videos".to_string()
                     } else if refresh.failed_channels == 0 {

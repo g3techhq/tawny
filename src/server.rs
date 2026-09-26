@@ -49,6 +49,8 @@ use surrealdb::{
 };
 use surrealdb_types::SurrealValue;
 
+mod viewer;
+
 #[derive(Clone)]
 pub struct AppServerState {
     pub(crate) db: Arc<Surreal<Any>>,
@@ -418,6 +420,7 @@ fn ytdlp_flat_playlist_videos(
             is_live: false,
             is_short: true,
             audio_only: false,
+            channel_avatar_url: None,
         })
         .collect()
 }
@@ -575,6 +578,7 @@ impl From<DbVideo> for Video {
             is_live: value.is_live,
             is_short: value.is_short,
             audio_only: value.audio_only.unwrap_or(false),
+            channel_avatar_url: None,
         }
     }
 }
@@ -2542,7 +2546,13 @@ impl AppServerState {
     }
 
     pub async fn video_details(&self, owner: &str, video_id: &str) -> Result<VideoDetails> {
-        let details = self.video_details_for_anyone(owner, video_id).await?;
+        let mut details = self.video_details_for_anyone(owner, video_id).await?;
+        // The details are cached for every account; the progress in them is
+        // this one's.
+        self.overlay_viewer(owner, std::slice::from_mut(&mut details.video))
+            .await?;
+        self.overlay_viewer(owner, &mut details.related_videos)
+            .await?;
         self.with_owner_follow_state(owner, details).await
     }
 
@@ -2553,26 +2563,25 @@ impl AppServerState {
             return Ok(self.proxy_captions(cached).await);
         }
         let stale = self.read_video_details_cache(video_id, false).await?;
-        let library = self.library_snapshot(owner).await?;
-        let local_video = library
-            .videos
-            .iter()
-            .find(|video| video.id == video_id)
-            .cloned();
-        let local_channel = local_video.as_ref().and_then(|video| {
-            library
-                .channels
-                .iter()
-                .find(|channel| channel.id == video.channel_id)
-                .cloned()
-        });
-        let local_related = library
-            .videos
-            .iter()
-            .filter(|video| video.id != video_id)
-            .take(8)
-            .cloned()
-            .collect::<Vec<_>>();
+        let _ = owner;
+        let local_video = self
+            .videos_by_id("", &[video_id.to_string()])
+            .await?
+            .into_iter()
+            .next();
+        let (local_channel, local_related) = match &local_video {
+            Some(video) => (
+                self.catalog_channel(&video.channel_id).await?,
+                // The channel's other uploads stand in for related videos.
+                self.catalog_channel_videos(&video.channel_id, 9)
+                    .await?
+                    .into_iter()
+                    .filter(|related| related.id != video_id)
+                    .take(8)
+                    .collect(),
+            ),
+            None => (None, Vec::new()),
+        };
 
         if let Ok(details) = self
             .fetch_direct_video_details(video_id, local_video.clone(), local_channel.clone())
@@ -2721,6 +2730,7 @@ impl AppServerState {
                 is_live: false,
                 is_short: false,
                 audio_only: false,
+                channel_avatar_url: None,
             };
             let video = self.enrich_video_player(video).await;
             let published = video.published_at.clone();
@@ -2766,6 +2776,19 @@ impl AppServerState {
     }
 
     pub async fn channel_details(&self, owner: &str, channel_id: &str) -> Result<ChannelDetails> {
+        let mut details = self.channel_details_unviewed(owner, channel_id).await?;
+        for page in [&mut details.videos, &mut details.shorts, &mut details.live] {
+            self.overlay_viewer(owner, &mut page.videos).await?;
+        }
+        Ok(details)
+    }
+
+    /// [`Self::channel_details`] before this viewer's progress is applied.
+    async fn channel_details_unviewed(
+        &self,
+        owner: &str,
+        channel_id: &str,
+    ) -> Result<ChannelDetails> {
         let query = self.youtube.query();
         let (rss_result, videos_result, shorts_result, live_result) = tokio::join!(
             youtube_call(query.channel_rss(channel_id), "extract channel RSS"),
@@ -2868,20 +2891,20 @@ impl AppServerState {
             });
         }
 
-        let library = self.library_snapshot(owner).await?;
-        let channel = library
-            .channels
-            .into_iter()
-            .find(|channel| channel.id == channel_id)
+        let mut channel = self
+            .catalog_channel(channel_id)
+            .await?
             .ok_or_else(|| anyhow!("channel is unavailable"))?;
+        let (subscribed, content) = self
+            .user_follows(owner, channel_id)
+            .await?
+            .unwrap_or((false, channel.subscription_content));
+        channel.subscribed = subscribed;
+        channel.subscription_content = content;
         let mut videos = Vec::new();
         let mut shorts = Vec::new();
         let mut live = Vec::new();
-        for video in library
-            .videos
-            .into_iter()
-            .filter(|video| video.channel_id == channel_id)
-        {
+        for video in self.catalog_channel_videos(channel_id, 200).await? {
             if video.is_short {
                 shorts.push(video);
             } else if video.is_live {
@@ -2939,12 +2962,8 @@ impl AppServerState {
             .await?
             .ok_or_else(|| anyhow!("channel page is exhausted"))?;
             let channel_name = self
-                // Just the cached name; nothing here is the viewer's.
-                .library_snapshot("")
+                .catalog_channel(channel_id)
                 .await?
-                .channels
-                .into_iter()
-                .find(|channel| channel.id == channel_id)
                 .map(|channel| channel.name)
                 .unwrap_or_else(|| "YouTube channel".into());
             let result = rusty_page(channel_id, tab, &page, &channel_name);
@@ -3078,32 +3097,43 @@ impl AppServerState {
         })
     }
 
+    /// Search what the catalog already holds, for when YouTube cannot be
+    /// reached. Matched in the database and capped, never by loading it all.
     async fn search_cached(&self, owner: &str, query: &str, filter: &str) -> Result<SearchResults> {
-        let snapshot = self.library_snapshot(owner).await?;
+        const LIMIT: i64 = 60;
         let needle = query.to_lowercase();
-        let videos = if filter == "channels" {
+        let mut videos = if filter == "channels" {
             Vec::new()
         } else {
-            snapshot
-                .videos
-                .into_iter()
-                .filter(|video| {
-                    video.title.to_lowercase().contains(&needle)
-                        || video.channel_name.to_lowercase().contains(&needle)
-                })
-                .collect()
+            let rows: Vec<DbVideo> = self
+                .db
+                .query(format!(
+                    "SELECT {} FROM video WHERE string::contains(string::lowercase(title), $needle) OR string::contains(string::lowercase(channel_name), $needle) ORDER BY published_sort DESC LIMIT $limit",
+                    viewer::VIDEO_COLUMNS
+                ))
+                .bind(("needle", needle.clone()))
+                .bind(("limit", LIMIT))
+                .await?
+                .check()?
+                .take(0)?;
+            rows.into_iter().map(Video::from).collect::<Vec<_>>()
         };
+        self.overlay_viewer(owner, &mut videos).await?;
         let channels = if filter == "videos" {
             Vec::new()
         } else {
-            snapshot
-                .channels
-                .into_iter()
-                .filter(|channel| {
-                    channel.name.to_lowercase().contains(&needle)
-                        || channel.handle.to_lowercase().contains(&needle)
-                })
-                .collect()
+            let rows: Vec<DbChannel> = self
+                .db
+                .query(format!(
+                    "SELECT {} FROM channel WHERE string::contains(string::lowercase(name), $needle) OR string::contains(string::lowercase(handle), $needle) LIMIT $limit",
+                    viewer::CHANNEL_COLUMNS
+                ))
+                .bind(("needle", needle))
+                .bind(("limit", LIMIT))
+                .await?
+                .check()?
+                .take(0)?;
+            rows.into_iter().map(Channel::from).collect()
         };
         Ok(SearchResults {
             query: query.to_string(),
@@ -3602,7 +3632,6 @@ impl AppServerState {
         let refreshed_channels = covered_channels.len();
         let failed_channels = total_channels.saturating_sub(refreshed_channels);
         Ok(FeedRefreshResult {
-            library: self.library_snapshot(owner).await?,
             imported,
             refreshed_channels,
             failed_channels,
@@ -3687,11 +3716,9 @@ impl AppServerState {
         }
         // Catalog only: a WebSub push belongs to the instance, not to a viewer,
         // and all it needs from here is the channel's cached metadata.
-        let library = self.library_snapshot("").await?;
-        let channel = library
-            .channels
-            .into_iter()
-            .find(|channel| channel.id == channel_id)
+        let channel = self
+            .catalog_channel(&channel_id)
+            .await?
             .ok_or_else(|| anyhow!("WebSub channel is not cached"))?;
 
         let mut hints = Vec::with_capacity(entries.len());
@@ -4342,6 +4369,7 @@ fn rusty_video_item_to_video(
         is_live: item.is_live,
         is_short: force_short || item.is_short,
         audio_only: false,
+        channel_avatar_url: None,
     }
 }
 
@@ -5358,6 +5386,7 @@ fn normalize_rusty_video_details(
                 })
             }),
         audio_only: false,
+        channel_avatar_url: None,
     };
     let captions = player
         .as_ref()
@@ -5635,6 +5664,7 @@ fn feed_entry_video(entry: &FeedEntry, channel: &Channel) -> Video {
         is_live: false,
         is_short: false,
         audio_only: false,
+        channel_avatar_url: None,
     }
 }
 
@@ -6208,6 +6238,7 @@ mod tests {
             is_live: false,
             is_short: false,
             audio_only: false,
+            channel_avatar_url: None,
         };
         state
             .upsert_feed_hint(&video, video.published_at.clone())
@@ -6258,6 +6289,7 @@ mod tests {
             is_live: false,
             is_short: false,
             audio_only: false,
+            channel_avatar_url: None,
         };
         let unknown = Video {
             id: "unknown-length".into(),
@@ -6857,37 +6889,36 @@ mod tests {
         eprintln!("live playback protocol: {:?}", playback.primary.protocol);
         assert!(playback.primary.url.contains("/api/v1/playback/proxy/"));
 
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        snapshot
-            .channels
-            .iter_mut()
-            .find(|cached| cached.id == channel.id)
-            .expect("searched channel is cached")
-            .subscribed = true;
-        snapshot.cache_revision += 1;
-        let synced = state.sync_library(&owner, snapshot).await.unwrap();
-        assert!(
-            synced
-                .channels
-                .iter()
-                .any(|cached| cached.id == channel.id && cached.subscribed)
-        );
+        state
+            .set_subscriptions(
+                &owner,
+                vec![crate::models::SubscriptionChange {
+                    channel: channel.clone(),
+                    subscribed: true,
+                    content: crate::models::SubscriptionContent::All,
+                }],
+            )
+            .await
+            .unwrap();
+        let viewer = state.viewer(&owner).await.unwrap();
+        assert!(viewer.follows(&channel.id).is_some());
 
         let refresh = state.refresh_feed(&owner).await.unwrap();
         assert_eq!(refresh.failed_channels, 0);
-        assert!(
-            refresh
-                .library
-                .videos
-                .iter()
-                .any(|video| video.channel_id == channel.id)
-        );
-        let channel_feed = refresh
-            .library
+        let query = crate::models::FeedQuery {
+            group: crate::models::FeedGroup::All,
+            kind: crate::models::FeedFilter::All,
+            duration: None,
+            hide_watched: false,
+            thresholds: (&crate::models::AppSettings::default()).into(),
+        };
+        let feed = state.feed_page(&owner, &query, 0).await.unwrap();
+        let channel_feed = feed
             .videos
             .iter()
             .filter(|video| video.channel_id == channel.id)
             .collect::<Vec<_>>();
+        assert!(!channel_feed.is_empty());
         assert!(
             channel_feed
                 .windows(2)
