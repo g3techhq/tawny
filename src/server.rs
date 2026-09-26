@@ -16,6 +16,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use dioxus::fullstack::FullstackContext;
 use futures_util::FutureExt;
+use g3_cache::ServerCache;
 use hmac::{Hmac, Mac};
 use quick_xml::{Reader, events::Event};
 use rustypipe::{
@@ -73,12 +74,6 @@ pub struct AppServerState {
     playback_sessions: Arc<std::sync::Mutex<HashMap<String, CachedPlayback>>>,
     sync_lock: Arc<tokio::sync::Mutex<()>>,
     search_lock: Arc<tokio::sync::Mutex<()>>,
-    search_cache: Arc<tokio::sync::RwLock<HashMap<(String, String), CachedSearch>>>,
-    /// Keyed by video id and the category set asked for, because those are
-    /// different answers for the same video.
-    sponsor_cache: Arc<
-        tokio::sync::RwLock<HashMap<(String, String), (std::time::Instant, Vec<SponsorSegment>)>>,
-    >,
     /// A self-hosted SponsorBlock mirror, when one is configured.
     sponsor_api_url: Option<String>,
 }
@@ -124,12 +119,6 @@ const PLAYBACK_SESSION_TTL: Duration = Duration::from_secs(60 * 60);
 /// Plenty for every client's current and next video.
 const PLAYBACK_SESSION_LIMIT: usize = 64;
 
-#[derive(Clone)]
-struct CachedSearch {
-    result: SearchResults,
-    cached_at: std::time::Instant,
-}
-
 const FEED_RECONCILE_BATCH_SIZE: usize = 48;
 const FEED_RSS_CONCURRENCY: usize = 32;
 /// How many channels one refresh will ask for video lengths, at most.
@@ -157,6 +146,10 @@ const CHANNEL_METADATA_CONCURRENCY: usize = 4;
 /// Channel pages one backfill pass may request.
 const CHANNEL_METADATA_BATCH: usize = 100;
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+/// Search results by query and filter. Shared by every account: the results
+/// are YouTube's, and follow state is applied per viewer on the way out.
+static SEARCHES: ServerCache<(String, String), SearchResults> =
+    ServerCache::new(SEARCH_CACHE_TTL, 2_000);
 
 fn reconciliation_limit(total: usize, has_accelerated_source: bool) -> usize {
     if has_accelerated_source {
@@ -746,8 +739,6 @@ impl AppServerState {
             playback_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             search_lock: Arc::new(tokio::sync::Mutex::new(())),
-            search_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-            sponsor_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             sponsor_api_url: std::env::var("TAWNY_SPONSORBLOCK_URL")
                 .ok()
                 .map(|url| url.trim_end_matches('/').to_string())
@@ -2584,37 +2575,21 @@ impl AppServerState {
             _ => "all",
         };
         let cache_key = (query.to_lowercase(), filter.to_string());
-        if let Some(cached) = self.search_cache.read().await.get(&cache_key)
-            && cached.cached_at.elapsed() < SEARCH_CACHE_TTL
-        {
-            return Ok(cached.result.clone());
+        // Identical searches share one upstream request, and searches take
+        // turns: type-ahead bursts and several clients never reach YouTube at
+        // once.
+        let searched = SEARCHES
+            .try_get_with(cache_key, async {
+                let _turn = self.search_lock.lock().await;
+                self.search_direct(query, filter).await
+            })
+            .await;
+        match searched {
+            Ok(result) => Ok(result),
+            // Never into the shared cache: this searches the catalog for the
+            // asking account, with its own progress.
+            Err(_) => self.search_cached(owner, query, filter).await,
         }
-
-        // Coalesce bursts from repeated submits or several clients. The cache is checked
-        // again after taking the lock so identical searches produce one upstream request.
-        let _guard = self.search_lock.lock().await;
-        if let Some(cached) = self.search_cache.read().await.get(&cache_key)
-            && cached.cached_at.elapsed() < SEARCH_CACHE_TTL
-        {
-            return Ok(cached.result.clone());
-        }
-
-        let result = match self.search_direct(query, filter).await {
-            Ok(result) => result,
-            // Never into the shared cache: this searches the asking account's
-            // own library, and cached under the query alone it was served to
-            // every other account that searched the same words.
-            Err(_) => return self.search_cached(owner, query, filter).await,
-        };
-
-        self.search_cache.write().await.insert(
-            cache_key,
-            CachedSearch {
-                result: result.clone(),
-                cached_at: std::time::Instant::now(),
-            },
-        );
-        Ok(result)
     }
 
     pub async fn search_page(
@@ -4584,23 +4559,17 @@ struct SegmentRangeKey {
     size: u64,
 }
 
-static SEGMENT_RANGE_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<HashMap<SegmentRangeKey, SegmentRanges>>,
-> = std::sync::OnceLock::new();
+/// Byte ranges by exact file. They are a fact about the file, so they never
+/// go stale; the bound is on memory, not freshness.
+static SEGMENT_RANGES: ServerCache<SegmentRangeKey, SegmentRanges> =
+    ServerCache::new(Duration::from_secs(24 * 60 * 60), 20_000);
 
-fn cached_segment_ranges(key: &SegmentRangeKey) -> Option<SegmentRanges> {
-    SEGMENT_RANGE_CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .ok()?
-        .get(key)
-        .copied()
+async fn cached_segment_ranges(key: &SegmentRangeKey) -> Option<SegmentRanges> {
+    SEGMENT_RANGES.get(key).await
 }
 
-fn store_segment_ranges(key: SegmentRangeKey, ranges: SegmentRanges) {
-    if let Ok(mut cache) = SEGMENT_RANGE_CACHE.get_or_init(Default::default).lock() {
-        cache.insert(key, ranges);
-    }
+async fn store_segment_ranges(key: SegmentRangeKey, ranges: SegmentRanges) {
+    SEGMENT_RANGES.insert(key, ranges).await;
 }
 
 /// Read enough of a stream to find its index.
@@ -4614,7 +4583,9 @@ async fn probe_segment_ranges(
     key: Option<SegmentRangeKey>,
     url: &str,
 ) -> Option<SegmentRanges> {
-    if let Some(cached) = key.as_ref().and_then(cached_segment_ranges) {
+    if let Some(key) = key.as_ref()
+        && let Some(cached) = cached_segment_ranges(key).await
+    {
         return Some(cached);
     }
     // One format that stalls is dropped from the manifest rather than holding
@@ -4635,7 +4606,7 @@ async fn probe_segment_ranges(
     .ok()??;
     let ranges = segment_ranges(&head)?;
     if let Some(key) = key {
-        store_segment_ranges(key, ranges);
+        store_segment_ranges(key, ranges).await;
     }
     Some(ranges)
 }
@@ -5515,8 +5486,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dubbed_audio_tracks_do_not_share_segment_ranges() {
+    #[tokio::test]
+    async fn dubbed_audio_tracks_do_not_share_segment_ranges() {
         // One itag, two languages, two files with different headers.
         let original = SegmentRanges {
             init_end: 258,
@@ -5535,14 +5506,17 @@ mod tests {
             size,
         };
         // XKSjCOKDtpk's Japanese and Turkish itag 140 are the same length.
-        store_segment_ranges(key("ja", 34_831_565), original);
-        store_segment_ranges(key("tr", 34_831_565), dub);
+        store_segment_ranges(key("ja", 34_831_565), original).await;
+        store_segment_ranges(key("tr", 34_831_565), dub).await;
         assert_eq!(
-            cached_segment_ranges(&key("ja", 34_831_565)),
+            cached_segment_ranges(&key("ja", 34_831_565)).await,
             Some(original)
         );
-        assert_eq!(cached_segment_ranges(&key("tr", 34_831_565)), Some(dub));
-        assert_eq!(cached_segment_ranges(&key("en", 34_830_834)), None);
+        assert_eq!(
+            cached_segment_ranges(&key("tr", 34_831_565)).await,
+            Some(dub)
+        );
+        assert_eq!(cached_segment_ranges(&key("en", 34_830_834)).await, None);
     }
 
     #[test]
@@ -6553,6 +6527,10 @@ mod tests {
 /// Segments change when someone submits or votes, which is slow enough that an
 /// hour is generous and short enough that a correction lands the same evening.
 const SPONSOR_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+/// Segments by video and the category set asked for, because those are
+/// different answers for the same video.
+static SPONSOR_SEGMENTS: ServerCache<(String, String), Vec<SponsorSegment>> =
+    ServerCache::new(SPONSOR_CACHE_TTL, 10_000);
 
 /// The public instance. Self-hosters who run their own can point at it.
 const SPONSOR_API_DEFAULT: &str = "https://sponsor.ajay.app";
@@ -6604,10 +6582,8 @@ impl AppServerState {
             video_id.to_string(),
             sponsor_cache_discriminator(categories),
         );
-        if let Some(cached) = self.sponsor_cache.read().await.get(&cache_key)
-            && cached.0.elapsed() < SPONSOR_CACHE_TTL
-        {
-            return Ok(cached.1.clone());
+        if let Some(cached) = SPONSOR_SEGMENTS.get(&cache_key).await {
+            return Ok(cached);
         }
 
         let digest = hex::encode(Sha256::digest(video_id.as_bytes()));
@@ -6653,10 +6629,7 @@ impl AppServerState {
         key: (String, String),
         segments: Vec<SponsorSegment>,
     ) {
-        self.sponsor_cache
-            .write()
-            .await
-            .insert(key, (std::time::Instant::now(), segments));
+        SPONSOR_SEGMENTS.insert(key, segments).await;
     }
 }
 
