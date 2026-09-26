@@ -11,7 +11,7 @@
 use super::*;
 use crate::models::{
     DurationFilter, FEED_PAGE_SIZE, FeedFilter, FeedGroup, FeedPage, FeedQuery, HISTORY_LIMIT,
-    PlaylistContents, SubscriptionChange, Viewer,
+    PlaylistContents, PlaylistPreview, SubscriptionChange, Viewer,
 };
 
 /// Every column a `DbVideo` reads.
@@ -69,6 +69,11 @@ impl AppServerState {
                 let (_, content) = follows[&channel.id];
                 channel.subscribed = true;
                 channel.subscription_content = content;
+                // Every screen reads the viewer, and with hundreds of follows
+                // the descriptions were most of it. The channel page fetches
+                // its own.
+                channel.description.clear();
+                channel.banner_url = None;
                 channel
             })
             .collect();
@@ -296,12 +301,13 @@ impl AppServerState {
         Ok(Some(PlaylistContents { playlist, videos }))
     }
 
-    /// Every playlist with its first few videos, for the playlists page.
+    /// Every playlist's cover and counts, for the playlists page. The
+    /// thumbnails come from the first `thumbnails` videos the catalog holds.
     pub async fn playlist_previews(
         &self,
         owner: &str,
-        per_playlist: usize,
-    ) -> Result<Vec<PlaylistContents>> {
+        thumbnails: usize,
+    ) -> Result<Vec<PlaylistPreview>> {
         let playlists: Vec<DbPlaylist> = self
             .db
             .query("SELECT playlist_id, name, video_ids FROM playlist WHERE owner = type::record($owner) ORDER BY name")
@@ -309,25 +315,42 @@ impl AppServerState {
             .await?
             .check()?
             .take(0)?;
-        let playlists = playlists
+        let watched = self
+            .watched_ids(owner)
+            .await?
             .into_iter()
-            .map(Playlist::from)
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         let wanted = playlists
             .iter()
-            .flat_map(|playlist| playlist.video_ids.iter().take(per_playlist).cloned())
+            .flat_map(|playlist| playlist.video_ids.iter().take(thumbnails * 2).cloned())
             .collect::<Vec<_>>();
-        let videos = self.videos_by_id(owner, &wanted).await?;
+        let covers: Vec<DbVideo> = self
+            .db
+            .query(format!(
+                "SELECT {VIDEO_COLUMNS} FROM video WHERE video_id IN $ids"
+            ))
+            .bind(("ids", wanted))
+            .await?
+            .check()?
+            .take(0)?;
         Ok(playlists
             .into_iter()
-            .map(|playlist| {
-                let videos = playlist
+            .map(|playlist| PlaylistPreview {
+                count: playlist.video_ids.len(),
+                unwatched: playlist
                     .video_ids
                     .iter()
-                    .take(per_playlist)
-                    .filter_map(|id| videos.iter().find(|video| &video.id == id).cloned())
-                    .collect();
-                PlaylistContents { playlist, videos }
+                    .filter(|id| !watched.contains(*id))
+                    .count(),
+                thumbnails: playlist
+                    .video_ids
+                    .iter()
+                    .filter_map(|id| covers.iter().find(|video| &video.video_id == id))
+                    .take(thumbnails)
+                    .map(|video| video.thumbnail_url.clone())
+                    .collect(),
+                id: playlist.playlist_id,
+                name: playlist.name,
             })
             .collect())
     }
@@ -396,6 +419,30 @@ impl AppServerState {
                 .iter()
                 .find(|row| row.channel_id == video.channel_id)
                 .and_then(|row| row.avatar_url.clone());
+        }
+        Ok(())
+    }
+
+    /// Keep the catalog's publish date for each video where it is more exact
+    /// than the one about to be written over it.
+    ///
+    /// A video's date does not change, but the sources describing it do: the
+    /// feed gives a timestamp, the watch page a day, a related shelf "11 months
+    /// ago". Taking whichever arrived last moved a video within a newest-first
+    /// playlist just for having been opened.
+    pub(super) async fn keep_finer_dates(&self, videos: &mut [Video]) -> Result<()> {
+        if videos.is_empty() {
+            return Ok(());
+        }
+        let ids = videos
+            .iter()
+            .map(|video| video.id.clone())
+            .collect::<Vec<_>>();
+        let stored = self.videos_by_id("", &ids).await?;
+        for video in videos.iter_mut() {
+            if let Some(previous) = stored.iter().find(|stored| stored.id == video.id) {
+                video.keep_finer_publish_date(previous);
+            }
         }
         Ok(())
     }

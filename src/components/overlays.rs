@@ -61,21 +61,21 @@ pub fn AppOverlays() -> Element {
                     let play_next_id = video.id.clone();
                     let queue_id = video.id.clone();
                     let save_video = video.clone();
-                    let watched_id = video.id.clone();
+                    let watched_video = video.clone();
                     let share_video = video.clone();
                     let remove_id = video.id.clone();
                     // Only offered when the sheet was opened from a playlist
                     // the video is still in.
                     let remove_from = (app_state.video_actions_playlist)().and_then(|playlist_id| {
-                        app_state.with_library(|library| {
-                            library
+                        app_state.with_viewer(|viewer| {
+                            viewer
                                 .playlists
                                 .iter()
                                 .find(|playlist| playlist.id == playlist_id && playlist.video_ids.contains(&video.id))
                                 .map(|playlist| (playlist.id.clone(), playlist.name.clone()))
                         })
                     });
-                    let is_queued = app_state.with_library(|library| library.queue.iter().any(|id| id == &video.id));
+                    let is_queued = app_state.with_viewer(|viewer| viewer.queue.iter().any(|id| id == &video.id));
                     let is_watched = video.watched;
                     rsx! {
                         Stack { gap: Space::Md,
@@ -126,7 +126,7 @@ pub fn AppOverlays() -> Element {
                                     start: rsx! { Check { size: 18 } },
                                     label: if is_watched { "Mark unwatched" } else { "Mark watched" },
                                     onclick: move |_| {
-                                        app_state.mark_watched(&watched_id, !is_watched);
+                                        app_state.mark_watched(&watched_video, !is_watched);
                                         app_state.video_actions_open.set(false);
                                         app_state.show_toast(
                                             if is_watched { "Marked unwatched" } else { "Marked watched" },
@@ -169,8 +169,9 @@ pub fn AppOverlays() -> Element {
                     Text { tone: TextTone::Secondary, class: "line-clamp-2", "{video.title}" }
                 }
                 List { variant: ListVariant::Raised, lines: ListLines::Inset,
-                    for playlist in app_state.with_library(|library| library.playlists.clone()) {
+                    for playlist in app_state.with_viewer(|viewer| viewer.playlists.clone()) {
                         {
+                            let picked = target.clone();
                             let video_id = target.as_ref().map(|video| video.id.clone()).unwrap_or_default();
                             let playlist_id = playlist.id.clone();
                             let playlist_name = playlist.name.clone();
@@ -186,7 +187,7 @@ pub fn AppOverlays() -> Element {
                                             if app_state.remove_from_playlist(&video_id, &playlist_id) {
                                                 app_state.show_toast(format!("Removed from {playlist_name}"), Color::Neutral);
                                             }
-                                        } else if let Some(saved) = app_state.add_to_playlist(&video_id, &playlist_id) {
+                                        } else if let Some(saved) = picked.as_ref().and_then(|video| app_state.add_to_playlist(video, &playlist_id)) {
                                             match saved {
                                                 PlaylistSave::Saved(name) => {
                                                     app_state.show_toast(format!("Added to {name}"), Color::Success)
@@ -234,7 +235,7 @@ pub fn AppOverlays() -> Element {
                         let name = new_playlist_name().trim().to_string();
                         let Some(video) = target.as_ref() else { return; };
                         let playlist_id = app_state.create_playlist(name.clone());
-                        let _ = app_state.add_to_playlist(&video.id, &playlist_id);
+                        let _ = app_state.add_to_playlist(video, &playlist_id);
                         create_playlist_open.set(false);
                         app_state.playlist_picker_open.set(false);
                         app_state.show_toast(format!("Created {name} and saved video"), Color::Success);

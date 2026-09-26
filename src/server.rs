@@ -1,10 +1,9 @@
 use crate::models::{
     CaptionTrack, Channel, ChannelDetails, ChannelMediaPage, ChannelMediaTab, CommentsPage,
-    FeedRefreshResult, HistoryEntry, LibrarySnapshot, LibraryUserState, PlaybackByteRange,
-    PlaybackFailure, PlaybackFailureOrigin, PlaybackProtocol, PlaybackSession, PlaybackSource,
-    PlaybackTrack, PlaybackTrackKind, Playlist, SearchResults, SponsorCategory, SponsorSegment,
-    SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoComment, VideoDetails,
-    VideoPreviewFrames, VideoProgress,
+    FeedRefreshResult, HistoryEntry, PlaybackByteRange, PlaybackFailure, PlaybackFailureOrigin,
+    PlaybackProtocol, PlaybackSession, PlaybackSource, PlaybackTrack, PlaybackTrackKind, Playlist,
+    SearchResults, SponsorCategory, SponsorSegment, SubscriptionContent, SubscriptionGroup, Video,
+    VideoChapter, VideoComment, VideoDetails, VideoPreviewFrames, VideoProgress,
 };
 use anyhow::{Context, Result, anyhow};
 use axum::{
@@ -533,13 +532,6 @@ struct DbSubscriptionGroup {
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
-struct DbLibraryState {
-    cache_revision: i64,
-    queue_json: String,
-    history_json: String,
-}
-
-#[derive(Debug, Deserialize, SurrealValue)]
 struct DbVideoDetailCache {
     payload_json: String,
 }
@@ -891,26 +883,6 @@ impl AppServerState {
         Ok(results)
     }
 
-    /// Where this account has reached in each video it has touched.
-    async fn user_progress(&self, owner: &str) -> Result<HashMap<String, DbVideoProgress>> {
-        if owner.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let rows: Vec<DbVideoProgress> = self
-            .db
-            .query(
-                "SELECT video_id, watched, progress_seconds, audio_only FROM video_progress WHERE owner = type::record($owner)",
-            )
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?
-            .take(0)?;
-        Ok(rows
-            .into_iter()
-            .map(|row| (row.video_id.clone(), row))
-            .collect())
-    }
-
     /// Recompute `channel.subscribed` from the per-user table.
     ///
     /// That column is no longer anyone's opinion - it means "someone on this
@@ -940,116 +912,6 @@ impl AppServerState {
         Ok(())
     }
 
-    pub async fn library_snapshot(&self, owner: &str) -> Result<LibrarySnapshot> {
-        let channels: Vec<DbChannel> = self
-            .db
-            .query(
-                "SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel ORDER BY name",
-            )
-            .await?
-            .take(0)?;
-        let videos: Vec<DbVideo> = self
-            .db
-            .query(
-                "SELECT video_id, title, channel_id, channel_name, thumbnail_url, published_at, published_sort, duration_seconds, view_count, is_live, is_short, progress_seconds, watched, audio_only FROM video ORDER BY published_sort DESC",
-            )
-            .await?
-            .take(0)?;
-        // Playlists, groups and the queue/history blob belong to one account.
-        // The channel and video rows above do not: they are YouTube's facts,
-        // and two accounts on one server should not fetch and store the same
-        // upload twice.
-        // An empty owner is the shared catalog on its own, for the two paths
-        // with no viewer to speak for: the subscription poller and WebSub
-        // ingest. They want channel and video rows and nothing else.
-        //
-        // The guard is load-bearing rather than tidy: `type::record("")` is a
-        // runtime error ("Found  for the Record ID but this is not a valid
-        // table name"), so without it every poll fails.
-        let (playlists, subscription_groups, states) = if owner.is_empty() {
-            (Vec::new(), Vec::new(), Vec::new())
-        } else {
-            let playlists: Vec<DbPlaylist> = self
-                .db
-                .query("SELECT playlist_id, name, video_ids FROM playlist WHERE owner = type::record($owner) ORDER BY name")
-                .bind(("owner", owner.to_string()))
-                .await?
-                .check()?
-                .take(0)?;
-            let subscription_groups: Vec<DbSubscriptionGroup> = self
-                .db
-                .query("SELECT group_id, name, channel_ids FROM subscription_group WHERE owner = type::record($owner) ORDER BY name")
-                .bind(("owner", owner.to_string()))
-                .await?
-                .check()?
-                .take(0)?;
-            let states: Vec<DbLibraryState> = self
-                .db
-                .query("SELECT cache_revision, queue_json, history_json FROM library_state WHERE owner = type::record($owner) LIMIT 1")
-                .bind(("owner", owner.to_string()))
-                .await?
-                .check()?
-                .take(0)?;
-            (playlists, subscription_groups, states)
-        };
-        let state = states.into_iter().next();
-        let queue = state
-            .as_ref()
-            .and_then(|state| serde_json::from_str(&state.queue_json).ok())
-            .unwrap_or_default();
-        let history: Vec<HistoryEntry> = state
-            .as_ref()
-            .and_then(|state| serde_json::from_str(&state.history_json).ok())
-            .unwrap_or_default();
-
-        // The shared rows carry whatever the last writer left in their
-        // per-user columns, which for a second account is somebody else's
-        // history. Overlay this account's own rows over them, and default the
-        // rest to untouched rather than inheriting.
-        let subscriptions = self.user_subscriptions(owner).await?;
-        let progress = self.user_progress(owner).await?;
-
-        let mut videos = videos.into_iter().map(Into::into).collect::<Vec<Video>>();
-        for video in &mut videos {
-            match progress.get(&video.id) {
-                Some(row) => {
-                    video.watched = row.watched;
-                    video.progress_seconds = row.progress_seconds.max(0) as u64;
-                    video.audio_only = row.audio_only;
-                }
-                None => {
-                    video.watched = false;
-                    video.progress_seconds = 0;
-                    video.audio_only = false;
-                }
-            }
-        }
-        videos.sort_by_key(|video| std::cmp::Reverse(video_published_epoch(&video.published_at)));
-
-        let mut channels = channels.into_iter().map(Channel::from).collect::<Vec<_>>();
-        for channel in &mut channels {
-            let (subscribed, content) = subscriptions
-                .get(&channel.id)
-                .copied()
-                .unwrap_or((false, SubscriptionContent::default()));
-            channel.subscribed = subscribed;
-            channel.subscription_content = content;
-        }
-
-        Ok(LibrarySnapshot {
-            channels,
-            videos,
-            playlists: playlists.into_iter().map(Into::into).collect(),
-            subscription_groups: subscription_groups.into_iter().map(Into::into).collect(),
-            queue,
-            history,
-            last_synced_at: Some("Just now".into()),
-            cache_revision: state
-                .map(|state| state.cache_revision.max(0) as u64)
-                .unwrap_or_default(),
-        })
-    }
-
     async fn reachable_ytdlp_po_provider_url(&self) -> Option<&str> {
         let provider_url = self.ytdlp_po_provider_url.as_deref()?;
         let ping_url = format!("{provider_url}/ping");
@@ -1075,60 +937,6 @@ impl AppServerState {
                 None
             }
         }
-    }
-
-    /// Replace this account's subscription rows, and report which channels
-    /// changed hands.
-    ///
-    /// One delete plus one bulk insert rather than a statement per channel: a
-    /// full sync carries every subscription a viewer has, which is hundreds of
-    /// rows, and a query each would be hundreds of round trips.
-    async fn write_user_subscriptions(
-        &self,
-        owner: &str,
-        incoming: &[(String, bool, SubscriptionContent)],
-    ) -> Result<Vec<String>> {
-        let prior = self.user_subscriptions(owner).await?;
-        // A channel counts as changed when this account's answer moved. An
-        // unknown channel only counts when the answer is yes, so a first sync
-        // does not report every channel the viewer has ever declined.
-        let changed = incoming
-            .iter()
-            .filter(|(channel_id, subscribed, _)| {
-                prior
-                    .get(channel_id)
-                    .map(|(was, _)| was != subscribed)
-                    .unwrap_or(*subscribed)
-            })
-            .map(|(channel_id, _, _)| channel_id.clone())
-            .collect::<Vec<_>>();
-
-        self.db
-            .query("DELETE user_subscription WHERE owner = type::record($owner)")
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?;
-        if !incoming.is_empty() {
-            let rows = incoming
-                .iter()
-                .map(|(channel_id, subscribed, content)| {
-                    serde_json::json!({
-                        "owner": owner,
-                        "channel_id": channel_id,
-                        "subscribed": subscribed,
-                        "content": content.as_storage(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            self.db
-                .query(
-                    "INSERT INTO user_subscription (SELECT channel_id, subscribed, content, type::record(owner) AS owner, time::now() AS updated_at FROM $rows)",
-                )
-                .bind(("rows", rows))
-                .await?
-                .check()?;
-        }
-        Ok(changed)
     }
 
     /// Merge this account's watch progress for the videos it sent.
@@ -1158,129 +966,6 @@ impl AppServerState {
                 .check()?;
         }
         Ok(())
-    }
-
-    /// Replace this account's queue, history and revision marker.
-    async fn write_library_state(
-        &self,
-        owner: &str,
-        cache_revision: u64,
-        queue: &[String],
-        history: &[HistoryEntry],
-    ) -> Result<()> {
-        // Delete then create, under the caller's sync lock. The unique index on
-        // the owner makes a duplicate impossible rather than merely unlikely.
-        self.db
-            .query("DELETE library_state WHERE owner = type::record($owner)")
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?;
-        self.db
-            .query(
-                r#"CREATE library_state SET
-                    owner = type::record($owner),
-                    cache_revision = $cache_revision,
-                    queue_json = $queue_json,
-                    history_json = $history_json,
-                    updated_at = time::now()"#,
-            )
-            .bind(("owner", owner.to_string()))
-            .bind(("cache_revision", cache_revision as i64))
-            .bind(("queue_json", serde_json::to_string(queue)?))
-            .bind(("history_json", serde_json::to_string(history)?))
-            .await?
-            .check()?;
-        Ok(())
-    }
-
-    pub async fn sync_library(
-        &self,
-        owner: &str,
-        snapshot: LibrarySnapshot,
-    ) -> Result<LibrarySnapshot> {
-        let guard = self.sync_lock.lock().await;
-        let server_revision = self.library_revision(owner).await?;
-        if snapshot.cache_revision <= server_revision {
-            return self.library_snapshot(owner).await;
-        }
-
-        // Merged, not overwritten. The client's copy of a channel it imported is
-        // still the stub from the export file, and writing it over the row would
-        // blank the avatar and subscriber count the server has since fetched.
-        for channel in &snapshot.channels {
-            self.upsert_discovered_channel(channel).await?;
-        }
-        for video in &snapshot.videos {
-            self.upsert_video(video, video_sort_key(video)).await?;
-        }
-        let subscriptions = snapshot
-            .channels
-            .iter()
-            .map(|channel| {
-                (
-                    channel.id.clone(),
-                    channel.subscribed,
-                    channel.subscription_content,
-                )
-            })
-            .collect::<Vec<_>>();
-        let changed_ids = self.write_user_subscriptions(owner, &subscriptions).await?;
-        self.write_user_progress(owner, &LibraryUserState::from(&snapshot).progress)
-            .await?;
-
-        for playlist in &snapshot.playlists {
-            self.upsert_playlist(owner, playlist).await?;
-        }
-        let playlist_ids = snapshot
-            .playlists
-            .iter()
-            .map(|playlist| playlist.id.clone())
-            .collect::<Vec<_>>();
-        // Scoped to the owner: without it, one account saving a playlist would
-        // delete every other account's.
-        self.db
-            .query("DELETE playlist WHERE owner = type::record($owner) AND playlist_id NOT IN $playlist_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("playlist_ids", playlist_ids))
-            .await?
-            .check()?;
-        for group in &snapshot.subscription_groups {
-            self.upsert_subscription_group(owner, group).await?;
-        }
-        let group_ids = snapshot
-            .subscription_groups
-            .iter()
-            .map(|group| group.id.clone())
-            .collect::<Vec<_>>();
-        self.db
-            .query("DELETE subscription_group WHERE owner = type::record($owner) AND group_id NOT IN $group_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("group_ids", group_ids))
-            .await?
-            .check()?;
-
-        self.write_library_state(
-            owner,
-            snapshot.cache_revision,
-            &snapshot.queue,
-            &snapshot.history,
-        )
-        .await?;
-
-        self.refresh_channel_interest(&changed_ids).await?;
-
-        drop(guard);
-
-        let changed_channels = snapshot
-            .channels
-            .iter()
-            .filter(|channel| changed_ids.contains(&channel.id))
-            .filter(|channel| channel.id.starts_with("UC") && !channel.id.starts_with("UC-tawny"))
-            .cloned()
-            .collect::<Vec<_>>();
-        self.spawn_subscription_changes(changed_channels);
-
-        self.library_snapshot(owner).await
     }
 
     /// Hand newly changed channels to the WebSub and feed machinery.
@@ -1318,102 +1003,6 @@ impl AppServerState {
                 state.process_subscription_changes(channels).await;
             }
         });
-    }
-
-    /// Apply the client-owned half of the library.
-    ///
-    /// The counterpart to [`Self::sync_library`] for the common case: a single
-    /// mutation such as marking a video watched. It touches only rows the client
-    /// can actually change, where the full snapshot path rewrote every cached
-    /// channel and video on every keystroke-sized edit.
-    pub async fn apply_user_state(&self, owner: &str, user: LibraryUserState) -> Result<u64> {
-        let guard = self.sync_lock.lock().await;
-        let server_revision = self.library_revision(owner).await?;
-        if user.cache_revision <= server_revision {
-            return Ok(server_revision);
-        }
-
-        // Nothing here touches the shared catalog any more. Subscriptions and
-        // watch progress used to be written straight onto the `channel` and
-        // `video` rows, which meant every account on an instance shared one
-        // set of subscriptions and one viewing history; both now live in
-        // tables keyed by owner.
-        let subscriptions = user
-            .subscriptions
-            .iter()
-            .map(|subscription| {
-                (
-                    subscription.channel_id.clone(),
-                    subscription.subscribed,
-                    subscription.content,
-                )
-            })
-            .collect::<Vec<_>>();
-        let changed_ids = self.write_user_subscriptions(owner, &subscriptions).await?;
-        self.write_user_progress(owner, &user.progress).await?;
-
-        for playlist in &user.playlists {
-            self.upsert_playlist(owner, playlist).await?;
-        }
-        let playlist_ids = user
-            .playlists
-            .iter()
-            .map(|playlist| playlist.id.clone())
-            .collect::<Vec<_>>();
-        // Scoped to the owner. Without it, one account saving a playlist would
-        // delete every other account's.
-        self.db
-            .query("DELETE playlist WHERE owner = type::record($owner) AND playlist_id NOT IN $playlist_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("playlist_ids", playlist_ids))
-            .await?
-            .check()?;
-
-        for group in &user.subscription_groups {
-            self.upsert_subscription_group(owner, group).await?;
-        }
-        let group_ids = user
-            .subscription_groups
-            .iter()
-            .map(|group| group.id.clone())
-            .collect::<Vec<_>>();
-        self.db
-            .query("DELETE subscription_group WHERE owner = type::record($owner) AND group_id NOT IN $group_ids")
-            .bind(("owner", owner.to_string()))
-            .bind(("group_ids", group_ids))
-            .await?
-            .check()?;
-
-        self.write_library_state(owner, user.cache_revision, &user.queue, &user.history)
-            .await?;
-
-        // The derived flag on `channel` has to catch up before anything reads
-        // it to decide what to poll.
-        self.refresh_channel_interest(&changed_ids).await?;
-
-        drop(guard);
-
-        // Subscribing still has to kick off WebSub and a first feed fetch, and
-        // that side of it needs the full channel records - re-read, so they
-        // carry the instance-wide flag rather than this account's answer.
-        if !changed_ids.is_empty() {
-            let changed_channels: Vec<DbChannel> = self
-                .db
-                .query("SELECT channel_id, name, handle, avatar_url, subscriber_count, subscribed, subscription_content, description, banner_url FROM channel WHERE channel_id IN $ids")
-                .bind(("ids", changed_ids))
-                .await?
-                .take(0)?;
-            let changed_channels = changed_channels
-                .into_iter()
-                .map(Channel::from)
-                .filter(|channel| {
-                    channel.id.starts_with("UC") && !channel.id.starts_with("UC-tawny")
-                })
-                .collect::<Vec<_>>();
-            self.spawn_subscription_changes(changed_channels);
-        }
-
-        Ok(user.cache_revision)
     }
 
     async fn process_subscription_changes(&self, changed_channels: Vec<Channel>) {
@@ -1462,23 +1051,6 @@ impl AppServerState {
                 }
             };
         let _ = tokio::join!(websub_job, feed_job);
-    }
-
-    async fn library_revision(&self, owner: &str) -> Result<u64> {
-        if owner.is_empty() {
-            return Ok(0);
-        }
-        let states: Vec<DbLibraryState> = self
-            .db
-            .query("SELECT cache_revision, queue_json, history_json FROM library_state WHERE owner = type::record($owner) LIMIT 1")
-            .bind(("owner", owner.to_string()))
-            .await?
-            .check()?
-            .take(0)?;
-        Ok(states
-            .first()
-            .map(|state| state.cache_revision.max(0) as u64)
-            .unwrap_or_default())
     }
 
     async fn register_proxy_target(
@@ -2154,7 +1726,7 @@ impl AppServerState {
         if !existing.is_empty() {
             return Ok(());
         }
-        let demo = LibrarySnapshot::demo();
+        let demo = crate::models::DemoLibrary::demo();
         for channel in &demo.channels {
             self.upsert_channel(channel).await?;
         }
@@ -2583,10 +2155,13 @@ impl AppServerState {
             None => (None, Vec::new()),
         };
 
-        if let Ok(details) = self
+        if let Ok(mut details) = self
             .fetch_direct_video_details(video_id, local_video.clone(), local_channel.clone())
             .await
         {
+            self.keep_finer_dates(std::slice::from_mut(&mut details.video))
+                .await?;
+            self.keep_finer_dates(&mut details.related_videos).await?;
             if let Some(channel) = &details.channel {
                 self.upsert_discovered_channel(channel).await?;
             }
@@ -5844,7 +5419,7 @@ pub fn spawn_subscription_poller(state: AppServerState) {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{Playlist, SubscriptionGroup, playlist_queue_entry, queued_playlist_id};
+    use crate::models::{playlist_queue_entry, queued_playlist_id};
 
     use super::DbVideo;
     use super::{
@@ -5896,6 +5471,31 @@ mod tests {
             .await
             .expect("mint a guest for the test")
             .id
+    }
+
+    /// The seeded demo channels, as the catalog holds them.
+    fn demo_channels() -> Vec<crate::models::Channel> {
+        crate::models::DemoLibrary::demo().channels
+    }
+
+    /// Set whether `owner` follows `channel`.
+    async fn set_follow(
+        state: &AppServerState,
+        owner: &str,
+        channel: &crate::models::Channel,
+        subscribed: bool,
+    ) {
+        state
+            .set_subscriptions(
+                owner,
+                vec![crate::models::SubscriptionChange {
+                    channel: channel.clone(),
+                    subscribed,
+                    content: crate::models::SubscriptionContent::All,
+                }],
+            )
+            .await
+            .expect("set a follow for the test");
     }
 
     #[tokio::test]
@@ -6205,8 +5805,22 @@ mod tests {
     async fn serves_video_details_for_a_seeded_video() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video_id = snapshot.videos[0].id.clone();
+        // A demo video whose channel has others, so the offline fallback has
+        // related videos to offer.
+        let demo = crate::models::DemoLibrary::demo();
+        let video_id = demo
+            .videos
+            .iter()
+            .find(|video| {
+                demo.videos
+                    .iter()
+                    .filter(|other| other.channel_id == video.channel_id)
+                    .count()
+                    > 1
+            })
+            .expect("a demo channel with two videos")
+            .id
+            .clone();
         let details = state.video_details(&owner, &video_id).await.unwrap();
         assert_eq!(details.video.id, video_id);
         // Seeded videos use real YouTube ids, so direct extraction may or may
@@ -6315,21 +5929,16 @@ mod tests {
     async fn visible_duration_hydration_is_scoped_to_the_viewers_feed() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video = snapshot
+        let video = crate::models::DemoLibrary::demo()
             .videos
-            .iter()
+            .into_iter()
             .find(|video| video.duration_seconds > 0)
-            .cloned()
             .expect("seeded catalog has a measured video");
-        snapshot
-            .channels
-            .iter_mut()
+        let channel = demo_channels()
+            .into_iter()
             .find(|channel| channel.id == video.channel_id)
-            .expect("video channel is cached")
-            .subscribed = true;
-        snapshot.cache_revision += 1;
-        state.sync_library(&owner, snapshot).await.unwrap();
+            .expect("video channel is cached");
+        set_follow(&state, &owner, &channel, true).await;
 
         let resolved = state
             .hydrate_video_durations(
@@ -6360,23 +5969,20 @@ mod tests {
     async fn a_saved_video_is_hydrated_without_following_its_channel() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video = snapshot
+        let video = crate::models::DemoLibrary::demo()
             .videos
-            .iter()
+            .into_iter()
             .find(|video| video.duration_seconds > 0)
-            .cloned()
             .expect("seeded catalog has a measured video");
-        for channel in &mut snapshot.channels {
-            channel.subscribed = false;
-        }
-        snapshot.playlists.push(Playlist {
-            id: "saved-from-elsewhere".into(),
-            name: "Saved".into(),
-            video_ids: vec![video.id.clone()],
-        });
-        snapshot.cache_revision += 1;
-        state.sync_library(&owner, snapshot).await.unwrap();
+        // Saved to a playlist, without following the channel.
+        state
+            .save_playlist(&owner, "saved-from-elsewhere", "Saved")
+            .await
+            .unwrap();
+        state
+            .set_in_playlist(&owner, "saved-from-elsewhere", &video.id, true)
+            .await
+            .unwrap();
 
         let resolved = state
             .hydrate_video_durations(&owner, vec![video.id.clone()])
@@ -6402,23 +6008,25 @@ mod tests {
     async fn a_queued_playlist_run_survives_a_round_trip() {
         let state = AppServerState::initialize().await.unwrap();
         let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        let video_id = snapshot.videos[0].id.clone();
-        snapshot.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Watch later".into(),
-            video_ids: vec![video_id.clone()],
-        });
-        snapshot.queue = vec![playlist_queue_entry("watch-later"), video_id.clone()];
-        snapshot.cache_revision += 1;
+        let video_id = crate::models::DemoLibrary::demo().videos[0].id.clone();
+        state
+            .save_playlist(&owner, "watch-later", "Watch later")
+            .await
+            .unwrap();
+        state
+            .set_queue(
+                &owner,
+                &[playlist_queue_entry("watch-later"), video_id.clone()],
+            )
+            .await
+            .unwrap();
 
-        let synced = state.sync_library(&owner, snapshot).await.unwrap();
+        let reread = state.viewer(&owner).await.unwrap();
         assert_eq!(
-            synced.queue,
+            reread.queue,
             vec![playlist_queue_entry("watch-later"), video_id],
             "the run marker keeps its place among the queued videos"
         );
-        let reread = state.library_snapshot(&owner).await.unwrap();
         assert_eq!(
             queued_playlist_id(&reread.queue[0]),
             Some("watch-later"),
@@ -6522,51 +6130,6 @@ mod tests {
         assert_eq!(no_provider.origin, PlaybackFailureOrigin::Setup);
     }
 
-    #[tokio::test]
-    async fn syncs_revisioned_library_state() {
-        let state = AppServerState::initialize().await.unwrap();
-        let owner = test_owner(&state).await;
-        let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-        // A new account owns no playlists or groups. The seeded catalog is
-        // shared, but everything personal starts empty and is created by the
-        // client on first run - which is the whole point of the scoping.
-        assert!(snapshot.playlists.is_empty());
-        assert!(snapshot.subscription_groups.is_empty());
-        assert!(!snapshot.videos.is_empty(), "the catalog is still shared");
-
-        let video_id = snapshot.videos[0].id.clone();
-        snapshot.subscription_groups.push(SubscriptionGroup {
-            id: "favorites".into(),
-            name: "Favorites".into(),
-            channel_ids: vec![snapshot.channels[0].id.clone()],
-        });
-        snapshot.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Watch later".into(),
-            video_ids: vec![video_id.clone()],
-        });
-        snapshot.queue.insert(0, video_id.clone());
-        snapshot.videos[0].watched = true;
-        snapshot.videos[0].progress_seconds = snapshot.videos[0].duration_seconds;
-        snapshot.cache_revision += 1;
-
-        let synced = state.sync_library(&owner, snapshot).await.unwrap();
-        assert_eq!(synced.queue.first(), Some(&video_id));
-        assert!(synced.videos.iter().any(|video| video.watched));
-        assert!(
-            synced
-                .subscription_groups
-                .iter()
-                .any(|group| group.name == "Favorites")
-        );
-
-        let mut stale = synced.clone();
-        stale.cache_revision -= 1;
-        stale.queue.clear();
-        let server_wins = state.sync_library(&owner, stale).await.unwrap();
-        assert_eq!(server_wins.queue.first(), Some(&video_id));
-    }
-
     /// The property the whole per-user rewrite exists for.
     ///
     /// Two accounts on one instance share the catalog and nothing else. Before
@@ -6579,38 +6142,38 @@ mod tests {
         let first = test_owner(&state).await;
         let second = test_owner(&state).await;
 
-        let mut mine = state.library_snapshot(&first).await.unwrap();
-        let video_id = mine.videos[0].id.clone();
-        let channel_id = mine.channels[0].id.clone();
-        mine.videos[0].watched = true;
-        mine.videos[0].progress_seconds = 42;
-        mine.channels[0].subscribed = true;
-        mine.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Mine".into(),
-            video_ids: vec![video_id.clone()],
-        });
-        mine.cache_revision += 1;
-        let mine = state.sync_library(&first, mine).await.unwrap();
+        let video_id = crate::models::DemoLibrary::demo().videos[0].id.clone();
+        let channel = demo_channels()[0].clone();
+        set_follow(&state, &first, &channel, true).await;
+        state
+            .save_progress(
+                &first,
+                &[crate::models::VideoProgress {
+                    video_id: video_id.clone(),
+                    watched: true,
+                    progress_seconds: 42,
+                    audio_only: false,
+                }],
+            )
+            .await
+            .unwrap();
+        state
+            .save_playlist(&first, "watch-later", "Mine")
+            .await
+            .unwrap();
+        state
+            .set_in_playlist(&first, "watch-later", &video_id, true)
+            .await
+            .unwrap();
+        state.record_history(&first, &video_id).await.unwrap();
+        state
+            .set_queue(&first, std::slice::from_ref(&video_id))
+            .await
+            .unwrap();
 
-        assert!(mine.videos.iter().any(|video| video.watched));
-        assert!(mine.channels.iter().any(|channel| channel.subscribed));
-        assert_eq!(mine.playlists.len(), 1);
-
-        let theirs = state.library_snapshot(&second).await.unwrap();
+        let theirs = state.viewer(&second).await.unwrap();
         assert!(
-            theirs.videos.iter().all(|video| !video.watched),
-            "watch progress leaked between accounts"
-        );
-        assert!(
-            theirs
-                .videos
-                .iter()
-                .all(|video| video.progress_seconds == 0),
-            "playback position leaked between accounts"
-        );
-        assert!(
-            theirs.channels.iter().all(|channel| !channel.subscribed),
+            theirs.subscriptions.is_empty(),
             "subscriptions leaked between accounts"
         );
         assert!(
@@ -6623,61 +6186,31 @@ mod tests {
         );
         // The catalog is deliberately shared: the same upload must not be
         // fetched and stored twice because two people follow the channel.
-        assert!(theirs.videos.iter().any(|video| video.id == video_id));
-        assert!(
-            theirs
-                .channels
-                .iter()
-                .any(|channel| channel.id == channel_id)
+        let seen = state
+            .videos_by_id(&second, std::slice::from_ref(&video_id))
+            .await
+            .unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(!seen[0].watched, "watch progress leaked between accounts");
+        assert_eq!(
+            seen[0].progress_seconds, 0,
+            "playback position leaked between accounts"
         );
 
-        // The second account can hold the same client-chosen playlist id.
-        let mut ours = theirs;
-        ours.playlists.push(Playlist {
-            id: "watch-later".into(),
-            name: "Theirs".into(),
-            video_ids: Vec::new(),
-        });
-        ours.cache_revision += 1;
-        let ours = state.sync_library(&second, ours).await.unwrap();
+        // The second account can hold the same client-chosen playlist id...
+        state
+            .save_playlist(&second, "watch-later", "Theirs")
+            .await
+            .unwrap();
+        let ours = state.viewer(&second).await.unwrap();
         assert_eq!(ours.playlists.len(), 1);
         assert_eq!(ours.playlists[0].name, "Theirs");
 
         // ...without disturbing the first account's playlist of the same id.
-        let mine_again = state.library_snapshot(&first).await.unwrap();
+        let mine_again = state.viewer(&first).await.unwrap();
         assert_eq!(mine_again.playlists.len(), 1);
         assert_eq!(mine_again.playlists[0].name, "Mine");
-    }
-
-    /// The viewerless path the poller and WebSub ingest take.
-    ///
-    /// Regression test: these call `library_snapshot("")`, and the per-account
-    /// queries inside it bind `type::record($owner)`, which is a *runtime*
-    /// error on an empty string rather than a compile error. Every other test
-    /// passes a real account, so nothing here was exercised until a live poll
-    /// failed with "Found  for the Record ID but this is not a valid table
-    /// name".
-    #[tokio::test]
-    async fn the_catalog_only_snapshot_needs_no_account() {
-        let state = AppServerState::initialize().await.unwrap();
-
-        let catalog = state.library_snapshot("").await.unwrap();
-        assert!(
-            !catalog.videos.is_empty(),
-            "the shared catalog is still read"
-        );
-        assert!(!catalog.channels.is_empty());
-        // Nothing personal belongs to nobody.
-        assert!(catalog.playlists.is_empty());
-        assert!(catalog.subscription_groups.is_empty());
-        assert!(catalog.queue.is_empty());
-        assert!(catalog.history.is_empty());
-        assert_eq!(catalog.cache_revision, 0);
-        assert!(catalog.videos.iter().all(|video| !video.watched));
-        assert!(catalog.channels.iter().all(|channel| !channel.subscribed));
-
-        // And the whole poll, which is what actually broke.
-        state.poll_subscriptions_once().await.unwrap();
+        assert_eq!(mine_again.playlists[0].video_ids, [video_id]);
     }
 
     /// Unsubscribing must not silence a channel other accounts still follow.
@@ -6687,30 +6220,22 @@ mod tests {
         let first = test_owner(&state).await;
         let second = test_owner(&state).await;
 
-        let subscribe = |owner: String, subscribed: bool| {
-            let state = state.clone();
-            async move {
-                let mut snapshot = state.library_snapshot(&owner).await.unwrap();
-                snapshot.channels[0].subscribed = subscribed;
-                snapshot.cache_revision += 1;
-                state.sync_library(&owner, snapshot).await.unwrap()
-            }
-        };
+        let channel = demo_channels()[0].clone();
+        let channel_id = channel.id.clone();
 
-        let first_view = subscribe(first.clone(), true).await;
-        let channel_id = first_view.channels[0].id.clone();
-        subscribe(second.clone(), true).await;
+        set_follow(&state, &first, &channel, true).await;
+        set_follow(&state, &second, &channel, true).await;
         assert!(state.channel_is_subscribed(&channel_id).await.unwrap());
 
         // One leaves; the instance still has a reason to poll.
-        subscribe(first.clone(), false).await;
+        set_follow(&state, &first, &channel, false).await;
         assert!(
             state.channel_is_subscribed(&channel_id).await.unwrap(),
             "the last remaining follower lost their feed"
         );
 
         // Both gone, and only then does the instance stop caring.
-        subscribe(second.clone(), false).await;
+        set_follow(&state, &second, &channel, false).await;
         assert!(!state.channel_is_subscribed(&channel_id).await.unwrap());
     }
 
@@ -6723,17 +6248,15 @@ mod tests {
         let follower = test_owner(&state).await;
         let other = test_owner(&state).await;
 
-        let mut snapshot = state.library_snapshot(&follower).await.unwrap();
-        snapshot.channels[0].subscribed = true;
-        snapshot.cache_revision += 1;
-        let synced = state.sync_library(&follower, snapshot).await.unwrap();
-        let channel = synced.channels[0].clone();
-        let video = synced
+        let channel = demo_channels()[0].clone();
+        set_follow(&state, &follower, &channel, true).await;
+        let demo = crate::models::DemoLibrary::demo();
+        let video = demo
             .videos
             .iter()
             .find(|video| video.channel_id == channel.id)
             .cloned()
-            .unwrap_or_else(|| synced.videos[0].clone());
+            .unwrap_or_else(|| demo.videos[0].clone());
         use crate::models::{Channel, CommentsPage, VideoDetails};
         let cached_with = |subscribed: bool| VideoDetails {
             video: video.clone(),
@@ -6779,12 +6302,9 @@ mod tests {
         let follower = test_owner(&state).await;
         let other = test_owner(&state).await;
 
-        let mut snapshot = state.library_snapshot(&follower).await.unwrap();
-        snapshot.channels[0].subscribed = true;
-        snapshot.cache_revision += 1;
-        let synced = state.sync_library(&follower, snapshot).await.unwrap();
-        let followed_channel = synced.channels[0].clone();
-        let unfollowed_channel = synced.channels[1].clone();
+        let followed_channel = demo_channels()[0].clone();
+        let unfollowed_channel = demo_channels()[1].clone();
+        set_follow(&state, &follower, &followed_channel, true).await;
         // As the shared cache might hold them: flags from the instance, or
         // from whichever account searched first.
         let cached = SearchResults {

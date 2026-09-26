@@ -5,6 +5,7 @@ mod auth;
 mod cache;
 mod components;
 mod config;
+mod data_change;
 #[cfg(feature = "server")]
 mod database;
 mod models;
@@ -71,13 +72,7 @@ fn main() {
             )
             .layer(Extension(state.clone()));
 
-        // `sync_library` still carries a whole snapshot; goes with it.
-        const LIBRARY_SYNC_BODY_LIMIT: usize = 64 * 1024 * 1024;
-
         Ok(dioxus::server::router(App)
-            .layer(dioxus::server::axum::extract::DefaultBodyLimit::max(
-                LIBRARY_SYNC_BODY_LIMIT,
-            ))
             .layer(Extension(state))
             .layer(Extension(Arc::clone(&db)))
             .layer(from_fn_with_state(

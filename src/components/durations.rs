@@ -49,26 +49,24 @@ pub fn use_duration_hydration(candidates: Vec<String>) {
     let app_state = use_context::<AppState>();
     let mut requested = use_signal(HashSet::<String>::new);
 
-    use_effect(move || {
-        // Subscribes this effect to library changes, so a completed batch can
-        // discover rows that became visible while it was in flight - after a
-        // filter change, a sort, or a Load more.
-        drop(app_state.library.read());
-        let already_requested = requested.read();
-        let pending = candidates
-            .iter()
-            .filter(|video_id| !already_requested.contains(*video_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        drop(already_requested);
+    // Reruns whenever the candidates change: a filter change, the next page.
+    use_effect(use_reactive!(|candidates| {
+        let pending = {
+            let already_requested = requested.peek();
+            candidates
+                .iter()
+                .filter(|video_id| !already_requested.contains(*video_id))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
         if pending.is_empty() {
             return;
         }
         requested.write().extend(pending.iter().cloned());
         spawn(async move {
             if let Ok(videos) = hydrate_video_durations(pending).await {
-                app_state.cache_feed_metadata(videos);
+                app_state.merge_video_metadata(videos);
             }
         });
-    });
+    }));
 }

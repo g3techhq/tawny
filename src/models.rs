@@ -48,16 +48,6 @@ impl SubscriptionContent {
             Self::Shorts => "Shorts only",
         }
     }
-
-    /// Livestreams follow the long-form side: they are the channel's "not a
-    /// Short" output, so a Shorts-only subscription drops them too.
-    pub fn accepts(self, is_short: bool) -> bool {
-        match self {
-            Self::All => true,
-            Self::Videos => !is_short,
-            Self::Shorts => is_short,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, SurrealValue)]
@@ -77,6 +67,7 @@ pub struct Channel {
 }
 
 impl Channel {
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     /// Merge metadata discovered by another YouTube surface without letting a
     /// sparse search result erase the richer channel record already cached.
     /// Subscription state is local state and is therefore never replaced.
@@ -112,6 +103,7 @@ impl Channel {
     }
 }
 
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
 fn compact_count_value(value: &str) -> Option<f64> {
     let trimmed = value.trim();
     let numeric = trimmed
@@ -289,6 +281,7 @@ impl Video {
         0
     }
 
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     /// How exactly `published_at` pins the upload down: 3 for a timestamp, 2 for
     /// a calendar date, 1 for relative text ("3 days ago"), 0 for nothing usable.
     fn publish_precision(&self) -> u8 {
@@ -307,6 +300,7 @@ impl Video {
         if self.published_epoch() != 0 { 1 } else { 0 }
     }
 
+    #[cfg_attr(not(feature = "server"), allow(dead_code))]
     /// Keep `previous`'s publish date when it is more exact than this one.
     ///
     /// A video's date does not change, but the sources describing it do: the
@@ -599,16 +593,6 @@ impl FeedFilter {
             Self::Videos => "Videos",
             Self::Shorts => "Shorts",
             Self::Live => "Live",
-        }
-    }
-
-    /// Whether a video belongs under this filter.
-    pub fn accepts(self, video: &Video) -> bool {
-        match self {
-            Self::All => true,
-            Self::Videos => !video.is_live && !video.is_short,
-            Self::Shorts => video.is_short && !video.is_live,
-            Self::Live => video.is_live,
         }
     }
 }
@@ -1141,36 +1125,7 @@ mod settings_tests {
     }
 }
 
-/// The half of the library the client actually owns.
-///
-/// Videos and channels are server-owned: every one the client holds arrived in
-/// a server response, and the server persisted it *before* returning it. Echoing
-/// them back made a routine "mark watched" a 4.3 MB upload and ~11,900 redundant
-/// database upserts. This carries only what the server cannot re-derive.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct LibraryUserState {
-    pub cache_revision: u64,
-    pub subscriptions: Vec<SubscriptionState>,
-    pub playlists: Vec<Playlist>,
-    #[serde(default)]
-    pub subscription_groups: Vec<SubscriptionGroup>,
-    #[serde(default)]
-    pub queue: Vec<String>,
-    #[serde(default)]
-    pub history: Vec<HistoryEntry>,
-    /// Only videos the viewer has actually touched, not the whole cache.
-    #[serde(default)]
-    pub progress: Vec<VideoProgress>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubscriptionState {
-    pub channel_id: String,
-    pub subscribed: bool,
-    #[serde(default)]
-    pub content: SubscriptionContent,
-}
-
+/// Where this viewer has reached in one video, sent by `save_progress`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoProgress {
     pub video_id: String,
@@ -1180,59 +1135,23 @@ pub struct VideoProgress {
     pub audio_only: bool,
 }
 
-impl From<&LibrarySnapshot> for LibraryUserState {
-    fn from(snapshot: &LibrarySnapshot) -> Self {
-        Self {
-            cache_revision: snapshot.cache_revision,
-            // Subscription rows are one flag and one enum each, so all of them
-            // together stay small even with several hundred channels.
-            subscriptions: snapshot
-                .channels
-                .iter()
-                .map(|channel| SubscriptionState {
-                    channel_id: channel.id.clone(),
-                    subscribed: channel.subscribed,
-                    content: channel.subscription_content,
-                })
-                .collect(),
-            playlists: snapshot.playlists.clone(),
-            subscription_groups: snapshot.subscription_groups.clone(),
-            queue: snapshot.queue.clone(),
-            history: snapshot.history.clone(),
-            progress: snapshot
-                .videos
-                .iter()
-                .filter(|video| video.watched || video.progress_seconds > 0 || video.audio_only)
-                .map(|video| VideoProgress {
-                    video_id: video.id.clone(),
-                    watched: video.watched,
-                    progress_seconds: video.progress_seconds,
-                    audio_only: video.audio_only,
-                })
-                .collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LibrarySnapshot {
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+/// What a new account starts with: a few real channels and videos, so the
+/// feed is not empty on first launch, and the playlists the default swipes
+/// save to. The server seeds the catalog with it on first start.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DemoLibrary {
     pub channels: Vec<Channel>,
     pub videos: Vec<Video>,
     pub playlists: Vec<Playlist>,
-    #[serde(default)]
     pub subscription_groups: Vec<SubscriptionGroup>,
-    #[serde(default)]
     pub queue: Vec<String>,
-    #[serde(default)]
-    pub history: Vec<HistoryEntry>,
-    pub last_synced_at: Option<String>,
-    pub cache_revision: u64,
 }
 
-/// The demo channels, playlists and groups a new account starts with, so its
-/// feed is not empty and the default swipes have playlists to save to.
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+/// The demo channels, playlists and groups a new account starts with.
 pub fn demo_viewer() -> Viewer {
-    let demo = LibrarySnapshot::demo();
+    let demo = DemoLibrary::demo();
     Viewer {
         subscriptions: demo.channels,
         playlists: demo.playlists,
@@ -1242,7 +1161,8 @@ pub fn demo_viewer() -> Viewer {
     }
 }
 
-impl LibrarySnapshot {
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+impl DemoLibrary {
     pub fn demo() -> Self {
         let channels = vec![
             Channel {
@@ -1427,12 +1347,6 @@ impl LibrarySnapshot {
             playlists,
             subscription_groups,
             queue: vec!["M7lc1UVf-VE".into(), "ysz5S6PUM-U".into()],
-            history: vec![HistoryEntry {
-                video_id: "dQw4w9WgXcQ".into(),
-                played_at: "3 days ago".into(),
-            }],
-            last_synced_at: Some("Just now".into()),
-            cache_revision: 1,
         }
     }
 }
@@ -1648,6 +1562,7 @@ pub struct SubscriptionChange {
 /// How many history entries an account keeps.
 pub const HISTORY_LIMIT: usize = 250;
 
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
 /// How many videos one feed page holds.
 pub const FEED_PAGE_SIZE: usize = 24;
 
@@ -1738,6 +1653,18 @@ impl VideoList for FeedPage {
     fn videos_mut(&mut self) -> Box<dyn Iterator<Item = &mut Video> + '_> {
         Box::new(self.videos.iter_mut())
     }
+}
+
+/// One playlist on the playlists page: its cover and its counts, without the
+/// videos themselves.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistPreview {
+    pub id: String,
+    pub name: String,
+    pub count: usize,
+    pub unwatched: usize,
+    /// The first few videos' thumbnails, in playlist order.
+    pub thumbnails: Vec<String>,
 }
 
 /// A playlist with its videos, in the playlist's own order.

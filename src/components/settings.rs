@@ -101,12 +101,13 @@ fn SwipeSetting(label: String, right: bool) -> Element {
     };
     let action = use_signal(|| stored_action);
     let playlist = use_signal(|| stored_playlist);
-    let playlists = app_state
-        .library()
-        .playlists
-        .iter()
-        .map(|playlist| SelectOption::new(playlist.id.clone(), playlist.name.clone()))
-        .collect::<Vec<_>>();
+    let playlists = app_state.with_viewer(|viewer| {
+        viewer
+            .playlists
+            .iter()
+            .map(|playlist| SelectOption::new(playlist.id.clone(), playlist.name.clone()))
+            .collect::<Vec<_>>()
+    });
 
     rsx! {
         Item {
@@ -421,20 +422,16 @@ fn SubscriptionTransferCard() -> Element {
                             size: ButtonSize::Sm,
                             start: rsx! { Download { size: 16 } },
                             onclick: move |_| {
-                                let library = app_state.library();
-                                let subscribed = library
-                                    .channels
-                                    .iter()
-                                    .filter(|channel| channel.subscribed)
-                                    .count();
+                                let viewer = app_state.viewer.peek().as_ref().and_then(|viewer| viewer.as_ref().ok()).cloned().unwrap_or_default();
+                                let subscribed = viewer.subscriptions.len();
                                 if subscribed == 0 {
                                     app_state.show_toast("No subscriptions to export", Color::Neutral);
                                     return;
                                 }
                                 let contents = export_subscriptions(
                                     format,
-                                    &library.channels,
-                                    &library.subscription_groups,
+                                    &viewer.subscriptions,
+                                    &viewer.subscription_groups,
                                 );
                                 download_text_file(format.file_name(), format.mime_type(), contents);
                                 app_state.show_toast(

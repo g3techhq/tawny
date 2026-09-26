@@ -15,6 +15,7 @@ use dioxus_icons::lucide::{
     Play, RotateCcw, RotateCw, Settings2, Share2, ThumbsDown, ThumbsUp, ToggleLeft, ToggleRight,
     Volume2, VolumeX, X,
 };
+use g3_cache::use_cached;
 use g3_route_transitions::{
     ROUTE_TRANSITION_OVERLAY_REGION_CLASS, animated_back_or_navigate, animated_navigate,
 };
@@ -1082,8 +1083,10 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                         r#type: "button",
                                         class: if audio_only_active { "player-option-button selected" } else { "player-option-button" },
                                         onclick: move |_| {
-                                            let id = audio_only_video_id.clone();
-                                            app_state.set_audio_only(&id, !audio_only_active);
+                                            let active = app_state.active_video.peek().clone();
+                                            if let Some(video) = active.filter(|video| video.id == audio_only_video_id) {
+                                                app_state.set_audio_only(&video, !audio_only_active);
+                                            }
                                         },
                                         if audio_only_active { "On" } else { "Off" }
                                     }
@@ -1714,23 +1717,36 @@ fn VideoDetailInner(id: String) -> Element {
         }
     });
 
-    let details_resource = {
-        let video_id = id.clone();
-        use_resource(move || {
-            let video_id = video_id.clone();
-            async move { get_video_details(video_id).await }
-        })
-    };
-    // Read through a borrow throughout: `AppState::library` clones the whole
-    // snapshot, which held up opening this page for the sake of one video.
+    // Cached per video, so reopening one (or opening it offline) shows its
+    // details at once while they refresh behind it.
+    let details_resource = use_cached(get_video_details, (id.clone(),));
+    // What a card handed over when it was tapped (see `AppState::play`), so
+    // the page has something to show before the details arrive. A peek: the
+    // playing copy changes every second of playback.
+    let local_id = id.clone();
     let cached_video = app_state
-        .with_library(|library| library.videos.iter().find(|video| video.id == id).cloned());
-    // Swapping the cached copy for the remote one re-renders the whole details
-    // body, and opening from the mini player is exactly the case where the
-    // cached copy is already correct. Waiting costs nothing visible: the page
-    // is showing the right video throughout, and 0.6s later it quietly gets the
-    // remote refinements. With nothing cached there is a loading state on
-    // screen instead, and holding *that* back would be worse than the stutter.
+        .active_video
+        .peek()
+        .clone()
+        .filter(|video| video.id == local_id);
+    // Watched, as the button below last set it. The details are fetched once
+    // and never hear that it changed. A memo, so playback ticks don't rerender.
+    let watched_id_for_memo = id.clone();
+    let active_watched = use_memo(move || {
+        app_state
+            .active_video
+            .read()
+            .as_ref()
+            .filter(|video| video.id == watched_id_for_memo)
+            .map(|video| video.watched)
+    });
+    // Swapping the handed-over copy for the remote one re-renders the whole
+    // details body, and opening from the mini player is exactly the case where
+    // the local copy is already correct. Waiting costs nothing visible: the
+    // page is showing the right video throughout, and 0.6s later it quietly
+    // gets the remote refinements. With nothing local there is a loading state
+    // on screen instead, and holding *that* back would be worse than the
+    // stutter.
     let hold_remote_details = cached_video.is_some() && !transition_settled();
     let remote_details = if hold_remote_details {
         None
@@ -1741,21 +1757,16 @@ fn VideoDetailInner(id: String) -> Element {
             .and_then(|result| result.as_ref().ok())
             .cloned()
     };
-    let details_to_cache = details_resource.clone();
     use_effect(move || {
-        // This one always waits. It writes the library, which every subscriber
-        // on this page reads, so landing it mid-morph re-renders the details
-        // body even when `hold_remote_details` kept the swap itself back.
         if !transition_settled() || details_cached() {
             return;
         }
-        let details = details_to_cache
+        let details = details_resource
             .read()
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .cloned();
         if let Some(details) = details.as_ref() {
-            app_state.cache_video_details(details);
             comments.set(details.comments.comments.clone());
             comments_next_page.set(details.comments.next_page.clone());
             comments_initialized.set(true);
@@ -1763,42 +1774,17 @@ fn VideoDetailInner(id: String) -> Element {
         }
     });
 
-    let cached_related = app_state.with_library(|library| {
-        library
-            .videos
-            .iter()
-            .filter(|video| video.id != id)
-            .take(8)
-            .cloned()
-            .collect::<Vec<_>>()
-    });
     let details = remote_details.clone().or_else(|| {
         cached_video
             .clone()
-            .map(|video| local_details(video, cached_related))
+            .map(|video| local_details(video, Vec::new()))
     });
-    let player_details_resource = details_resource.clone();
-    let player_library = app_state.library;
-    let player_video_id = id.clone();
+    let player_details_resource = details_resource;
+    let local_for_player = cached_video.clone();
     use_effect(move || {
-        let local = {
-            let library = player_library.read();
-            library
-                .videos
-                .iter()
-                .find(|video| video.id == player_video_id)
-                .cloned()
-                .map(|video| {
-                    let related = library
-                        .videos
-                        .iter()
-                        .filter(|candidate| candidate.id != player_video_id)
-                        .take(8)
-                        .cloned()
-                        .collect();
-                    local_details(video, related)
-                })
-        };
+        let local = local_for_player
+            .clone()
+            .map(|video| local_details(video, Vec::new()));
         // `set_player_metadata` re-renders the player - its caption `<track>`
         // children come from here - and during a cover transition that player
         // is the element the morph is painting live. So the remote copy waits
@@ -1854,7 +1840,7 @@ fn VideoDetailInner(id: String) -> Element {
                     EmptyState {
                         title: "Video unavailable",
                         color: Color::Danger,
-                        "This video is unavailable from both the local cache and configured source."
+                        "This video could not be loaded from YouTube or the server's cache."
                     }
                 } else {
                     Spinner { center: true }
@@ -1864,33 +1850,10 @@ fn VideoDetailInner(id: String) -> Element {
     };
 
     let video = details.video.clone();
-    let library_channel = app_state.with_library(|library| {
-        library
-            .channels
-            .iter()
-            .find(|channel| channel.id == video.channel_id)
-            .cloned()
-    });
-    let channel = details.channel.clone().or_else(|| library_channel.clone());
-    let related = if details.related_videos.is_empty() {
-        app_state.with_library(|library| {
-            library
-                .videos
-                .iter()
-                .filter(|candidate| candidate.id != video.id)
-                .take(8)
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-    } else {
-        details.related_videos.clone()
-    };
-    let watched_id = video.id.clone();
-    // Read from the library, not the details: the remote copy is fetched once
-    // and never learns that the button below just changed it.
-    let is_watched = cached_video
-        .as_ref()
-        .map_or(video.watched, |cached| cached.watched);
+    let channel = details.channel.clone();
+    let related = details.related_videos.clone();
+    let watched_video = video.clone();
+    let is_watched = active_watched().unwrap_or(video.watched);
     let watched_icon = if is_watched {
         rsx! { EyeOff { size: 17 } }
     } else {
@@ -1899,13 +1862,10 @@ fn VideoDetailInner(id: String) -> Element {
     let playlist_video = video.clone();
     let share_video = video.clone();
     let open_channel_id = video.channel_id.clone();
-    // The library first, for the same reason as `is_watched` above: it is what
+    // The viewer first, for the same reason as `is_watched` above: it is what
     // the button writes, while the details are fetched once and never hear of
     // the change - and they can come from a cache that predates your follow.
-    let is_subscribed = library_channel
-        .as_ref()
-        .or(channel.as_ref())
-        .is_some_and(|channel| channel.subscribed);
+    let is_subscribed = app_state.follows(&video.channel_id);
     let channel_to_toggle = channel.clone();
     let caption_tracks = details.captions.clone();
     let chapters = details.chapters.clone();
@@ -1980,7 +1940,7 @@ fn VideoDetailInner(id: String) -> Element {
                         size: ButtonSize::Sm,
                         start: watched_icon,
                         onclick: move |_| {
-                            app_state.mark_watched(&watched_id, !is_watched);
+                            app_state.mark_watched(&watched_video, !is_watched);
                             app_state.show_toast(
                                 if is_watched { "Marked as unwatched" } else { "Marked as watched" },
                                 Color::Success,

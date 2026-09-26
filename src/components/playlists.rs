@@ -1,17 +1,18 @@
 use crate::{
+    api::{get_playlist, get_playlist_previews},
     app::Route,
-    models::{DurationFilter, PlaylistKind, PlaylistSort, Video},
+    models::{DurationFilter, PlaylistKind, PlaylistSort},
     state::AppState,
 };
 use dioxus::prelude::*;
 use dioxus_icons::lucide::{CheckCheck, ListPlus, Play, Plus, Shuffle, Trash2};
+use g3_cache::use_cached;
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
     Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
     DividerOrientation, EmptyState, Grid, GridColumns, Img, InfiniteScroll, Input, Modal,
-    SegmentButton, SegmentGroup, Shelf, Space, Stack, StackAlign, Text, TextTone,
+    SegmentButton, SegmentGroup, Shelf, Space, Spinner, Stack, StackAlign, Text, TextTone,
 };
-use std::collections::{HashMap, HashSet};
 
 use super::{
     PageHeader, VideoGrid, duration_candidates, use_after_route_transition, use_duration_hydration,
@@ -21,18 +22,6 @@ use super::{
 /// swipe row with an image, and a long playlist built them all before the push
 /// animation could start.
 const PLAYLIST_PAGE_SIZE: usize = 24;
-
-/// The library's videos whose ids are in `wanted`.
-///
-/// Indexing only those, rather than the whole cache, keeps a render from
-/// hashing tens of thousands of videos to find a few dozen.
-fn videos_for<'a>(videos: &'a [Video], wanted: &HashSet<&str>) -> HashMap<&'a str, &'a Video> {
-    videos
-        .iter()
-        .filter(|video| wanted.contains(video.id.as_str()))
-        .map(|video| (video.id.as_str(), video))
-        .collect()
-}
 
 /// Fisher-Yates with a generator of its own.
 ///
@@ -169,40 +158,33 @@ pub fn Playlists() -> Element {
     let mut delete_open = use_signal(|| false);
     // No filters here. The index is a set of covers to pick from, not a list to
     // work through - filtering it hides the playlist you came to open.
-    let rows = app_state.with_library(|library| {
-        let wanted = library
-            .playlists
+    let previews = use_cached(get_playlist_previews, ());
+    let rows = match &*previews.read() {
+        Some(Ok(previews)) => previews
             .iter()
-            .flat_map(|playlist| playlist.video_ids.iter().map(String::as_str))
-            .collect::<HashSet<_>>();
-        let by_id = videos_for(&library.videos, &wanted);
-        library
-            .playlists
-            .iter()
-            .map(|playlist| {
-                let mut unwatched = 0;
-                let mut thumbnails = Vec::new();
-                for id in &playlist.video_ids {
-                    let Some(video) = by_id.get(id.as_str()) else {
-                        continue;
-                    };
-                    if !video.watched {
-                        unwatched += 1;
-                    }
-                    if thumbnails.len() < 3 {
-                        thumbnails.push(video.thumbnail_url.clone());
-                    }
-                }
-                PlaylistRow {
+            .map(|preview| PlaylistRow {
+                id: preview.id.clone(),
+                name: preview.name.clone(),
+                count: preview.count,
+                unwatched: preview.unwatched,
+                thumbnails: preview.thumbnails.clone(),
+            })
+            .collect::<Vec<_>>(),
+        // Before the covers arrive, the names are already known.
+        _ => app_state.with_viewer(|viewer| {
+            viewer
+                .playlists
+                .iter()
+                .map(|playlist| PlaylistRow {
                     id: playlist.id.clone(),
                     name: playlist.name.clone(),
                     count: playlist.video_ids.len(),
-                    unwatched,
-                    thumbnails,
-                }
-            })
-            .collect::<Vec<_>>()
-    });
+                    unwatched: playlist.video_ids.len(),
+                    thumbnails: Vec::new(),
+                })
+                .collect::<Vec<_>>()
+        }),
+    };
     let delete_name = delete_target()
         .map(|(_, name)| name)
         .unwrap_or_else(|| "This playlist".into());
@@ -331,33 +313,14 @@ pub fn PlaylistDetail(id: String) -> Element {
         }
     });
 
-    // Resolved through a borrow, and through a lookup rather than a scan per
-    // entry: a playlist of fifty videos was walking the whole cache fifty times
-    // on every render.
-    let (playlist, mut videos) = app_state.with_library(|library| {
-        let playlist = library
-            .playlists
-            .iter()
-            .find(|playlist| playlist.id == id)
-            .cloned();
-        let videos = playlist
-            .as_ref()
-            .map(|playlist| {
-                let wanted = playlist
-                    .video_ids
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<HashSet<_>>();
-                let by_id = videos_for(&library.videos, &wanted);
-                playlist
-                    .video_ids
-                    .iter()
-                    .filter_map(|id| by_id.get(id.as_str()).map(|video| (*video).clone()))
-                    .collect::<Vec<Video>>()
-            })
-            .unwrap_or_default();
-        (playlist, videos)
-    });
+    // Shares its cache entry with a run of this playlist, so an edit here is
+    // what the run walks next.
+    let contents = use_cached(get_playlist, (id.clone(),));
+    let (playlist, mut videos) = match &*contents.read() {
+        Some(Ok(Some(found))) => (Some(found.playlist.clone()), found.videos.clone()),
+        _ => (None, Vec::new()),
+    };
+    let loading = contents.read().is_none();
 
     // Ahead of the early return below, because a hook has to run on every
     // render of this component, and ahead of the filters, because
@@ -384,10 +347,14 @@ pub fn PlaylistDetail(id: String) -> Element {
         return rsx! {
             PageHeader { title: "Playlist".to_string(), back_to: Route::Playlists {} }
             Content {
+                if loading {
+                    Spinner { center: true }
+                } else {
                 EmptyState {
                     title: "Playlist not found",
                     icon: rsx! { ListPlus { size: 40 } },
-                    "This playlist is not in the local cache."
+                    "It may have been deleted, or be on another account."
+                }
                 }
             }
         };
@@ -548,13 +515,8 @@ pub fn PlaylistDetail(id: String) -> Element {
                             color: Color::Neutral,
                             start: rsx! { CheckCheck { size: 15 } },
                             onclick: move |_| {
-                                let removed = app_state.remove_watched_from_playlist(&clear_id);
-                                if removed > 0 {
-                                    app_state.show_toast(
-                                        format!("Removed {removed} watched video{}", if removed == 1 { "" } else { "s" }),
-                                        Color::Success,
-                                    );
-                                }
+                                // Toasts the count once the server has answered.
+                                app_state.remove_watched_from_playlist(&clear_id);
                             },
                             "Remove watched"
                         }

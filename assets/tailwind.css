@@ -318,9 +318,6 @@
   .w-28 {
     width: calc(var(--spacing) * 28);
   }
-  .w-72 {
-    width: calc(var(--spacing) * 72);
-  }
   .min-w-0 {
     min-width: calc(var(--spacing) * 0);
   }
