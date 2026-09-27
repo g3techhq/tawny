@@ -519,7 +519,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // back a moment after the first render, so a copy would be the default
     // and a reload would forget the choice.
     let mut settings_for_theater = app_state.settings;
-    let theater_mode = app_state.settings().theater_mode;
+    let theater_mode = app_state.settings.read().theater_mode;
     let mut playback_attempt = use_signal(|| 0_u8);
     // The privacy-enhanced iframe is a manual escape hatch, never an automatic
     // one. Silently swapping to it hides extraction regressions behind a player
@@ -533,8 +533,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // rather than get the same broken answer back. Keyed by video so the flag
     // cannot leak into the next one and cost it the warm session.
     let mut stale_session_for = use_signal(|| None::<String>);
-    let prefer_sabr = app_state.settings().prefer_sabr;
-    let preferred_audio_language = app_state.settings().preferred_audio_language;
+    let prefer_sabr = app_state.settings.read().prefer_sabr;
+    let preferred_audio_language = app_state.settings.read().preferred_audio_language.clone();
 
     // The resolved session is tagged with the video it belongs to. `use_resource`
     // keeps serving its previous value while it re-runs, so without the tag a
@@ -662,7 +662,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // is already playing, without waiting for the next one to start.
     let audio_preference_state = app_state;
     use_effect(move || {
-        let preferred_language = audio_preference_state.settings().preferred_audio_language;
+        let preferred_language = audio_preference_state
+            .settings
+            .read()
+            .preferred_audio_language
+            .clone();
         if audio_preference_state.active_video().is_some() {
             set_player_audio_track(preferred_language);
         }
@@ -672,6 +676,41 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // swipes once a video element exists; before that this is the only thing
     // listening.
     let mut stage_swipe_start = use_signal(|| None::<(f64, f64)>);
+
+    // Metadata belongs to the media element, so a replacement element starts
+    // with none: no chapters, no segments, a bare timeline. Both things that
+    // build a new one - a retried stream, and the audio-only switch, which
+    // remounts the element on purpose - are read here so the metadata follows
+    // it over. The video is read through memos that change only with its id,
+    // its audio-only choice or its kind, not with every progress update.
+    // Ahead of the early return below, like every hook.
+    let synced_video = use_memo(move || {
+        app_state
+            .active_video()
+            .map(|video| (video.id, video.audio_only, video.is_short))
+    });
+    use_effect(move || {
+        let Some((video_id, _audio_only, is_short)) = synced_video() else {
+            return;
+        };
+        let _ = playback_attempt();
+        let settings = app_state.settings.read();
+        let autoplay = settings.autoplay_for(is_short);
+        let sponsor_settings = &settings.sponsor_block;
+        let sponsor_enabled = !sponsor_settings.requested_categories().is_empty();
+        sync_player_metadata(
+            video_id,
+            (app_state.active_captions)(),
+            (app_state.selected_caption)(),
+            (app_state.captions_enabled)(),
+            (app_state.active_chapters)(),
+            (app_state.active_preview_frames)(),
+            timeline_segments(&(app_state.active_sponsor_segments)(), sponsor_settings),
+            sponsor_enabled,
+            sponsor_settings.notify_on_skip,
+            autoplay,
+        )
+    });
 
     let Some(video) = active_video else {
         return rsx! {};
@@ -737,7 +776,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let is_short = video.is_short;
     let errored_video_id = video.id.clone();
     let retried_video_id = video.id.clone();
-    let current_speed = app_state.settings().speed_for(is_short);
+    let current_speed = app_state.settings.read().speed_for(is_short);
     let session_to_attach = playback_session.clone();
     let attach_video_id = video.id.clone();
     // Per-video preference, read here so a change re-attaches the transport with
@@ -752,40 +791,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     };
     let audio_only_active = video.audio_only;
     let audio_only_video_id = video.id.clone();
-    let captions_to_sync = app_state.active_captions;
-    let selected_caption_to_sync = app_state.selected_caption;
-    let captions_enabled_to_sync = app_state.captions_enabled;
-    let chapters_to_sync = app_state.active_chapters;
-    let preview_frames_to_sync = app_state.active_preview_frames;
-    let playback_attempt_to_sync = playback_attempt;
-    let sponsor_segments_to_sync = app_state.active_sponsor_segments;
-    let sponsor_settings_state = app_state;
-    let autoplay_to_sync = app_state.settings().autoplay_for(is_short);
-    // Metadata belongs to the media element, so a replacement element starts
-    // with none: no chapters, no segments, a bare timeline. Both things that
-    // build a new one - a retried stream, and the audio-only switch, which
-    // remounts the element on purpose - are read here so the metadata follows
-    // it over.
-    let audio_only_to_sync = audio_only_active;
-    let sync_video_id = video.id.clone();
-    use_effect(use_reactive!(|audio_only_to_sync| {
-        let _ = audio_only_to_sync;
-        let _ = playback_attempt_to_sync();
-        let sponsor_settings = sponsor_settings_state.settings().sponsor_block;
-        let sponsor_enabled = !sponsor_settings.requested_categories().is_empty();
-        sync_player_metadata(
-            sync_video_id.clone(),
-            captions_to_sync(),
-            selected_caption_to_sync(),
-            captions_enabled_to_sync(),
-            chapters_to_sync(),
-            preview_frames_to_sync(),
-            timeline_segments(&sponsor_segments_to_sync(), &sponsor_settings),
-            sponsor_enabled,
-            sponsor_settings.notify_on_skip,
-            autoplay_to_sync,
-        )
-    }));
     let mut captions_enabled = app_state.captions_enabled;
     let captions_for_toggle = app_state.active_captions;
     let caption_tracks_to_render = (app_state.active_captions)();
@@ -801,8 +806,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         playback_attempt(),
         if video.audio_only { "audio" } else { "av" }
     );
-    let auto_landscape = app_state.settings().auto_landscape_fullscreen;
-    let autoplay_enabled = app_state.settings().autoplay_for(is_short);
+    let auto_landscape = app_state.settings.read().auto_landscape_fullscreen;
+    let autoplay_enabled = app_state.settings.read().autoplay_for(is_short);
     let autoplay_video_id = video.id.clone();
     let mut autoplay_settings = app_state.settings;
     // A run is anything with somewhere to go: a queue ahead, a playlist being

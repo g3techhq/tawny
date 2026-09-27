@@ -29,23 +29,20 @@ const RESULT_PAGE_SIZE: usize = 24;
 pub fn Explore() -> Element {
     let app_state = use_context::<AppState>();
     let search = use_signal(String::new);
-    let filter = (app_state.explore_filter)();
+    let explore_filter = app_state.explore_filter;
     let mut results = use_signal(|| None::<SearchResults>);
     let mut searching = use_signal(|| false);
     let mut visible_count = use_signal(|| RESULT_PAGE_SIZE);
-    let needle = search().trim().to_lowercase();
-    // A new query is a new list: start it at one page again.
-    {
-        let query = needle.clone();
-        use_effect(use_reactive!(|(query, filter)| {
-            let _ = (&query, filter);
-            visible_count.set(RESULT_PAGE_SIZE);
-        }));
-    }
+    let needle = use_memo(move || search().trim().to_lowercase());
+    // A new query or filter is a new list: start it at one page again.
+    use_effect(move || {
+        let _ = (needle(), explore_filter());
+        visible_count.set(RESULT_PAGE_SIZE);
+    });
     // With nothing typed, the page suggests the newest unwatched uploads from
     // what the viewer follows: the first page of an unwatched feed, which is
     // also what type-ahead filters before Enter asks the server.
-    let settings = app_state.settings();
+    let thresholds = (&*app_state.settings.read()).into();
     let suggestions = use_cached(
         get_feed_page,
         (
@@ -54,36 +51,64 @@ pub fn Explore() -> Element {
                 kind: FeedFilter::All,
                 duration: None,
                 hide_watched: true,
-                thresholds: (&settings).into(),
+                thresholds,
             },
             0,
         ),
     );
-    let page = visible_count();
-    let remote =
-        results().filter(|remote| remote.query.trim().eq_ignore_ascii_case(search().trim()));
-    let loading = remote.is_none() && suggestions.read().is_none();
-    let (videos, channels, result_count, remaining) = if let Some(remote) = &remote {
-        paged(
-            remote.videos.iter().collect(),
-            remote.channels.iter().collect(),
-            filter,
-            page,
-        )
-    } else if loading {
-        (Vec::new(), Vec::new(), 0, 0)
-    } else {
-        let suggested = match &*suggestions.read() {
-            Some(Ok(feed)) => feed.videos.clone(),
-            _ => Vec::new(),
+    // What the page shows: the server's results for this query, or the
+    // suggestions matched on the device. Worked out when one of those, the
+    // filter or the page size changes, not on every render (a keystroke
+    // re-renders the search box, not this).
+    let shown = use_memo(move || {
+        let filter = explore_filter();
+        let page = visible_count();
+        let results = results.read();
+        if let Some(remote) = results
+            .as_ref()
+            .filter(|remote| remote.query.trim().eq_ignore_ascii_case(search().trim()))
+        {
+            return paged(
+                remote.videos.iter().collect(),
+                remote.channels.iter().collect(),
+                filter,
+                page,
+            );
+        }
+        let suggestions = suggestions.read();
+        let suggested: &[Video] = match &*suggestions {
+            None => return Shown::loading(),
+            Some(Ok(feed)) => &feed.videos,
+            Some(Err(_)) => &[],
         };
+        let needle = needle.read();
         app_state.with_viewer(|viewer| {
-            let (videos, channels) = local_matches(&suggested, &viewer.subscriptions, &needle);
+            let (videos, channels) = local_matches(suggested, &viewer.subscriptions, &needle);
             paged(videos, channels, filter, page)
         })
-    };
+    });
+    let filter = explore_filter();
     let search_value = search();
-    let next_page = remote.and_then(|results| results.next_page);
+    // The next page of the server's results for what is typed, if there is one.
+    let next_page = move || {
+        results
+            .peek()
+            .as_ref()
+            .filter(|remote| {
+                remote
+                    .query
+                    .trim()
+                    .eq_ignore_ascii_case(search.peek().trim())
+            })
+            .and_then(|remote| remote.next_page.clone())
+    };
+    let has_next_page = results.read().as_ref().is_some_and(|remote| {
+        remote.next_page.is_some() && remote.query.trim().eq_ignore_ascii_case(search().trim())
+    });
+    let (loading, result_count, remaining) = {
+        let shown = shown.read();
+        (shown.loading, shown.result_count, shown.remaining)
+    };
     // Enter runs the remote search; typing filters the cache as it goes.
     let run_search = move |query: String| {
         let query = query.trim().to_string();
@@ -108,9 +133,8 @@ pub fn Explore() -> Element {
             searching.set(false);
         });
     };
-    let has_next_page = next_page.is_some();
     let load_more = move |_| {
-        let Some(token) = next_page.clone() else {
+        let Some(token) = next_page() else {
             return;
         };
         let query = search().trim().to_string();
@@ -167,15 +191,15 @@ pub fn Explore() -> Element {
                     }
                 }
                 Text { tone: TextTone::Secondary,
-                    if needle.is_empty() {
+                    if needle.read().is_empty() {
                         "The newest unwatched uploads from channels you follow"
                     } else {
                         "{result_count} results for “{search_value}”. Press Enter to search online."
                     }
                 }
-                if !channels.is_empty() {
+                if !shown.read().channels.is_empty() {
                     Shelf { title: "Channels", gap: Space::Sm,
-                        for channel in channels {
+                        for channel in shown.read().channels.iter() {
                             {
                                 let id = channel.id.clone();
                                 rsx! {
@@ -195,7 +219,7 @@ pub fn Explore() -> Element {
                 if loading {
                     VideoGridSkeleton { count: 8 }
                 } else {
-                    VideoGrid { videos, empty_message: "No matches yet. Check the source connection or try another search.".to_string() }
+                    VideoGrid { videos: shown.map(|shown| &shown.videos), empty_message: "No matches yet. Check the source connection or try another search.".to_string() }
                 }
                 InfiniteScroll {
                     loading: false,
@@ -253,6 +277,28 @@ fn local_matches<'a>(
     (videos, channels)
 }
 
+/// What the page shows, held in a memo.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Shown {
+    /// Nothing to show yet: no server results and no suggestions.
+    loading: bool,
+    videos: Vec<Video>,
+    channels: Vec<Channel>,
+    /// What the query found, before paging.
+    result_count: usize,
+    /// How many of those are still off the page.
+    remaining: usize,
+}
+
+impl Shown {
+    fn loading() -> Self {
+        Self {
+            loading: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// The first `page` of each list under `filter`, copied out, with the total
 /// the filter left and how many of those are still off the page.
 fn paged(
@@ -260,7 +306,7 @@ fn paged(
     mut channels: Vec<&Channel>,
     filter: ExploreFilter,
     page: usize,
-) -> (Vec<Video>, Vec<Channel>, usize, usize) {
+) -> Shown {
     match filter {
         ExploreFilter::Videos => channels.clear(),
         ExploreFilter::Channels => videos.clear(),
@@ -270,10 +316,11 @@ fn paged(
     // query found rather than how much of it is on screen.
     let result_count = videos.len() + channels.len();
     let remaining = videos.len().saturating_sub(page) + channels.len().saturating_sub(page);
-    (
-        videos.into_iter().take(page).cloned().collect(),
-        channels.into_iter().take(page).cloned().collect(),
+    Shown {
+        loading: false,
+        videos: videos.into_iter().take(page).cloned().collect(),
+        channels: channels.into_iter().take(page).cloned().collect(),
         result_count,
         remaining,
-    )
+    }
 }

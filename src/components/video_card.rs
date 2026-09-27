@@ -28,9 +28,15 @@ fn swipe_icon(kind: SwipeActionKind, size: u32) -> Element {
     }
 }
 
+/// A grid of video cards.
+///
+/// `videos` is a signal so a caller holding a memo passes it without copying
+/// the list, and the grid re-renders only when the list changes, not every
+/// time its parent does. A caller with a plain `Vec` still writes
+/// `VideoGrid { videos }`.
 #[component]
 pub fn VideoGrid(
-    videos: Vec<Video>,
+    videos: ReadSignal<Vec<Video>>,
     empty_message: Option<String>,
     playlist_id: Option<String>,
     shorts_layout: Option<bool>,
@@ -38,6 +44,7 @@ pub fn VideoGrid(
     let shorts = shorts_layout.unwrap_or(false);
     let empty_copy =
         empty_message.unwrap_or_else(|| "Your cached library will appear here.".to_string());
+    let videos = videos.read();
     rsx! {
         if videos.is_empty() {
             EmptyState {
@@ -51,8 +58,8 @@ pub fn VideoGrid(
                 columns: GridColumns::Count(if shorts { 2 } else { 1 }),
                 wide_columns: GridColumns::Count(if shorts { 6 } else { 4 }),
                 gap: Space::Lg,
-                for video in videos {
-                    VideoCard { key: "{video.id}", video, playlist_id: playlist_id.clone(), short: shorts }
+                for video in videos.iter() {
+                    VideoCard { key: "{video.id}", video: video.clone(), playlist_id: playlist_id.clone(), short: shorts }
                 }
             }
         }

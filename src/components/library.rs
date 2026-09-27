@@ -2,7 +2,8 @@ use crate::{
     api::{get_channel_details, get_channel_media_page, get_videos},
     app::Route,
     models::{
-        Channel, ChannelMediaTab, FeedFilter, SubscriptionContent, Video, queued_playlist_id,
+        Channel, ChannelDetails, ChannelMediaTab, FeedFilter, SubscriptionContent, Video,
+        queued_playlist_id,
     },
     state::AppState,
 };
@@ -234,19 +235,24 @@ pub fn HistoryPage() -> Element {
 /// Who the channel is, and the viewer's relationship to it. Its own component
 /// so its hooks run on every render, not only once the channel has loaded.
 #[component]
-fn ChannelHero(channel: Channel) -> Element {
+fn ChannelHero(channel: ReadSignal<Channel>) -> Element {
     let app_state = use_context::<AppState>();
     let mut description_open = use_signal(|| false);
-    // Mirrors the stored preference, written back when the viewer picks.
-    let mut content = use_signal(|| channel.subscription_content);
-    let stored = app_state
-        .with_viewer(|viewer| {
-            viewer
-                .follows(&channel.id)
-                .map(|followed| followed.subscription_content)
-        })
-        .unwrap_or(channel.subscription_content);
-    use_effect(use_reactive!(|stored| content.set(stored)));
+    // The viewer's stored preference for this channel.
+    let stored = use_memo(move || {
+        let channel = channel.read();
+        app_state
+            .with_viewer(|viewer| {
+                viewer
+                    .follows(&channel.id)
+                    .map(|followed| followed.subscription_content)
+            })
+            .unwrap_or(channel.subscription_content)
+    });
+    // Mirrors it for the control, which writes the viewer's pick at once.
+    let mut content = use_signal(|| *stored.peek());
+    use_effect(move || content.set(stored()));
+    let channel = channel();
     let toggle_channel = channel.clone();
     let content_channel_id = channel.id.clone();
     // The viewer is the truth about follows: it shows a change at once.
@@ -334,6 +340,35 @@ fn ChannelHero(channel: Channel) -> Element {
     }
 }
 
+/// A channel's uploads on `tab` (every tab together for `None`): the answer's
+/// plus the extra pages loaded since, newest first, each once.
+fn channel_videos(
+    details: &ChannelDetails,
+    tab: Option<ChannelMediaTab>,
+    extra_videos: &[Video],
+    extra_shorts: &[Video],
+    extra_live: &[Video],
+) -> Vec<Video> {
+    let lists: Vec<&[Video]> = match tab {
+        Some(ChannelMediaTab::Videos) => vec![&details.videos.videos, extra_videos],
+        Some(ChannelMediaTab::Shorts) => vec![&details.shorts.videos, extra_shorts],
+        Some(ChannelMediaTab::Live) => vec![&details.live.videos, extra_live],
+        None => vec![
+            &details.videos.videos,
+            &details.shorts.videos,
+            &details.live.videos,
+            extra_videos,
+            extra_shorts,
+            extra_live,
+        ],
+    };
+    let mut videos = lists.concat();
+    videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
+    let mut seen_ids = std::collections::HashSet::new();
+    videos.retain(|video| seen_ids.insert(video.id.clone()));
+    videos
+}
+
 /// The channel tab a feed filter picks; `None` is every tab together.
 fn media_tab(filter: FeedFilter) -> Option<ChannelMediaTab> {
     match filter {
@@ -375,20 +410,17 @@ pub fn ChannelDetail(id: String) -> Element {
     // behind it. The server falls back to what it has cached when YouTube
     // cannot be reached.
     let details = use_cached(get_channel_details, (id.clone(),));
-    let remote_details = match &*details.read() {
-        Some(Ok(details)) => Some(details.clone()),
-        _ => None,
-    };
     // Each answer restarts the extra pages from its own continuations.
-    let tokens = remote_details.as_ref().map(|details| {
-        (
+    let tokens = use_memo(move || match &*details.read() {
+        Some(Ok(details)) => Some((
             details.videos.next_page.clone(),
             details.shorts.next_page.clone(),
             details.live.next_page.clone(),
-        )
+        )),
+        _ => None,
     });
-    use_effect(use_reactive!(|tokens| {
-        if let Some((videos, shorts, live)) = tokens {
+    use_effect(move || {
+        if let Some((videos, shorts, live)) = tokens() {
             extra_videos.set(Vec::new());
             extra_shorts.set(Vec::new());
             extra_live.set(Vec::new());
@@ -396,12 +428,28 @@ pub fn ChannelDetail(id: String) -> Element {
             shorts_next.set(shorts);
             live_next.set(live);
         }
-    }));
+    });
+    // The tab's uploads, newest first: the answer's plus the extra pages.
+    // Worked out when one of those or the tab changes, not on every render.
+    let videos = use_memo(move || {
+        let details = details.read();
+        let Some(Ok(details)) = details.as_ref() else {
+            return Vec::new();
+        };
+        channel_videos(
+            details,
+            media_tab(tab()),
+            &extra_videos.read(),
+            &extra_shorts.read(),
+            &extra_live.read(),
+        )
+    });
 
-    let Some(channel) = remote_details
-        .as_ref()
-        .map(|details| details.channel.clone())
-    else {
+    let channel = match &*details.read() {
+        Some(Ok(details)) => Some(details.channel.clone()),
+        _ => None,
+    };
+    let Some(channel) = channel else {
         let failed = matches!(&*details.read(), Some(Err(_)));
         // Still renders the bar, so a channel that fails to load keeps its back
         // affordance instead of stranding the viewer.
@@ -423,33 +471,6 @@ pub fn ChannelDetail(id: String) -> Element {
     };
 
     let selected_tab = media_tab(tab());
-    let mut videos = match (remote_details.as_ref(), selected_tab) {
-        (Some(details), Some(ChannelMediaTab::Videos)) => details.videos.videos.clone(),
-        (Some(details), Some(ChannelMediaTab::Shorts)) => details.shorts.videos.clone(),
-        (Some(details), Some(ChannelMediaTab::Live)) => details.live.videos.clone(),
-        (Some(details), None) => details
-            .videos
-            .videos
-            .iter()
-            .chain(&details.shorts.videos)
-            .chain(&details.live.videos)
-            .cloned()
-            .collect(),
-        (None, _) => Vec::new(),
-    };
-    match selected_tab {
-        Some(ChannelMediaTab::Videos) => videos.extend(extra_videos()),
-        Some(ChannelMediaTab::Shorts) => videos.extend(extra_shorts()),
-        Some(ChannelMediaTab::Live) => videos.extend(extra_live()),
-        None => {
-            videos.extend(extra_videos());
-            videos.extend(extra_shorts());
-            videos.extend(extra_live());
-        }
-    }
-    videos.sort_by_cached_key(|video| std::cmp::Reverse(video.published_epoch()));
-    let mut seen_ids = std::collections::HashSet::new();
-    videos.retain(|video| seen_ids.insert(video.id.clone()));
     let next_page = match selected_tab {
         Some(ChannelMediaTab::Videos) => videos_next(),
         Some(ChannelMediaTab::Shorts) => shorts_next(),

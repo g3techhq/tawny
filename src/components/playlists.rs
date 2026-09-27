@@ -334,11 +334,16 @@ pub fn PlaylistDetail(id: String) -> Element {
     // Held until the push has landed. Each batch writes the library, and that
     // re-render arriving mid-slide is what made opening a playlist stutter.
     let settled = use_after_route_transition();
-    use_duration_hydration(if settled() {
-        duration_candidates(&videos, videos.len())
-    } else {
-        Vec::new()
+    let candidates = use_memo(move || {
+        if !settled() {
+            return Vec::new();
+        }
+        match &*contents.read() {
+            Some(Ok(Some(found))) => duration_candidates(&found.videos, found.videos.len()),
+            _ => Vec::new(),
+        }
     });
+    use_duration_hydration(candidates);
     let mut visible_count = use_signal(|| PLAYLIST_PAGE_SIZE);
 
     let Some(playlist) = playlist else {
@@ -379,7 +384,7 @@ pub fn PlaylistDetail(id: String) -> Element {
     };
     // Exactly what a run walks, arranged the same way, so what is on screen and
     // what plays next cannot disagree.
-    view.arrange(&mut videos, &app_state.settings());
+    view.arrange(&mut videos, &app_state.settings.read());
     videos.retain(|video| view.shows(video));
 
     let run: Vec<String> = videos.iter().map(|video| video.id.clone()).collect();
