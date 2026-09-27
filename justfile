@@ -4,7 +4,42 @@ default:
     @just --list
 
 setup:
+    npm install
     lefthook install
+
+# --- Development ----------------------------------------------------------
+
+# Dev server on http://localhost:8080. Needs the services: `just db-up`.
+dev:
+    dx serve
+
+# Android emulator/device.
+dev-android:
+    dx serve --platform android
+
+# iOS simulator (macOS only).
+dev-ios:
+    dx serve --platform ios
+
+# The desktop app.
+dev-desktop:
+    dx serve --platform desktop
+
+# Start SurrealDB and the extractor sidecars in the background. The server
+# seeds a demo catalog into an empty database on its first start.
+db-up:
+    docker compose up -d --build
+
+db-down:
+    docker compose down
+
+# Stop the services and delete their volumes: the library, subscriptions and
+# history on this machine are gone.
+[confirm("Delete all local Tawny data?")]
+db-reset:
+    docker compose down -v
+
+# --- Quality --------------------------------------------------------------
 
 format:
     cargo fmt --all
@@ -40,6 +75,8 @@ lint-local:
 lint-strict:
     cargo clippy --all-targets --no-deps -- -D warnings
     cargo clippy --all-targets --no-default-features --features server --no-deps -- -D warnings
+    cargo clippy --all-targets --no-default-features --features mobile --no-deps -- -D warnings
+    cargo clippy --all-targets --no-default-features --features desktop --no-deps -- -D warnings
     npm run lint:web
 
 test-node:

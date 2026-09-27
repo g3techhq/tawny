@@ -559,10 +559,10 @@ pub(crate) fn parse_youtube_feed(xml: &str) -> Result<Vec<FeedEntry>> {
             }
             Ok(Event::End(tag)) => {
                 let name = String::from_utf8_lossy(tag.local_name().as_ref()).into_owned();
-                if name == "entry" {
-                    if let Some(entry) = entry.take().filter(|entry| !entry.video_id.is_empty()) {
-                        entries.push(entry);
-                    }
+                if name == "entry"
+                    && let Some(entry) = entry.take().filter(|entry| !entry.video_id.is_empty())
+                {
+                    entries.push(entry);
                 }
                 active_tag.clear();
             }

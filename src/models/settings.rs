@@ -14,16 +14,11 @@ pub enum PlatformStyle {
     Material,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Appearance {
+    #[default]
     Dark,
     Light,
-}
-
-impl Default for Appearance {
-    fn default() -> Self {
-        Self::Dark
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

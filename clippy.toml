@@ -1,0 +1,19 @@
+# Holding a signal borrow across an `.await` deadlocks every other read and
+# write of that signal for as long as the future is pending. Dioxus code hits
+# this constantly — a `use_resource` body that reads state and then awaits —
+# and the failure surfaces as an "already borrowed" panic somewhere unrelated,
+# so it is worth catching at the lint level rather than in a debugger.
+await-holding-invalid-types = [
+  { path = "generational_box::GenerationalRef", reason = "Reads should not be held over an await point. Any write will fail while the read borrow is still active." },
+  { path = "generational_box::GenerationalRefMut", reason = "Writes should not be held over an await point. Any read or write will fail while the write borrow is still active." },
+  # `allow-invalid`: this path is only reachable when `dioxus-signals` is a
+  # direct dependency. It is not one here, so clippy would otherwise warn about
+  # the entry itself on every run. Left in place because the day you add
+  # `dioxus-signals` directly, the lint should already be watching for it.
+  { path = "dioxus_signals::Write", allow-invalid = true, reason = "Writes should not be held over an await point. Any read or write will fail while the write borrow is still active." },
+]
+
+# SurrealDB's record ids are hashed by value and never mutated once built, but
+# clippy cannot see that through their inner types and flags every map or set
+# keyed by one as `mutable_key_type`.
+ignore-interior-mutability = ["surrealdb_types::RecordId", "surrealdb_types::RecordIdKey"]

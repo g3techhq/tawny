@@ -68,19 +68,19 @@ jobs:
         include:
           - profile: default
             cargo-args: ""
-            lint-and-test: true
+            test: true
             timeout-minutes: 15
           - profile: server
             cargo-args: --no-default-features --features server
-            lint-and-test: true
+            test: true
             timeout-minutes: 30
           - profile: mobile
             cargo-args: --no-default-features --features mobile
-            lint-and-test: false
+            test: false
             timeout-minutes: 15
           - profile: desktop
             cargo-args: --no-default-features --features desktop
-            lint-and-test: false
+            test: false
             timeout-minutes: 15
 
     steps:
@@ -121,10 +121,10 @@ jobs:
       - name: Check build
         run: cargo check ${{ matrix.cargo-args }}
 
+      # Every feature set: code gated to one build is only linted by that build.
       - name: Run Clippy
-        if: matrix.lint-and-test
-        run: cargo clippy --all-targets --no-deps ${{ matrix.cargo-args }}
+        run: cargo clippy --all-targets --no-deps ${{ matrix.cargo-args }} -- -D warnings
 
       - name: Run Rust tests
-        if: matrix.lint-and-test
+        if: matrix.test
         run: cargo test ${{ matrix.cargo-args }}

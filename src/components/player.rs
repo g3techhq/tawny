@@ -34,6 +34,8 @@ fn playback_server_url() -> String {
     crate::server_url::backend_url()
 }
 
+// One argument per field of the player-metadata message it posts to the page.
+#[allow(clippy::too_many_arguments)]
 fn sync_player_metadata(
     video_id: String,
     tracks: Vec<CaptionTrack>,
@@ -289,7 +291,7 @@ fn set_player_audio_track(language: String) {
 /// Anything the watch route renders costs real main-thread time, and spending
 /// it while a transition is running is what starves that transition: the page
 /// slide runs on the compositor and keeps its frames, while the player's morph
-/// - which animates width and height, and so cannot - drops most of its own and
+/// (which animates width and height, and so cannot) drops most of its own and
 /// arrives late, catching up in one jump. Chromium schedules this differently
 /// between builds, which is why the same page can look fine in one browser and
 /// snap in another. Rendering a beat later costs a late-arriving row of
@@ -375,6 +377,8 @@ fn persist_player_speed(mut app_state: AppState, is_short: bool) {
     });
 }
 
+// One argument per field of the attach call it makes on the page's player.
+#[allow(clippy::too_many_arguments)]
 fn attach_player_session(
     session: PlaybackSession,
     playback_rate: f64,

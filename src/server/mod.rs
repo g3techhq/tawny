@@ -381,15 +381,15 @@ impl AppServerState {
         let db = connect(endpoint.clone())
             .await
             .context("connect to SurrealDB")?;
-        if endpoint != "mem://" {
-            if let (Ok(username), Ok(password)) = (
+        if endpoint != "mem://"
+            && let (Ok(username), Ok(password)) = (
                 std::env::var("SURREALDB_USER"),
                 std::env::var("SURREALDB_PASSWORD"),
-            ) {
-                db.signin(Root { username, password })
-                    .await
-                    .context("sign in to SurrealDB")?;
-            }
+            )
+        {
+            db.signin(Root { username, password })
+                .await
+                .context("sign in to SurrealDB")?;
         }
         db.use_ns(std::env::var("SURREALDB_NAMESPACE").unwrap_or_else(|_| "tawny".into()))
             .use_db(std::env::var("SURREALDB_NAME").unwrap_or_else(|_| "main".into()))

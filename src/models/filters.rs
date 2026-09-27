@@ -1,7 +1,8 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeedFilter {
+    #[default]
     All,
     Videos,
     Shorts,
@@ -90,11 +91,5 @@ impl DurationFilter {
             }
             Self::Long => video.duration_seconds > medium_max,
         }
-    }
-}
-
-impl Default for FeedFilter {
-    fn default() -> Self {
-        Self::All
     }
 }
