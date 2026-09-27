@@ -8,7 +8,7 @@ name: tawny
 # this stack; g3-ui still keeps its equivalent under deploy/.
 #
 # The difference from compose.yml is that nothing is built here: both images
-# come from GHCR, published by .github/workflows/publish-images.yml. A host
+# come from GHCR, published by .github/workflows/publish-staging.yml. A host
 # running this needs no Rust toolchain, no Node, and no copy of the source.
 #
 # Only Tawny itself publishes a port. SurrealDB, the PO-token provider and the

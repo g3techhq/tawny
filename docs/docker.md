@@ -10,7 +10,7 @@ because Dioxus builds it on the host during development.
 | --- | --- | --- |
 | `surrealdb` | `http://127.0.0.1:8001` | Persistent library, feed, sync, and cache data |
 | `pot-provider` | `http://127.0.0.1:4416` | Video-bound bgutil PO-token generation |
-| `yt-dlp` | `http://127.0.0.1:8090` | yt-dlp, its provider plugin, Node, and the EJS challenge runtime |
+| `extractor` | `http://127.0.0.1:8090` | yt-dlp, its provider plugin, Node, and the EJS challenge runtime |
 | `tawny` | `http://127.0.0.1:8080` | Production-profile Dioxus full-stack server and web client |
 
 The published dependency ports bind to loopback only. Containers use their
@@ -36,7 +36,7 @@ SurrealDB installation is required on the host.
 Useful checks:
 
 ```sh
-docker compose logs -f yt-dlp pot-provider surrealdb
+docker compose logs -f extractor pot-provider surrealdb
 curl http://127.0.0.1:8090/health
 curl http://127.0.0.1:4416/ping
 ```
@@ -74,11 +74,11 @@ callback variable is omitted, Tawny derives it from a non-loopback public URL.
 ## Deploying from GHCR
 
 The compose file above builds from source, which a home lab has no reason to do.
-`.github/workflows/publish-images.yml` builds the two images a deployment needs
+`.github/workflows/publish-staging.yml` builds the two images a deployment needs
 and pushes them to GHCR, following the same shape as g3-ui's playground image
 workflow. `compose.prod.yml` pulls them and builds nothing.
 
-See [docs/deploy.md](deploy.md) for the Portainer stack, the
+See [deployment.md](deployment.md) for the Portainer stack, the
 environment variables it requires, and the one-time package visibility step.
 
 ## State, updates, and backups
@@ -116,7 +116,7 @@ Versions are pinned through `.env` defaults (`SURREALDB_VERSION`,
 and verify playback before deploying it:
 
 ```sh
-docker compose build yt-dlp
+docker compose build extractor
 docker compose --profile production build tawny
 docker compose --profile production up -d
 ```

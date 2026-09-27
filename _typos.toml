@@ -11,6 +11,8 @@ extend-exclude = [
 [default.extend-words]
 dioxus = "dioxus"
 partee = "partee"
+# A crate named in the upstream Dioxus notes (docs/dioxus/architecture).
+ratatui = "ratatui"
 # The media element event, not a misspelling of "sought".
 seeked = "seeked"
 surreal = "surreal"

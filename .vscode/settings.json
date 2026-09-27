@@ -1,0 +1,11 @@
+{
+  // Rust is formatted by rustfmt (through rust-analyzer), which leaves rsx!
+  // alone. The Dioxus extension's rsx formatter (dx fmt 0.7) is off: it has
+  // dropped `);` and duplicated statements inside closures in rsx!, which
+  // breaks pages. See docs/dioxus/patterns.md ("Tooling").
+  "dioxus.formatOnSave": "disabled",
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
+  }
+}
