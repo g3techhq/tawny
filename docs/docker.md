@@ -22,12 +22,12 @@ can route to it; use HTTPS at the proxy for WebSub callbacks and remote apps.
 Create the local configuration once and start the dependencies:
 
 ```sh
-cp .env.example .env
+cp .env.template .env
 docker compose up -d --build
 docker compose ps
 ```
 
-On PowerShell, use `Copy-Item .env.example .env` for the first command. Then run
+On PowerShell, use `Copy-Item .env.template .env` for the first command. Then run
 the appropriate Dioxus command separately, for example `dx serve --android`.
 The checked-in example points the host Tawny server at SurrealDB port 8001 and
 the yt-dlp service on port 8090. No yt-dlp, Python plugin, Node provider, or

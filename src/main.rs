@@ -1,17 +1,17 @@
 mod api;
 mod app;
-#[cfg(feature = "server")]
 mod auth;
 mod cache;
 mod components;
-mod config;
 mod data_change;
 #[cfg(feature = "server")]
-mod database;
+mod db;
+#[cfg(feature = "server")]
+mod health;
 mod models;
 #[cfg(feature = "server")]
 mod server;
-mod session;
+mod server_url;
 mod state;
 mod subscriptions_io;
 
@@ -61,7 +61,7 @@ fn main() {
         // cookie; and a proxy token is itself the capability, which a native
         // media element fetches without the app's cookie.
         let sessionless = Router::new()
-            .route("/api/v1/health", get(server::health))
+            .route("/api/v1/health", get(health::health))
             .route(
                 "/api/v1/playback/proxy/{token}",
                 get(server::playback_proxy).options(server::playback_proxy_options),
@@ -98,7 +98,7 @@ fn main() {
     // The cookie runtime is initialized above so the first request can restore
     // its session. See `config` for why the URL cannot come from the usual
     // persistence helper.
-    config::install();
+    server_url::install();
     #[cfg(any(feature = "desktop", feature = "mobile"))]
     dioxus::LaunchBuilder::new()
         .with_cfg(NativeConfig::new().with_custom_head(app::native_head()))

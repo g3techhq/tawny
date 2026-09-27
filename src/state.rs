@@ -16,6 +16,7 @@ use std::future::Future;
 use crate::subscriptions_io::{ImportSummary, ParsedImport};
 use crate::{
     api::{self, get_feed_page, get_playlist, get_playlist_previews, get_videos, get_viewer},
+    auth::use_session_provider,
     cache::use_persistent_signal,
     data_change::{DataChange, invalidate},
     models::{
@@ -24,7 +25,6 @@ use crate::{
         SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoList, VideoPreviewFrames,
         VideoProgress, Viewer, playlist_queue_entry, queued_playlist_id,
     },
-    session::use_session_provider,
 };
 use dioxus::prelude::*;
 use g3_cache::{Cached, update_all_cached, update_cached, use_cached};
@@ -194,7 +194,7 @@ impl AppState {
                 self.show_toast(
                     format!(
                         "Could not save that: {}",
-                        crate::session::readable(&error.to_string())
+                        crate::auth::readable(&error.to_string())
                     ),
                     Color::Danger,
                 );

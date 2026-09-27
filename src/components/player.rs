@@ -31,7 +31,7 @@ use super::VideoGrid;
 /// functions, so it has to be told the backend the viewer chose in settings -
 /// not just the compiled default, which on a device points back at itself.
 fn playback_server_url() -> String {
-    crate::config::backend_url()
+    crate::server_url::backend_url()
 }
 
 fn sync_player_metadata(

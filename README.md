@@ -38,7 +38,7 @@ The default Compose project starts only Tawny's server dependencies:
 - a pinned bgutil PO-token provider, published on `127.0.0.1:4416`;
 - a pinned yt-dlp sidecar with its plugin and Node challenge runtime, published on `127.0.0.1:8090`.
 
-Tawny itself is deliberately omitted from the default profile, so `dx serve`, `dx serve --android`, and the other Dioxus development targets continue to own the app build and port 8080. Copy `.env.example` to `.env` once; its host-facing URLs already match this layout. Nothing needs to be installed in `%APPDATA%/yt-dlp`, and the host does not need a yt-dlp executable or provider plugin.
+Tawny itself is deliberately omitted from the default profile, so `dx serve`, `dx serve --android`, and the other Dioxus development targets continue to own the app build and port 8080. Copy `.env.template` to `.env` once; its host-facing URLs already match this layout. Nothing needs to be installed in `%APPDATA%/yt-dlp`, and the host does not need a yt-dlp executable or provider plugin.
 
 For a server deployment, configure the public URL, database password, and WebSub secret in `.env`, then include the production profile:
 

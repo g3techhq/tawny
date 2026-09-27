@@ -7,7 +7,7 @@ after a successful build on `main`:
 - `ghcr.io/g3techhq/tawny:latest` and `:sha-<commit>`
 - `ghcr.io/g3techhq/tawny-extractor:latest` and `:sha-<commit>`
 
-The sidecar is published too, not just the app: `compose.yaml` at the repository
+The sidecar is published too, not just the app: `compose.yml` at the repository
 root builds it from `docker/extractor`, so a pull-only deployment with only the
 app image would have nothing to extract streams with.
 
@@ -81,7 +81,7 @@ Optional:
 | `TAWNY_PROXY_NETWORK` | `tawny-proxy` | An existing Docker network to put Tawny on, so a reverse proxy in it reaches Tawny as `tawny:8080`. |
 | `TAWNY_PROXY_NETWORK_EXTERNAL` | `false` | Set `true` alongside the above. Naming an existing network without this makes Compose try to create it and fail. |
 
-Unlike the development `compose.yaml`, only Tawny publishes a port. SurrealDB,
+Unlike the development `compose.yml`, only Tawny publishes a port. SurrealDB,
 the PO-token provider and the extractor reach each other over the stack's network;
 development binds them to `127.0.0.1` only so a host `dx serve` can reach them,
 which is not a deployment need.
