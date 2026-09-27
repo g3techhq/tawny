@@ -444,48 +444,27 @@ pub fn ChannelDetail(id: String) -> Element {
             &extra_live.read(),
         )
     });
-
-    let channel = match &*details.read() {
-        Some(Ok(details)) => Some(details.channel.clone()),
-        _ => None,
-    };
-    let Some(channel) = channel else {
-        let failed = matches!(&*details.read(), Some(Err(_)));
-        // Still renders the bar, so a channel that fails to load keeps its back
-        // affordance instead of stranding the viewer.
-        return rsx! {
-            PageHeader { title: String::new(), back_to: Route::Subscriptions {} }
-            Content {
-                if failed {
-                    EmptyState {
-                        title: "Channel unavailable",
-                        color: Color::Danger,
-                        icon: rsx! { Tv { size: 40 } },
-                        "This channel could not be loaded from YouTube or the server's cache."
-                    }
-                } else {
-                    Spinner { center: true }
-                }
-            }
-        };
-    };
-
-    let selected_tab = media_tab(tab());
-    let next_page = match selected_tab {
-        Some(ChannelMediaTab::Videos) => videos_next(),
-        Some(ChannelMediaTab::Shorts) => shorts_next(),
-        Some(ChannelMediaTab::Live) => live_next(),
-        None => None,
-    };
-    let load_channel_id = channel.id.clone();
+    // Made once, reading the tab, token and channel when they run. Closures
+    // rebuilt every render and passed as props (pull to refresh, the infinite
+    // scroll) were re-pointed after the previous one was dropped, and a tab
+    // change panicked in `Callback::__point_to`.
     // Pull to refresh: refetch, keeping the channel on screen meanwhile.
-    let refresh = move |_| details.refresh();
-    let has_next_page = next_page.is_some();
-    let load_more = move |_| {
-        let Some(token) = next_page.clone() else {
+    let refresh = use_callback(move |_: ()| details.refresh());
+    let load_more = use_callback(move |_: ()| {
+        let selected_tab = media_tab(*tab.peek());
+        let next_page = match selected_tab {
+            Some(ChannelMediaTab::Videos) => videos_next.peek().clone(),
+            Some(ChannelMediaTab::Shorts) => shorts_next.peek().clone(),
+            Some(ChannelMediaTab::Live) => live_next.peek().clone(),
+            None => None,
+        };
+        let Some(token) = next_page else {
             return;
         };
-        let channel_id = load_channel_id.clone();
+        let channel_id = match &*details.peek() {
+            Some(Ok(details)) => details.channel.id.clone(),
+            _ => return,
+        };
         page_loading.set(true);
         spawn(async move {
             let kind = match selected_tab {
@@ -513,6 +492,39 @@ pub fn ChannelDetail(id: String) -> Element {
             }
             page_loading.set(false);
         });
+    });
+
+    let channel = match &*details.read() {
+        Some(Ok(details)) => Some(details.channel.clone()),
+        _ => None,
+    };
+    let Some(channel) = channel else {
+        let failed = matches!(&*details.read(), Some(Err(_)));
+        // Still renders the bar, so a channel that fails to load keeps its back
+        // affordance instead of stranding the viewer.
+        return rsx! {
+            PageHeader { title: String::new(), back_to: Route::Subscriptions {} }
+            Content {
+                if failed {
+                    EmptyState {
+                        title: "Channel unavailable",
+                        color: Color::Danger,
+                        icon: rsx! { Tv { size: 40 } },
+                        "This channel could not be loaded from YouTube or the server's cache."
+                    }
+                } else {
+                    Spinner { center: true }
+                }
+            }
+        };
+    };
+
+    let selected_tab = media_tab(tab());
+    let has_next_page = match selected_tab {
+        Some(ChannelMediaTab::Videos) => videos_next.read().is_some(),
+        Some(ChannelMediaTab::Shorts) => shorts_next.read().is_some(),
+        Some(ChannelMediaTab::Live) => live_next.read().is_some(),
+        None => false,
     };
 
     rsx! {
