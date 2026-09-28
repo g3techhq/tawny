@@ -221,4 +221,54 @@ test.describe("Tawny library interactions", () => {
     }
     await expectNoHorizontalScroll(appPage);
   });
+  test("a media-session pause in the background stays paused", async ({ appPage }) => {
+    // Headset buttons and the lock screen reach the page as Media Session
+    // actions. Before the player claimed them, a pause while hidden looked
+    // like the browser suspending playback and was resumed at once.
+    await appPage.addInitScript(() => {
+      window.__sessionHandlers = {};
+      if (!navigator.mediaSession) return;
+      navigator.mediaSession.setActionHandler = (action, handler) => {
+        window.__sessionHandlers[action] = handler;
+      };
+    });
+    // Held open, so the transport never loads a stream and starts it
+    // mid-test; the stand-in element below is what plays.
+    await appPage.route("**/api/v1/playback/proxy/**", () => new Promise(() => {}));
+    // Straight to a watch page: a fresh account's feed has no card to open.
+    await openApp(appPage, "/watch/dQw4w9WgXcQ");
+    const media = appPage.locator("#tawny-player-media");
+    await expect(media).toBeAttached();
+
+    await media.evaluate((video) => {
+      let paused = true;
+      Object.defineProperty(video, "paused", { configurable: true, get: () => paused });
+      video.play = () => {
+        paused = false;
+        video.dispatchEvent(new Event("play"));
+        return Promise.resolve();
+      };
+      video.pause = () => {
+        paused = true;
+        video.dispatchEvent(new Event("pause"));
+      };
+      window.TawnyPlayerControls.attach(video);
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+    });
+
+    await appPage.evaluate(() => window.__sessionHandlers.play());
+    await expect.poll(() => media.evaluate((video) => video.paused)).toBe(false);
+
+    // The browser suspending playback is still undone...
+    await media.evaluate((video) => video.pause());
+    await expect.poll(() => media.evaluate((video) => video.paused)).toBe(false);
+
+    // ...but the viewer's pause is kept.
+    await appPage.evaluate(() => window.__sessionHandlers.pause());
+    await appPage.waitForTimeout(400);
+    expect(await media.evaluate((video) => video.paused)).toBe(true);
+  });
 });

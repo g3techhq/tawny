@@ -217,9 +217,10 @@ fn ToasterBridge() -> Element {
 #[component]
 pub fn AppShell() -> Element {
     let route: Route = use_route();
-    let app_state = use_context::<AppState>();
+    let mut app_state = use_context::<AppState>();
 
     let player_expanded = matches!(route, Route::VideoDetail { .. });
+    let on_feed = matches!(route, Route::Feed {});
     let is_auxiliary = is_auxiliary_route(&route);
     // Queue, History and Settings are sheets presented over whatever launched
     // them, and the mini bar belongs to the page underneath. Leaving it on top
@@ -267,9 +268,15 @@ pub fn AppShell() -> Element {
                 aria_label: "Primary navigation",
                 NavItem {
                     label: "Feed",
-                    selected: matches!(route, Route::Feed {}),
+                    selected: on_feed,
                     icon: rsx! { House { size: 22 } },
-                    onclick: move |_| { spawn(animated_navigate(Route::Feed {})); },
+                    onclick: move |_| {
+                        if on_feed {
+                            app_state.feed_reselected += 1;
+                        } else {
+                            spawn(animated_navigate(Route::Feed {}));
+                        }
+                    },
                 }
                 NavItem {
                     label: "Playlists",

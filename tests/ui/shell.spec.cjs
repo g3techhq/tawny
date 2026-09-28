@@ -52,4 +52,30 @@ test.describe("Tawny application shell", () => {
     await appPage.getByRole("button", { name: "Back", exact: true }).click();
     await expect(appPage).toHaveURL(/\/$/);
   });
+  test("tapping Feed on the feed goes back to the top", async ({ appPage }, testInfo) => {
+    const wide = testInfo.project.name === "desktop-chromium";
+    const scroller = appPage.locator(".g3-content-scroll").first();
+    // A fresh account's feed may be too short to scroll.
+    await scroller.evaluate((element) => {
+      const spacer = document.createElement("div");
+      spacer.style.height = "4000px";
+      element.appendChild(spacer);
+      element.scrollTop = 1500;
+    });
+    expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+    // A phone pulls down to refresh, so only the wide layout refreshes here.
+    let refreshed = false;
+    appPage.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/v1/feed/refresh") refreshed = true;
+    });
+    await appPage
+      .getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("button", { name: "Feed", exact: true })
+      .click();
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
+    await appPage.waitForTimeout(300);
+    expect(refreshed).toBe(wide);
+    await expect(appPage).toHaveURL(/\/$/);
+  });
 });

@@ -37,17 +37,17 @@ const test = base.extend({
 
 async function openApp(page, path = "/") {
   // The full-stack route is server-rendered first, then the browser restores
-  // its guest session and library. A visible shell alone is not proof that
-  // Dioxus has attached event handlers, so wait for the bootstrap request
-  // rather than racing a click against hydration.
-  const libraryLoaded = page.waitForResponse(
+  // its guest session and viewer state. A visible shell alone is not proof
+  // that Dioxus has attached event handlers, so wait for the bootstrap
+  // request rather than racing a click against hydration.
+  const viewerLoaded = page.waitForResponse(
     (response) =>
       response.status() === 200 &&
-      /\/api\/v1\/library(?:\?|$)/.test(new URL(response.url()).pathname),
+      /\/api\/v1\/viewer(?:\?|$)/.test(new URL(response.url()).pathname),
   );
   await page.goto(path, { waitUntil: "domcontentloaded" });
   await expect(page.locator(".g3-app-shell")).toBeVisible();
-  await libraryLoaded;
+  await viewerLoaded;
 }
 
 async function expectNoHorizontalScroll(page) {

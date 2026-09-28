@@ -101,6 +101,9 @@ pub struct AppState {
     pub selected_audio_track: Signal<Option<String>>,
     pub active_preview_frames: Signal<Option<VideoPreviewFrames>>,
     pub syncing: Signal<bool>,
+    /// Counts taps on the Feed tab while the feed is already open. The feed
+    /// answers each one; a count rather than a flag so two taps are two.
+    pub feed_reselected: Signal<u64>,
     pub chapters_sheet_open: Signal<bool>,
     /// Videos this sitting has advanced away from, most recent last.
     ///
@@ -1292,6 +1295,7 @@ pub fn AppStateProvider(children: Element) -> Element {
         selected_audio_track: Signal::new(None),
         active_preview_frames: Signal::new(None),
         syncing: Signal::new(false),
+        feed_reselected: Signal::new(0),
         chapters_sheet_open: Signal::new(false),
         run_back_stack: Signal::new(Vec::new()),
         feed_filter: Signal::new(FeedFilter::All),
