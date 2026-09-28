@@ -19,9 +19,9 @@ use g3_ui::{
 
 use crate::{
     api::{register_account, sign_in_to_account, sign_out_of_account},
-    config,
+    auth::{SessionStatus, readable, use_session},
     models::{Credentials, validate_email, validate_password},
-    session::{SessionStatus, readable, use_session},
+    server_url,
     state::AppState,
 };
 
@@ -58,7 +58,7 @@ pub fn AccountGate(children: Element) -> Element {
     let session = use_session();
     let mut backend_chosen = use_signal(|| true);
 
-    use_effect(move || backend_chosen.set(config::has_chosen_backend()));
+    use_effect(move || backend_chosen.set(server_url::has_chosen_backend()));
 
     if !backend_chosen() {
         return rsx! {
@@ -88,7 +88,7 @@ pub fn AccountGate(children: Element) -> Element {
 
 #[component]
 fn BackendSetupScreen(problem: Option<String>, on_saved: EventHandler<()>) -> Element {
-    let url = use_signal(config::backend_url);
+    let url = use_signal(server_url::backend_url);
     let mut error = use_signal(|| problem.clone().unwrap_or_default());
 
     rsx! {
@@ -111,7 +111,7 @@ fn BackendSetupScreen(problem: Option<String>, on_saved: EventHandler<()>) -> El
                     Button {
                         expand: ButtonExpand::Block,
                         onclick: move |_| {
-                            match config::set_backend_url(&url()) {
+                            match server_url::set_backend_url(&url()) {
                                 Some(_) => on_saved.call(()),
                                 None => error.set(
                                     "Enter a full address, including http:// or https://.".into(),
@@ -272,7 +272,7 @@ pub fn AccountSettings() -> Element {
 /// The server section of the settings page.
 #[component]
 pub fn BackendSettings() -> Element {
-    let url = use_signal(config::backend_url);
+    let url = use_signal(server_url::backend_url);
     let mut error = use_signal(String::new);
     let mut saved = use_signal(|| false);
 
@@ -298,7 +298,7 @@ pub fn BackendSettings() -> Element {
                     color: Color::Neutral,
                     expand: ButtonExpand::Block,
                     onclick: move |_| {
-                        match config::set_backend_url(&url()) {
+                        match server_url::set_backend_url(&url()) {
                             Some(_) => {
                                 saved.set(true);
                                 reload_client();

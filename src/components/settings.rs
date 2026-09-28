@@ -457,7 +457,7 @@ fn SubscriptionTransferCard() -> Element {
 #[component]
 fn SponsorBlockSettingsCard() -> Element {
     let mut app_state = use_context::<AppState>();
-    let sponsor = app_state.settings().sponsor_block.clone();
+    let sponsor = app_state.settings.read().sponsor_block.clone();
     let enabled_value = sponsor.enabled;
     let enabled = use_signal(|| enabled_value);
     let notify = use_signal(|| sponsor.notify_on_skip);
@@ -494,7 +494,7 @@ fn SponsorBlockSettingsCard() -> Element {
 #[component]
 fn SponsorCategoryRow(category: SponsorCategory) -> Element {
     let mut app_state = use_context::<AppState>();
-    let value = use_signal(|| app_state.settings().sponsor_block.action_for(category));
+    let value = use_signal(|| app_state.settings.peek().sponsor_block.action_for(category));
     rsx! {
         Item {
             label: category.label(),

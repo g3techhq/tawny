@@ -35,20 +35,25 @@ pub fn Feed() -> Element {
     let mut pages = use_signal(|| 1usize);
     // Whether the last page on screen said there is more.
     let has_more = use_signal(|| false);
-    let settings = app_state.settings();
-    let groups = app_state.with_viewer(|viewer| viewer.subscription_groups.clone());
-    let query = FeedQuery {
-        group: selected_group(),
-        kind: (app_state.feed_filter)(),
-        duration: selected_duration(),
-        hide_watched: settings.hide_watched,
-        thresholds: (&settings).into(),
-    };
+    let groups =
+        use_memo(move || app_state.with_viewer(|viewer| viewer.subscription_groups.clone()));
+    // The question every page asks. A memo, so the pages share it rather than
+    // each taking a copy on every render, and so a change is one event.
+    let query = use_memo(move || {
+        let settings = app_state.settings.read();
+        FeedQuery {
+            group: selected_group(),
+            kind: (app_state.feed_filter)(),
+            duration: selected_duration(),
+            hide_watched: settings.hide_watched,
+            thresholds: (&*settings).into(),
+        }
+    });
     // A different question starts again at one page.
-    use_effect(use_reactive!(|query| {
-        let _ = &query;
+    use_effect(move || {
+        let _ = query.read();
         pages.set(1);
-    }));
+    });
 
     let refresh = move |_| {
         app_state.syncing.set(true);
@@ -109,7 +114,7 @@ pub fn Feed() -> Element {
                         onclick: move |_| selected_group.set(FeedGroup::All),
                         "All channels"
                     }
-                    for group in groups {
+                    for group in groups.read().iter() {
                         {
                             let group_id = FeedGroup::Group(group.id.clone());
                             let selected = selected_group() == group_id;
@@ -133,7 +138,7 @@ pub fn Feed() -> Element {
                 for page in 0..page_count {
                     FeedPageView {
                         key: "{page}",
-                        query: query.clone(),
+                        query,
                         page,
                         last: page + 1 == page_count,
                         has_more,
@@ -153,19 +158,30 @@ pub fn Feed() -> Element {
 /// One page of the feed: its own cached read, so the pages above it stay put
 /// while it loads.
 #[component]
-fn FeedPageView(query: FeedQuery, page: usize, last: bool, has_more: Signal<bool>) -> Element {
-    let feed = use_cached(get_feed_page, (query, page));
-    let (candidates, more) = match &*feed.read() {
-        Some(Ok(found)) => (found.unknown_durations.clone(), found.has_more),
-        _ => (Vec::new(), false),
-    };
+fn FeedPageView(
+    query: ReadSignal<FeedQuery>,
+    page: usize,
+    last: ReadSignal<bool>,
+    has_more: Signal<bool>,
+) -> Element {
+    let feed = use_cached(get_feed_page, (query(), page));
+    // Copied out when the page's answer changes, not on every render.
+    let videos = use_memo(move || match &*feed.read() {
+        Some(Ok(found)) => found.videos.clone(),
+        _ => Vec::new(),
+    });
+    let candidates = use_memo(move || match &*feed.read() {
+        Some(Ok(found)) => found.unknown_durations.clone(),
+        _ => Vec::new(),
+    });
     use_duration_hydration(candidates);
     // The last page decides whether there is another.
-    use_effect(use_reactive!(|last, more| {
-        if last && *has_more.peek() != more {
+    use_effect(move || {
+        let more = matches!(&*feed.read(), Some(Ok(found)) if found.has_more);
+        if last() && *has_more.peek() != more {
             has_more.set(more);
         }
-    }));
+    });
 
     match &*feed.read() {
         None => rsx! { VideoGridSkeleton { count: if page == 0 { 8 } else { 4 } } },
@@ -188,7 +204,7 @@ fn FeedPageView(query: FeedQuery, page: usize, last: bool, has_more: Signal<bool
                 }
                 if page == 0 || !found.videos.is_empty() {
                     VideoGrid {
-                        videos: found.videos.clone(),
+                        videos,
                         empty_message: "Try another filter, or follow some channels from Explore.".to_string(),
                     }
                 }

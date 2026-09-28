@@ -9,7 +9,7 @@ on:
     branches:
       - main
     paths:
-      - ".github/workflows/publish-images.yml"
+      - ".github/workflows/publish-staging.yml"
       - ".dockerignore"
       - "assets/**"
       - "database/**"

@@ -45,15 +45,18 @@ pub fn duration_candidates<'a>(
 /// Videos the extractor cannot resolve come back absent rather than as a zero,
 /// so remembering what was asked is also what stops a permanently unresolvable
 /// row from being retried on every render.
-pub fn use_duration_hydration(candidates: Vec<String>) {
+///
+/// `candidates` is a memo, so the request goes out when they change (a filter
+/// change, the next page), not on every render of the caller.
+pub fn use_duration_hydration(candidates: Memo<Vec<String>>) {
     let app_state = use_context::<AppState>();
     let mut requested = use_signal(HashSet::<String>::new);
 
-    // Reruns whenever the candidates change: a filter change, the next page.
-    use_effect(use_reactive!(|candidates| {
+    use_effect(move || {
         let pending = {
             let already_requested = requested.peek();
             candidates
+                .read()
                 .iter()
                 .filter(|video_id| !already_requested.contains(*video_id))
                 .cloned()
@@ -68,5 +71,5 @@ pub fn use_duration_hydration(candidates: Vec<String>) {
                 app_state.merge_video_metadata(videos);
             }
         });
-    }));
+    });
 }

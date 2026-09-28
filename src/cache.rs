@@ -59,7 +59,7 @@ where
     #[cfg(feature = "server")]
     {
         let _ = (key, persist_after_ms);
-        return use_signal(init);
+        use_signal(init)
     }
 
     #[cfg(not(feature = "server"))]
@@ -77,12 +77,11 @@ where
                 let script =
                     format!("dioxus.send(window.localStorage.getItem({key_literal}) ?? '');");
                 let mut eval = document::eval(&script);
-                if let Ok(raw) = eval.recv::<String>().await {
-                    if !raw.is_empty() {
-                        if let Ok(cached) = serde_json::from_str::<T>(&raw) {
-                            value.set(cached);
-                        }
-                    }
+                if let Ok(raw) = eval.recv::<String>().await
+                    && !raw.is_empty()
+                    && let Ok(cached) = serde_json::from_str::<T>(&raw)
+                {
+                    value.set(cached);
                 }
                 hydrated.set(true);
             });

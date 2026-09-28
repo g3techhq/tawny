@@ -316,7 +316,7 @@ mod tests {
     }
 
     /// Opening an endpoint to signed-out callers is a reviewed change: it
-    /// shows up here, not only as an attribute somewhere in `api.rs`.
+    /// shows up here, not only as an attribute somewhere in `api/`.
     #[test]
     fn only_the_sign_in_endpoints_are_public() {
         assert_eq!(
@@ -371,7 +371,7 @@ mod tests {
 
         for _ in 0..2 {
             // Twice: it runs on every start.
-            db.query(include_str!("../database/presync.surql"))
+            db.query(include_str!("../../database/presync.surql"))
                 .await
                 .unwrap()
                 .check()
