@@ -137,6 +137,22 @@ pub async fn save_progress(progress: Vec<VideoProgress>) -> Result<()> {
         .map_err(server_error)?)
 }
 
+/// This account's saved place in one video, read fresh when it starts playing.
+///
+/// Lists show the position they were fetched with, which on a second device
+/// can be older than where the viewer stopped on the first.
+#[get(
+    "/api/v1/progress/{video_id}",
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    owner: crate::auth::Owner
+)]
+pub async fn get_video_progress(video_id: String) -> Result<Option<VideoProgress>> {
+    Ok(state
+        .video_progress(&owner.0, &video_id)
+        .await
+        .map_err(server_error)?)
+}
+
 /// Create or replace subscription groups, by id.
 #[post(
     "/api/v1/groups/save",

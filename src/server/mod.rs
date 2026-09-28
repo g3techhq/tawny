@@ -1561,6 +1561,18 @@ mod tests {
             seen[0].progress_seconds, 0,
             "playback position leaked between accounts"
         );
+        // The fresh read a player makes when a video starts: its own place
+        // only.
+        let mine = state.video_progress(&first, &video_id).await.unwrap();
+        assert_eq!(mine.map(|progress| progress.progress_seconds), Some(42));
+        assert!(
+            state
+                .video_progress(&second, &video_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "a single video's position leaked between accounts"
+        );
 
         // The second account can hold the same client-chosen playlist id...
         state

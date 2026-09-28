@@ -1,5 +1,8 @@
 use crate::{
-    api::{get_comments_page, get_sponsor_segments, get_video_details, resolve_playback},
+    api::{
+        get_comments_page, get_sponsor_segments, get_video_details, get_video_progress,
+        resolve_playback,
+    },
     app::Route,
     models::{
         AudioTrackOption, CaptionTrack, PlaybackFailure, PlaybackFailureOrigin, PlaybackProtocol,
@@ -476,6 +479,33 @@ fn attach_player_session(
 /// Each run replaces the previous registration outright: leaving the old timer
 /// and listeners in place leaked one set per video change, and a stale one would
 /// keep writing its own position over the video that replaced it.
+/// How far the server's saved position may differ from the one the player
+/// opened at before the player moves to it. Within this, the two are the
+/// same place, give or take the last few seconds of a sample.
+const RESUME_DRIFT_SECONDS: u64 = 5;
+
+/// Moves the playing video to the position the server has saved, once it is
+/// attached, unless the viewer has already moved it.
+///
+/// `__FROM__` is where the player opened, `__TO__` the saved position. Gives
+/// up after twenty seconds: a video that has not attached by then has bigger
+/// problems, and a late jump would be a surprise.
+const RESUME_FROM_SERVER_JS: &str = r#"
+const from = __FROM__;
+const to = __TO__;
+const started = Date.now();
+const tryResume = () => {
+    const media = document.getElementById('tawny-player-media');
+    const attached = window.__tawnyAttachEval?.phase === 'attached';
+    if (media && attached && media.readyState >= 1) {
+        if (Math.abs(media.currentTime - from) <= 5) media.currentTime = to;
+        return;
+    }
+    if (Date.now() - started < 20000) setTimeout(tryResume, 200);
+};
+tryResume();
+"#;
+
 const PROGRESS_REPORTER_JS: &str = r#"
 const key = Symbol.for('tawny.progress-reporter');
 window[key]?.dispose?.();
@@ -609,36 +639,87 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // where a video happens to be active is a conditional hook, and it never
     // registers. Tracking the signal here also means the effect re-runs when the
     // video changes, which is what replaces the previous reporter.
+    //
+    // Keyed on the playing video's id, through a memo. Reading `active_video`
+    // itself re-ran this every five seconds, because recording progress writes
+    // it: each run replaced the reporter and reset `ticks`, so the periodic
+    // save to the server never came round, and progress only reached it on
+    // pause, backgrounding or a change of video.
+    let playing_id = use_memo(move || {
+        app_state
+            .active_video
+            .read()
+            .as_ref()
+            .map(|video| video.id.clone())
+    });
     let progress_state = app_state;
     use_effect(move || {
-        let Some(playing_id) = (progress_state.active_video)().map(|video| video.id) else {
+        let Some(playing_id) = playing_id() else {
             return;
         };
         spawn(async move {
             let mut eval = document::eval(PROGRESS_REPORTER_JS);
-            let mut ticks: u32 = 0;
-            while let Ok((seconds, flush)) = eval.recv::<(u64, bool)>().await {
-                if !progress_state.record_progress(&playing_id, seconds) {
-                    continue;
-                }
-                ticks += 1;
-                // Local on every tick so the card updates as you watch; the
-                // server every third - about fifteen seconds - plus whenever
-                // the page says it is going away, the video changes, or
-                // playback stops.
-                if flush || ticks.is_multiple_of(3) {
+            // The flag marks the page going away or playback stopping. Every
+            // position that moved is saved anyway - about every five seconds
+            // while playing - so another device picks up close to where this
+            // one is; a position that did not move has nothing to save.
+            while let Ok((seconds, _going_away)) = eval.recv::<(u64, bool)>().await {
+                if progress_state.record_progress(&playing_id, seconds) {
                     progress_state.flush_progress();
                 }
             }
         });
     });
 
+    // Resume from the server's copy of the position, not only the one the
+    // video was opened with. That came from a list, which on a second device
+    // may have been fetched before the viewer stopped on the first: opening
+    // on the desktop the video just left on the phone started it wherever the
+    // desktop's copy of the list last saw it. Keyed on the id, like the
+    // reporter, so it asks once per video.
+    let resume_state = app_state;
+    use_effect(move || {
+        let Some(video_id) = playing_id() else {
+            return;
+        };
+        let opened_at = resume_state.active_video.peek().as_ref().map(|video| {
+            if video.watched {
+                0
+            } else {
+                video.progress_seconds
+            }
+        });
+        let Some(opened_at) = opened_at else {
+            return;
+        };
+        spawn(async move {
+            let Ok(Some(saved)) = get_video_progress(video_id.clone()).await else {
+                return;
+            };
+            // Finished elsewhere: opening it again means starting over, which
+            // is what the player already did.
+            if saved.watched || saved.progress_seconds.abs_diff(opened_at) <= RESUME_DRIFT_SECONDS {
+                return;
+            }
+            if playing_id.peek().as_deref() != Some(video_id.as_str()) {
+                return;
+            }
+            document::eval(
+                &RESUME_FROM_SERVER_JS
+                    .replace("__FROM__", &opened_at.to_string())
+                    .replace("__TO__", &saved.progress_seconds.to_string()),
+            );
+        });
+    });
+
     // Same shape as the progress reporter above, and declared before the same
     // early return for the same reason: a hook that only runs when a video
     // happens to be active never registers at all.
+    // Keyed on the id for the same reason: this re-registered the reporter
+    // every five seconds.
     let mut audio_state = app_state;
     use_effect(move || {
-        if (audio_state.active_video)().is_none() {
+        if playing_id.read().is_none() {
             return;
         }
         spawn(async move {
@@ -667,7 +748,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             .read()
             .preferred_audio_language
             .clone();
-        if audio_preference_state.active_video().is_some() {
+        // Through the id memo: `active_video` changes every five seconds with
+        // progress, and re-applied the track each time.
+        if playing_id.read().is_some() {
             set_player_audio_track(preferred_language);
         }
     });
