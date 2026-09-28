@@ -865,8 +865,13 @@
       listen(progress, "blur", () => finishScrub(true));
     }
 
-    // Tapping anywhere on the video toggles playback — unless the pointer just
-    // travelled far enough to be a swipe, in which case the gesture owns it.
+    // Clicking anywhere on the video toggles playback with a mouse - unless the
+    // pointer just travelled far enough to be a swipe, in which case the
+    // gesture owns it. A finger, or any pointer that cannot hover, toggles the
+    // controls instead: a tap shows them and the next hides them, and only the
+    // play button plays or pauses. On a phone the controls are the only way to
+    // reach seeking and settings, so a tap that also stopped the video made
+    // every look at them cost the viewer their place.
     //
     // Bound on the player root, not the video. A mouse gesture takes pointer
     // capture on the root at pointerdown, and capture retargets the click that
@@ -901,8 +906,17 @@
       }
       if (surfaceClickTimer) clearTimeout(surfaceClickTimer);
       surfaceClickCommitted = false;
+      const touchTap = surfaceTapIsTouch;
       surfaceClickTimer = setTimeout(() => {
         surfaceClickTimer = null;
+        if (touchTap) {
+          // Raised by an earlier tap (or held up by a pause): this tap is the
+          // one that puts them away. The capture handler below answers the
+          // tap that raises them, so this only runs while they are showing.
+          if (controls.classList.contains("controls-visible")) hideControls();
+          else showControls(false);
+          return;
+        }
         surfaceClickCommitted = true;
         runAction("toggle");
         showControls(false);
@@ -916,6 +930,9 @@
     let surfaceClickTimer = null;
     let surfaceClickCommitted = false;
     let tapOpensControls = false;
+    // Whether the press behind the next surface click was a finger (or a
+    // pointer that cannot hover), which decides what the click does.
+    let surfaceTapIsTouch = false;
     let surfacePressSequence = null;
     let lastPointerTapAt = 0;
     let lastClickSequenceActionAt = 0;
@@ -1016,9 +1033,8 @@
       // someone went looking for the seek bar. The bar answers the first tap,
       // the video answers the next. Read here rather than at the click,
       // because the press itself raises the bar on the way through.
-      tapOpensControls =
-        (event.pointerType !== "mouse" || !canHover()) &&
-        !controls.classList.contains("controls-visible");
+      surfaceTapIsTouch = event.pointerType !== "mouse" || !canHover();
+      tapOpensControls = surfaceTapIsTouch && !controls.classList.contains("controls-visible");
       if (gestureStart.committed) {
         // A mouse drag never competes with scrolling, so capture immediately;
         // a release outside the player still has to report back here.

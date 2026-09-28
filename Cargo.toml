@@ -12,9 +12,9 @@ repository = "https://github.com/g3techhq/tawny"
 dioxus = { version = "=0.7.9", features = ["router", "fullstack"] }
 dioxus-fullstack = "=0.7.9"
 dioxus-icons = "0.1.0"
-g3-route-transitions = { version = "0.4.2", features = ["native-back"] }
+g3-route-transitions = { version = "0.4.3", features = ["native-back"] }
 g3-native-plugins = { version = "0.4.1", features = ["back-button", "clipboard", "media", "storage"] }
-g3-ui = { version = "0.4.3", features = ["transitions"] }
+g3-ui = { version = "0.4.4", features = ["transitions"] }
 g3-auth = "0.1.1"
 g3-cache = "0.2.0"
 manganis = "=0.7.9"
@@ -54,7 +54,7 @@ web-time = "1.1.0"
 # `set_server_url` writes a `OnceLock` and a second call is silently ignored.
 # That rules out the localStorage helper in `cache`, which needs a running app
 # to eval, so each client platform reads its own store directly instead.
-web-sys = { version = "0.3", features = ["Window", "Storage"], optional = true }
+web-sys = { version = "0.3", features = ["Location", "Storage", "Window"], optional = true }
 dirs = { version = "6", optional = true }
 dioxus-cookie = { version = "0.2", default-features = false, optional = true }
 

@@ -86,9 +86,22 @@ pub fn AccountGate(children: Element) -> Element {
     }
 }
 
+/// The address field's value, filled in on the client.
+///
+/// The stored address lives in client storage the server cannot read, so a
+/// server render of `backend_url()` wrote its own fallback, `localhost`, into
+/// the field. Hydration keeps markup it believes matches, so the field went on
+/// showing `localhost` after every reload, even though the address had saved
+/// and was in use. Both sides render it empty, and the client fills it in.
+fn use_backend_url_field() -> Signal<String> {
+    let mut url = use_signal(String::new);
+    use_effect(move || url.set(server_url::backend_url()));
+    url
+}
+
 #[component]
 fn BackendSetupScreen(problem: Option<String>, on_saved: EventHandler<()>) -> Element {
-    let url = use_signal(server_url::backend_url);
+    let url = use_backend_url_field();
     let mut error = use_signal(|| problem.clone().unwrap_or_default());
 
     rsx! {
@@ -272,7 +285,7 @@ pub fn AccountSettings() -> Element {
 /// The server section of the settings page.
 #[component]
 pub fn BackendSettings() -> Element {
-    let url = use_signal(server_url::backend_url);
+    let url = use_backend_url_field();
     let mut error = use_signal(String::new);
     let mut saved = use_signal(|| false);
 

@@ -37,3 +37,21 @@ The privacy-enhanced YouTube embed is never substituted automatically. If every 
 The media element lives in the shared app shell: it is full-width on a video route and changes into a compact bar above bottom navigation while the user explores the rest of the app, without being unmounted. Playback speed, captions, chapter seeking, and picture-in-picture operate on that same element. Set `TAWNY_BOTGUARD_BIN` to a compatible `rustypipe-botguard` executable for PO-token-backed browser-client streams; the extractor caches session tokens while content-bound data stays ephemeral. A `Sabr` source is played through a playable DASH/HLS bridge or a registered `TawnySabrAdapter`; raw UMP parsing and BotGuard execution remain behind that adapter boundary rather than being mislabeled as ordinary media playback.
 
 Tawny is not affiliated with or endorsed by YouTube. YouTube trademarks belong to their respective owners.
+
+## Watch progress
+
+While a video plays, its position is saved to the server about every five
+seconds, and again when playback stops or the page is hidden or left, so
+another device can pick up close to where this one stopped. When a video
+starts, the player also reads its saved position from the server
+(`get_video_progress`) and moves there if it differs by more than five seconds
+from where it opened and the viewer has not moved it yet: the list it was
+opened from may have been fetched on this device before the viewer stopped on
+another.
+
+## Taps on the video
+
+With a mouse, a click on the video plays or pauses. On a touch screen, or any
+pointer that cannot hover, a tap shows the controls and the next tap hides
+them; only the play button plays or pauses. Double taps on the left or right
+third seek, on every device.

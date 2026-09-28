@@ -659,6 +659,31 @@ impl AppServerState {
         self.write_user_progress(owner, progress).await
     }
 
+    /// This account's saved place in one video, if it has one.
+    pub async fn video_progress(
+        &self,
+        owner: &str,
+        video_id: &str,
+    ) -> Result<Option<VideoProgress>> {
+        if owner.is_empty() {
+            return Ok(None);
+        }
+        let rows: Vec<DbVideoProgress> = self
+            .db
+            .query("SELECT video_id, watched, progress_seconds, audio_only FROM video_progress WHERE owner = type::record($owner) AND video_id = $video_id LIMIT 1")
+            .bind(("owner", owner.to_string()))
+            .bind(("video_id", video_id.to_string()))
+            .await?
+            .check()?
+            .take(0)?;
+        Ok(rows.into_iter().next().map(|row| VideoProgress {
+            video_id: row.video_id,
+            watched: row.watched,
+            progress_seconds: row.progress_seconds.max(0) as u64,
+            audio_only: row.audio_only,
+        }))
+    }
+
     /// Create or replace subscription groups, by id.
     pub async fn save_groups(&self, owner: &str, groups: &[SubscriptionGroup]) -> Result<()> {
         let _guard = self.sync_lock.lock().await;
