@@ -20,6 +20,12 @@ it is given; changing it reloads the app. The player's transport fetches from
 the webview directly, so it is told the chosen backend too
 (`playback_server_url` in `player.rs`).
 
+On the web the default is the page's own origin, since a Tawny server serves
+its own client. The address fields on the setup screen and in Settings are
+filled in on the client: the saved address is in client storage, and a server
+render of it would write the server's fallback (`localhost`) into the field,
+which hydration then kept.
+
 ## Android
 
 For the Android emulator, run the normal Dioxus command:

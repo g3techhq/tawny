@@ -18,9 +18,8 @@
 
 #![cfg_attr(feature = "server", allow(dead_code))]
 
-/// Baked in at build time, and the answer for anyone who never opens settings.
-/// A self-hosted deployment serves the client from the same origin it answers
-/// on, so this is usually already correct on the web.
+/// Baked in at build time: the answer for a packaged client whose viewer never
+/// opens settings. The web does not use it; see [`default_backend_url`].
 const COMPILED_DEFAULT: Option<&str> = option_env!("SERVER_URL");
 
 #[cfg(target_os = "android")]
@@ -63,8 +62,24 @@ pub fn backend_url() -> String {
         .unwrap_or_else(default_backend_url)
 }
 
+/// The backend to offer before one was chosen.
+///
+/// On the web, the origin that served the page: a Tawny server serves its own
+/// client, so that is the server, whatever was baked in at build time. The
+/// compiled default used to win here, and a build without `SERVER_URL` then
+/// offered `localhost` to someone who had opened `https://tawny.example`.
 pub fn default_backend_url() -> String {
+    #[cfg(all(not(feature = "server"), target_arch = "wasm32"))]
+    if let Some(origin) = page_origin() {
+        return origin;
+    }
     COMPILED_DEFAULT.unwrap_or(FALLBACK_DEFAULT).to_string()
+}
+
+#[cfg(all(not(feature = "server"), target_arch = "wasm32"))]
+fn page_origin() -> Option<String> {
+    let origin = web_sys::window()?.location().origin().ok()?;
+    normalize_backend_url(&origin)
 }
 
 /// Whether a backend was ever chosen deliberately.
