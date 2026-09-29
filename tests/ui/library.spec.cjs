@@ -27,6 +27,17 @@ test.describe("Tawny library interactions", () => {
   }) => {
     await openApp(appPage, "/settings");
 
+    // Style and theme both follow the device until the viewer picks.
+    const style = appPage.getByRole("radiogroup", { name: "Style" });
+    const theme = appPage.getByRole("radiogroup", { name: "Theme" });
+    await expect(style.getByRole("radio", { name: "Auto", exact: true })).toBeChecked();
+    await expect(theme.getByRole("radio", { name: "Auto", exact: true })).toBeChecked();
+    await expect
+      .poll(() =>
+        appPage.locator(".g3-app-shell").evaluate((node) => getComputedStyle(node).colorScheme),
+      )
+      .toBe("light dark");
+
     await expect(appPage.getByLabel("Video · Short max (minutes)")).toHaveValue("10");
     await expect(appPage.getByLabel("Video · Medium max (minutes)")).toHaveValue("35");
 

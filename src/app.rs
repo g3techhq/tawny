@@ -112,6 +112,12 @@ pub enum Route {
 
 fn tawny_theme(appearance: Appearance) -> Theme {
     match appearance {
+        // Each token becomes a CSS `light-dark()` pair, so the browser follows
+        // the system setting by itself, with no script and no re-render.
+        Appearance::Auto => Theme::adaptive(
+            tawny_theme(Appearance::Light),
+            tawny_theme(Appearance::Dark),
+        ),
         Appearance::Dark => Theme {
             accent: "#f5a524".into(),
             // Amber is light, so what sits on it is dark.

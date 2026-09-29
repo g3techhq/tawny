@@ -16,7 +16,9 @@ pub enum PlatformStyle {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Appearance {
+    /// The system's light or dark setting, followed as it changes.
     #[default]
+    Auto,
     Dark,
     Light,
 }
@@ -189,7 +191,7 @@ impl AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            appearance: Appearance::Dark,
+            appearance: Appearance::Auto,
             platform_style: PlatformStyle::Auto,
             playback_speed: 1.0,
             shorts_playback_speed: 1.0,

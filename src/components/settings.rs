@@ -272,19 +272,20 @@ pub fn SettingsPage() -> Element {
                     Card { title: "Appearance & feed",
                         Stack { gap: Space::Md,
                             SegmentGroup {
-                                value: appearance,
-                                label: "Theme",
-                                onchange: move |picked: Appearance| app_state.settings.write().appearance = picked,
-                                SegmentButton { value: Appearance::Dark, "Dark" }
-                                SegmentButton { value: Appearance::Light, "Light" }
-                            }
-                            SegmentGroup {
                                 value: platform_style,
-                                label: "Design language",
+                                label: "Style",
                                 onchange: move |picked: PlatformStyle| app_state.settings.write().platform_style = picked,
                                 SegmentButton { value: PlatformStyle::Auto, "Auto" }
                                 SegmentButton { value: PlatformStyle::Ios, "iOS" }
                                 SegmentButton { value: PlatformStyle::Material, "Material" }
+                            }
+                            SegmentGroup {
+                                value: appearance,
+                                label: "Theme",
+                                onchange: move |picked: Appearance| app_state.settings.write().appearance = picked,
+                                SegmentButton { value: Appearance::Auto, "Auto" }
+                                SegmentButton { value: Appearance::Dark, "Dark" }
+                                SegmentButton { value: Appearance::Light, "Light" }
                             }
                             Toggle {
                                 checked: hide_watched,
