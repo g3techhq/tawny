@@ -60,6 +60,9 @@
     });
   }
 
+  // The element whose controller holds the page's Media Session actions.
+  let sessionOwner = null;
+
   function attach(video) {
     if (!video) return;
     const root = video.closest("#tawny-player");
@@ -1169,6 +1172,52 @@
       }
       root.querySelector("[data-player-native-playback-stop]")?.click();
     });
+    // A headset button or the lock screen pauses the element directly, and
+    // while the page is hidden the pause listener above reads that as the
+    // browser suspending playback and resumes it at once. Taking the actions
+    // over records them as the viewer's intent first. The native apps route
+    // these through their own session and set the intent on the element.
+    const mediaSession = "mediaSession" in navigator ? navigator.mediaSession : null;
+    const sessionActions = {
+      play: () => {
+        if (starting) setStarting(false);
+        setPlaybackIntent(true);
+        video.play().catch(() => {});
+      },
+      pause: () => {
+        if (starting) setStarting(false);
+        setPlaybackIntent(false);
+        video.pause();
+      },
+      stop: () => {
+        setPlaybackIntent(false);
+        video.pause();
+      },
+      seekbackward: (details) => seekBy(-(details?.seekOffset || 10)),
+      seekforward: (details) => seekBy(details?.seekOffset || 10),
+      seekto: (details) => {
+        if (Number.isFinite(details?.seekTime)) video.currentTime = details.seekTime;
+      },
+    };
+    function setSessionActions(enabled) {
+      if (!mediaSession) return;
+      // The next video can attach before this one is torn down, and its
+      // handlers are not this controller's to clear.
+      if (!enabled && sessionOwner !== video) return;
+      sessionOwner = enabled ? video : null;
+      for (const [action, handler] of Object.entries(sessionActions)) {
+        // Browsers reject actions they do not know rather than ignoring them.
+        try {
+          mediaSession.setActionHandler(action, enabled ? handler : null);
+        } catch (_) {}
+      }
+    }
+    setSessionActions(true);
+    const reportSessionState = () => {
+      if (mediaSession) mediaSession.playbackState = playbackIntent ? "playing" : "paused";
+    };
+    listen(video, "play", reportSessionState);
+    listen(video, "pause", reportSessionState);
     listen(video, "timeupdate", trackStart);
     // The transport's play() was refused - a browser that wants a gesture
     // first. The Play button is then exactly what the viewer needs.
@@ -1342,6 +1391,7 @@
       setMetadata,
       destroy() {
         abort.abort();
+        setSessionActions(false);
         if (animationFrame) cancelAnimationFrame(animationFrame);
         if (hideTimer) clearTimeout(hideTimer);
         if (feedbackTimer) clearTimeout(feedbackTimer);

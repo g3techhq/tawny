@@ -55,3 +55,14 @@ With a mouse, a click on the video plays or pauses. On a touch screen, or any
 pointer that cannot hover, a tap shows the controls and the next tap hides
 them; only the play button plays or pauses. Double taps on the left or right
 third seek, on every device.
+
+## Pauses that are not the viewer's
+
+The controls keep a playback intent. When the element pauses while the
+intent is still "playing" and the page is hidden or in picture-in-picture,
+that is taken as the browser or Shaka suspending playback, and it is resumed.
+So every pause the viewer asks for has to record the intent first: the play
+button does, the Android and iOS apps' own media sessions set it on the
+element, and in a browser the player takes over the Media Session's play,
+pause, stop and seek actions. Without that, a headset or lock-screen pause on
+a phone browser was resumed at once.

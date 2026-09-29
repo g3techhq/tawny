@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 use g3_cache::{invalidate_cached, use_cached};
 use g3_ui::{
     Chip, Color, Content, Divider, DividerOrientation, InfiniteScroll, SegmentButton, SegmentGroup,
-    Shelf, Space, Stack, Text, TextTone,
+    Shelf, ShellSize, Space, Stack, Text, TextTone,
 };
 
 use super::{PageHeader, VideoGrid, VideoGridSkeleton, use_duration_hydration};
@@ -55,7 +55,7 @@ pub fn Feed() -> Element {
         pages.set(1);
     });
 
-    let refresh = move |_| {
+    let mut refresh = move || {
         app_state.syncing.set(true);
         spawn(async move {
             match refresh_subscription_feed().await {
@@ -77,6 +77,29 @@ pub fn Feed() -> Element {
             app_state.syncing.set(false);
         });
     };
+    // Tapping the Feed tab again while here. A phone pulls down to refresh,
+    // so the tap only goes back to the top; the wide layout has no pull, so
+    // it refreshes as well, from the top where the new uploads land.
+    let shell_size = use_hook(try_consume_context::<Signal<ShellSize>>);
+    // Taps counted before this feed mounted were answered by an earlier one.
+    let mut answered = use_signal(|| *app_state.feed_reselected.peek());
+    use_effect(move || {
+        let taps = (app_state.feed_reselected)();
+        if taps == *answered.peek() {
+            return;
+        }
+        answered.set(taps);
+        spawn(async move {
+            let mut eval = document::eval(
+                "document.querySelector('.g3-content-scroll')?.scrollTo({ top: 0, behavior: 'smooth' }); dioxus.send(true);",
+            );
+            let _ = eval.recv::<bool>().await;
+        });
+        let wide = shell_size.is_some_and(|size| size.peek().is_wide());
+        if wide && !*app_state.syncing.peek() {
+            refresh();
+        }
+    });
     let load_next_page = move |_| {
         if has_more() {
             pages += 1;
@@ -90,7 +113,7 @@ pub fn Feed() -> Element {
         }
         Content {
             // Pull down to refresh, replacing the button that sat in the intro row.
-            on_refresh: refresh,
+            on_refresh: move |_| refresh(),
             refreshing: app_state.syncing(),
             Stack { gap: Space::Md,
                 // Length and group filters share one strip rather than stacking
