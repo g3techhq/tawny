@@ -3368,9 +3368,9 @@ dependencies = [
 
 [[package]]
 name = "g3-native-plugins"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "273768f73da282cc1bca09a2c55fa0d058dd385f3138d5a14e1eb6f915841b49"
+checksum = "3ae3944f2b44025cf50a22cdffd115a6970ddf28e3be9aed3fa23c2e0dd3d722"
 dependencies = [
  "cfg-if",
  "dioxus",
