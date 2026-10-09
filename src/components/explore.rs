@@ -1,15 +1,15 @@
 use crate::{
     api::{get_feed_page, search_catalog, search_catalog_page},
     app::Route,
-    models::{Channel, ExploreFilter, FeedFilter, FeedGroup, FeedQuery, SearchResults, Video},
+    models::{Channel, ExploreFilter, FeedFilter, FeedGroup, FeedQuery, Video},
     state::AppState,
 };
 use dioxus::prelude::*;
 use g3_cache::use_cached;
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
-    Avatar, AvatarSize, Button, ButtonFill, Chip, Color, Content, InfiniteScroll, Searchbar,
-    SegmentButton, SegmentGroup, Shelf, Space, Spinner, Stack, StackAlign, Text, TextTone,
+    Avatar, AvatarSize, Chip, Color, Content, InfiniteScroll, Searchbar, SegmentButton,
+    SegmentGroup, Shelf, Space, Spinner, Stack, StackAlign, Text, TextTone,
 };
 
 use super::{PageHeader, VideoGrid, VideoGridSkeleton};
@@ -28,9 +28,9 @@ const RESULT_PAGE_SIZE: usize = 24;
 #[component]
 pub fn Explore() -> Element {
     let app_state = use_context::<AppState>();
-    let search = use_signal(String::new);
+    let search = app_state.explore_search;
     let explore_filter = app_state.explore_filter;
-    let mut results = use_signal(|| None::<SearchResults>);
+    let mut results = app_state.explore_results;
     let mut searching = use_signal(|| false);
     let mut visible_count = use_signal(|| RESULT_PAGE_SIZE);
     let needle = use_memo(move || search().trim().to_lowercase());
@@ -133,11 +133,23 @@ pub fn Explore() -> Element {
             searching.set(false);
         });
     };
-    let load_more = move |_| {
+    // Made once and reading state when it runs, like the channel page's: the
+    // infinite scroll calls it as the sentinel comes into view. It first grows
+    // the laid-out page, and only asks the server when everything it has is
+    // already on screen.
+    let load_more = use_callback(move |_: ()| {
+        if shown.peek().remaining > 0 {
+            visible_count += RESULT_PAGE_SIZE;
+            return;
+        }
+        if *searching.peek() {
+            return;
+        }
         let Some(token) = next_page() else {
             return;
         };
-        let query = search().trim().to_string();
+        let filter = *explore_filter.peek();
+        let query = search.peek().trim().to_string();
         searching.set(true);
         spawn(async move {
             match search_catalog_page(query, filter.query().to_string(), token).await {
@@ -164,7 +176,7 @@ pub fn Explore() -> Element {
             }
             searching.set(false);
         });
-    };
+    });
 
     rsx! {
         PageHeader {
@@ -222,24 +234,9 @@ pub fn Explore() -> Element {
                     VideoGrid { videos: shown.map(|shown| &shown.videos), empty_message: "No matches yet. Check the source connection or try another search.".to_string() }
                 }
                 InfiniteScroll {
-                    loading: false,
-                    complete: remaining == 0,
-                    on_load: move |_| {
-                        if remaining > 0 {
-                            visible_count += RESULT_PAGE_SIZE;
-                        }
-                    },
-                }
-                if has_next_page {
-                    Stack { align: StackAlign::Center,
-                        Button {
-                            fill: ButtonFill::Outline,
-                            color: Color::Neutral,
-                            loading: searching(),
-                            onclick: load_more,
-                            "Load more results"
-                        }
-                    }
+                    loading: searching(),
+                    complete: remaining == 0 && !has_next_page,
+                    on_load: load_more,
                 }
             }
         }

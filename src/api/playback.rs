@@ -23,7 +23,8 @@ impl From<ServerFnError> for PlaybackFailure {
                 PlaybackFailureOrigin::Setup,
                 "The Tawny server could not be reached.",
             )
-            .remedy("Check your connection and that the server is running, then try again."),
+            .remedy("Check your connection and that the server is running, then try again.")
+            .retryable(),
             ServerFnError::ServerError { .. } => PlaybackFailure::new(
                 PlaybackFailureOrigin::Unknown,
                 "The server could not start playback.",

@@ -23,7 +23,7 @@ use crate::{
         AppSettings, AudioTrackOption, CaptionTrack, Channel, FeedFilter, HISTORY_LIMIT,
         HistoryEntry, PlaylistContents, PlaylistView, SponsorSegment, SubscriptionChange,
         SubscriptionContent, SubscriptionGroup, Video, VideoChapter, VideoList, VideoPreviewFrames,
-        VideoProgress, Viewer, playlist_queue_entry, queued_playlist_id,
+        VideoProgress, Viewer, playlist_queue_entry, preferred_caption_index, queued_playlist_id,
     },
 };
 use dioxus::prelude::*;
@@ -115,7 +115,17 @@ pub struct AppState {
     pub run_back_stack: Signal<Vec<String>>,
     pub feed_filter: Signal<FeedFilter>,
     pub explore_filter: Signal<crate::models::ExploreFilter>,
+    /// The search page's query and server results, kept here so leaving the
+    /// page and coming back finds the same search. A reload clears them.
+    pub explore_search: Signal<String>,
+    pub explore_results: Signal<Option<crate::models::SearchResults>>,
     pub channel_tab: Signal<FeedFilter>,
+    /// What the feed was showing, kept so leaving it and coming back finds the
+    /// same filters and as many pages as were loaded, which is what lets a
+    /// returning scroll position land where it was left.
+    pub feed_group: Signal<crate::models::FeedGroup>,
+    pub feed_duration: Signal<Option<crate::models::DurationFilter>>,
+    pub feed_pages: Signal<usize>,
 }
 
 impl AppState {
@@ -269,7 +279,9 @@ impl AppState {
     ) {
         if !captions.is_empty() {
             if (self.selected_caption)().is_none() {
-                self.selected_caption.set(Some(0));
+                let language = self.settings.peek().preferred_caption_language.clone();
+                self.selected_caption
+                    .set(preferred_caption_index(&captions, &language));
             }
             self.active_captions.set(captions);
         }
@@ -278,6 +290,16 @@ impl AppState {
         }
         if preview_frames.is_some() {
             self.active_preview_frames.set(preview_frames);
+        }
+    }
+
+    /// Choose the playing video's captions by the viewer's language again,
+    /// after the setting changes, so the choice shows without a new video.
+    pub fn select_preferred_caption(mut self) {
+        let language = self.settings.peek().preferred_caption_language.clone();
+        let index = preferred_caption_index(&self.active_captions.peek(), &language);
+        if index.is_some() {
+            self.selected_caption.set(index);
         }
     }
 
@@ -460,6 +482,71 @@ impl AppState {
         self.edit_viewer(|viewer| viewer.playlists.push(playlist));
         self.send(DataChange::Playlists, api::save_playlist(id.clone(), name));
         id
+    }
+
+    /// Create a playlist that already holds `video`, returning its id.
+    ///
+    /// One edit and one request chain rather than [`Self::create_playlist`]
+    /// followed by [`Self::add_to_playlist`]: that second call looks the
+    /// playlist up in the cached viewer, which a created playlist reaches only
+    /// after the cache has settled, so the video was silently left out.
+    pub fn create_playlist_with(self, name: String, video: &Video) -> String {
+        let id = format!("pl-{}", random_suffix());
+        let playlist = crate::models::Playlist {
+            id: id.clone(),
+            name: name.clone(),
+            video_ids: vec![video.id.clone()],
+        };
+        self.edit_viewer(|viewer| viewer.playlists.push(playlist));
+        let (created, video_id) = (id.clone(), video.id.clone());
+        self.send(DataChange::Playlists, async move {
+            api::save_playlist(created.clone(), name).await?;
+            api::set_in_playlist(created, video_id, true).await?;
+            Ok(())
+        });
+        id
+    }
+
+    /// Rename a playlist, everywhere it is shown at once.
+    pub fn rename_playlist(self, playlist_id: &str, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        self.edit_viewer(|viewer| {
+            if let Some(playlist) = viewer.playlists.iter_mut().find(|p| p.id == playlist_id) {
+                playlist.name = name.clone();
+            }
+        });
+        update_cached(get_playlist, (playlist_id.to_string(),), |contents| {
+            if let Some(contents) = contents {
+                contents.playlist.name = name.clone();
+            }
+        });
+        update_cached(get_playlist_previews, (), |previews| {
+            if let Some(preview) = previews.iter_mut().find(|p| p.id == playlist_id) {
+                preview.name = name.clone();
+            }
+        });
+        self.send(
+            DataChange::Playlists,
+            api::save_playlist(playlist_id.to_string(), name),
+        );
+    }
+
+    /// Put the playlists in the order given. Anything not named keeps its
+    /// place after the ones that are.
+    pub fn reorder_playlists(self, order: Vec<String>) {
+        let rank = |id: &str| order.iter().position(|ordered| ordered == id);
+        self.edit_viewer(|viewer| {
+            viewer
+                .playlists
+                .sort_by_key(|p| rank(&p.id).unwrap_or(usize::MAX))
+        });
+        update_cached(get_playlist_previews, (), |previews| {
+            previews.sort_by_key(|p| rank(&p.id).unwrap_or(usize::MAX));
+        });
+        self.send(DataChange::Playlists, api::reorder_playlists(order.clone()));
     }
 
     pub fn delete_playlist(mut self, playlist_id: &str) -> Option<String> {
@@ -1300,7 +1387,12 @@ pub fn AppStateProvider(children: Element) -> Element {
         run_back_stack: Signal::new(Vec::new()),
         feed_filter: Signal::new(FeedFilter::All),
         explore_filter: Signal::new(crate::models::ExploreFilter::All),
+        explore_search: Signal::new(String::new()),
+        explore_results: Signal::new(None),
         channel_tab: Signal::new(FeedFilter::All),
+        feed_group: Signal::new(crate::models::FeedGroup::All),
+        feed_duration: Signal::new(None),
+        feed_pages: Signal::new(1),
     });
 
     rsx! { {children} }

@@ -33,6 +33,48 @@ pub use video::*;
 mod tests {
     use super::*;
 
+    fn caption(language_code: &str, auto_generated: bool) -> CaptionTrack {
+        CaptionTrack {
+            label: language_code.into(),
+            language_code: language_code.into(),
+            mime_type: "text/vtt".into(),
+            url: String::new(),
+            auto_generated,
+        }
+    }
+
+    #[test]
+    fn captions_open_in_the_preferred_language_not_the_first_listed() {
+        // YouTube lists tracks alphabetically, so Arabic leads.
+        let tracks = [
+            caption("ar", false),
+            caption("en", true),
+            caption("en-GB", false),
+            caption("fr", false),
+        ];
+        // A written track beats the automatic one, a region still counts.
+        assert_eq!(preferred_caption_index(&tracks, "en"), Some(2));
+        assert_eq!(preferred_caption_index(&tracks, "EN-us"), Some(2));
+        assert_eq!(preferred_caption_index(&tracks, "fr"), Some(3));
+        // Only the automatic track speaks it: better than another language.
+        assert_eq!(preferred_caption_index(&tracks[..2], "en"), Some(1));
+        // Nothing in the language: the first, as before.
+        assert_eq!(preferred_caption_index(&tracks, "ja"), Some(0));
+        assert_eq!(preferred_caption_index(&[], "en"), None);
+    }
+
+    #[test]
+    fn settings_saved_before_the_caption_language_existed_prefer_english() {
+        let mut saved = serde_json::to_value(AppSettings::default()).expect("settings serialize");
+        saved
+            .as_object_mut()
+            .expect("settings are an object")
+            .remove("preferred_caption_language");
+        let settings: AppSettings =
+            serde_json::from_value(saved).expect("older settings still load");
+        assert_eq!(settings.preferred_caption_language, "en");
+    }
+
     fn video(id: &str, title: &str, published_at: &str, duration_seconds: u64) -> Video {
         Video {
             id: id.into(),

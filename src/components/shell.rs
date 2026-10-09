@@ -126,6 +126,93 @@ fn NativeMediaCoordinator() -> Element {
 fn NativeMediaCoordinator() -> Element {
     rsx! {}
 }
+/// Remembers how far each page was scrolled, and puts it back when the page
+/// returns: by Back, by closing the player over it, or by tapping its tab.
+///
+/// A page that is pushed from another starts at the top, as it should; so does
+/// a page opened afresh. The pages are rebuilt on every visit, so without this
+/// every return to the feed was a return to its first screen.
+///
+/// Mounted once per route, keyed by it, so arriving is what runs it. The work
+/// is JS because the scroll area is a DOM element the framework does not own,
+/// and the offset has to be set during the transition, before the new page is
+/// captured, or the slide would end on the top and then jump.
+#[component]
+fn ScrollMemory(path: String) -> Element {
+    // An effect, not a hook: the server renders this too, and has no page to
+    // scroll. It reads no signal, so it runs once, which is the arrival.
+    use_effect(move || {
+        let path = serde_json::to_string(&path).unwrap_or_default();
+        document::eval(&SCROLL_MEMORY_JS.replace("__PATH__", &path));
+    });
+    rsx! {}
+}
+
+/// Tab roots keep their place when switched to; everything else keeps it only
+/// when it is returned to. The watch page is never restored: opening a video
+/// starts it at the top, and the details reset it there on purpose.
+const SCROLL_MEMORY_JS: &str = r#"
+const path = __PATH__;
+const key = Symbol.for('tawny.scroll-memory');
+if (!window[key]) {
+    const saved = new Map();
+    let current = null;
+    let token = 0;
+    let restoring = false;
+    const scroller = () => document.querySelector('.g3-content-scroll');
+    document.addEventListener('scroll', (event) => {
+        const element = event.target;
+        if (restoring || !current || !(element instanceof Element)) return;
+        if (!element.matches('.g3-content-scroll')) return;
+        if (document.documentElement.dataset.routeTransition) return;
+        saved.set(current, element.scrollTop);
+    }, true);
+    // Whoever scrolls for themselves while a position is being put back wins.
+    const yield_to_user = () => { token += 1; restoring = false; };
+    for (const name of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+        document.addEventListener(name, yield_to_user, { capture: true, passive: true });
+    }
+    window[key] = {
+        arrive(next, restore) {
+            current = next;
+            const mine = ++token;
+            restoring = false;
+            const target = restore ? (saved.get(next) || 0) : 0;
+            if (!restore) saved.delete(next);
+            if (!target) return;
+            restoring = true;
+            const started = Date.now();
+            const step = () => {
+                if (mine !== token) return;
+                const element = scroller();
+                const elapsed = Date.now() - started;
+                if (element) {
+                    if (Math.abs(element.scrollTop - target) > 1) element.scrollTop = target;
+                    // Lists arrive in stages, so a page too short to hold the
+                    // offset yet is given a moment to grow.
+                    if (Math.abs(element.scrollTop - target) <= 1 && elapsed > 250) {
+                        restoring = false;
+                        return;
+                    }
+                }
+                if (elapsed > 2500) {
+                    if (element) saved.set(next, element.scrollTop);
+                    restoring = false;
+                    return;
+                }
+                setTimeout(step, 50);
+            };
+            step();
+        },
+    };
+}
+const roots = ['/', '/subscriptions', '/playlists', '/explore'];
+const transition = document.documentElement.dataset.routeTransition;
+const returning = transition === 'backward' || transition === 'dismiss-sheet';
+const restore = !path.startsWith('/watch/') && (returning || roots.includes(path));
+window[key].arrive(path, restore);
+"#;
+
 /// The bar every page renders for itself, so it travels with the page it
 /// describes rather than staying put while the page slides out from under it.
 #[component]
@@ -219,6 +306,7 @@ pub fn AppShell() -> Element {
     let route: Route = use_route();
     let mut app_state = use_context::<AppState>();
 
+    let route_path = route.to_string();
     let player_expanded = matches!(route, Route::VideoDetail { .. });
     let on_feed = matches!(route, Route::Feed {});
     let is_auxiliary = is_auxiliary_route(&route);
@@ -244,6 +332,8 @@ pub fn AppShell() -> Element {
         NativeMediaCoordinator {}
         NativeBackCoordinator {}
         ToasterBridge {}
+        // Keyed by the route so arriving at a page is a mount.
+        {rsx! { ScrollMemory { key: "{route_path}", path: route_path.clone() } }}
         // The tab layout is the base region a sheet covers. Nothing may wrap
         // it in another snapshot region: a named descendant is lifted out of
         // its ancestor, so the outer region would contain only the lifted

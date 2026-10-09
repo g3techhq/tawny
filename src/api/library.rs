@@ -88,6 +88,19 @@ pub async fn save_playlist(playlist_id: String, name: String) -> Result<Playlist
         .map_err(server_error)?)
 }
 
+/// Put the playlists in the order given.
+#[post(
+    "/api/v1/playlists/reorder",
+    state: dioxus::fullstack::extract::State<crate::server::AppServerState>,
+    owner: crate::auth::Owner
+)]
+pub async fn reorder_playlists(playlist_ids: Vec<String>) -> Result<()> {
+    Ok(state
+        .reorder_playlists(&owner.0, &playlist_ids)
+        .await
+        .map_err(server_error)?)
+}
+
 #[post(
     "/api/v1/playlists/membership",
     state: dioxus::fullstack::extract::State<crate::server::AppServerState>,

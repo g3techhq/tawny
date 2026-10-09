@@ -1365,6 +1365,13 @@ html[data-route-transition="dismiss-sheet"]::view-transition-group(player) {
   z-index: 10000;
 }
 
+/* While the watch sheet slides in, every touch lands on the document, and the
+   controls script reads a downward flick there as dismissing it. Left free to
+   pan, the browser cancelled that touch as soon as it moved. */
+html[data-route-transition="present-sheet"][data-route-transition-to^="/watch/"] {
+  touch-action: none;
+}
+
 /* Without these the group morphs on the UA default (0.25s, ease) while the
    sheet slides on the cover duration and curve. The video then arrives ahead of
    the surface carrying it and drifts on a different arc, which reads as the
@@ -1395,11 +1402,17 @@ html[data-route-transition-platform="material"][data-route-transition="present-s
   animation-timing-function: var(--route-transition-material-decelerate) !important;
 }
 
+/* Not the accelerate curve the sheet uses. Accelerate holds near zero for the
+   first third of its time and then rushes, which suits something leaving the
+   screen but not a player that travels most of the screen to the mini bar: it
+   sat full size while the page above it was already fading, then dropped into
+   place in the last frames - measured on Android Chrome, 2026-10-07. A
+   standard ease keeps it moving for as long as the page is. */
 html[data-route-transition-platform="material"][data-route-transition="dismiss-sheet"]::view-transition-group(
   player
 ) {
   animation-duration: var(--route-transition-material-sheet-dismiss-duration) !important;
-  animation-timing-function: var(--route-transition-material-accelerate) !important;
+  animation-timing-function: var(--route-transition-material-spatial-ease) !important;
 }
 
 /* The stage's own child carries a 220ms transform transition for the swipe
@@ -1647,7 +1660,11 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
 #tawny-player:fullscreen .player-controls-bottom,
 #tawny-player.is-fullscreen .player-controls-bottom {
   padding-right: max(0.7rem, env(safe-area-inset-right));
-  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  /* The seek bar is the lowest thing on screen, and a drag along it that
+     strays to the edge is the system's own gesture (Android's app switcher
+     swipe), not a scrub. WebViews do not report that strip as a safe area, so
+     the bar is lifted clear of it by a fixed amount. */
+  padding-bottom: max(1.75rem, env(safe-area-inset-bottom));
   padding-left: max(0.7rem, env(safe-area-inset-left));
 }
 
@@ -1732,4 +1749,64 @@ html[data-android-pip="true"] .persistent-player-stage iframe {
     top: max(0.3rem, env(safe-area-inset-top));
     max-height: calc(100dvh - 0.6rem - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   }
+
+  /* On its side the stage is the whole screen, so the same applies without
+     the fullscreen API being involved. */
+  .persistent-player.expanded .player-controls-bottom {
+    padding-bottom: max(1.75rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* A toast rises above the bottom bar, and above the mini bar resting on it,
+   rather than covering the tabs it would then have to be dismissed to reach.
+   Sheet routes hide the bar, so the toast drops back to the screen edge there.
+   The wide layout's rail is at the side and needs nothing. g3-ui reads
+   `--g3-toast-bottom`; the bar's height is the one the mini bar rests on. */
+@container g3-app-shell (width < 48rem) {
+  .g3-app-shell:has(.tawny-shell:not(.tawny-shell-cover, .tawny-shell-auxiliary)) .g3-toast-bottom {
+    --tawny-nav-height: calc(3.625rem + 1px + max(0.375rem, env(safe-area-inset-bottom)));
+    --g3-toast-bottom: calc(var(--tawny-nav-height) + 0.75rem);
+  }
+
+  .g3-app-shell:has(.tawny-shell.has-mini-player) .g3-toast-bottom {
+    --g3-toast-bottom: calc(var(--tawny-nav-height) + 3.65rem + 0.75rem);
+  }
+}
+
+/* The duration and watched badges sit on whatever the thumbnail happens to be.
+   The default neutral badge is a translucent card colour, which vanishes on a
+   bright frame, so over a picture it is a dark chip with light text. The LIVE
+   badge keeps its own colour. */
+.thumbnail-badges .g3-badge-neutral {
+  border-color: transparent;
+  background: rgb(0 0 0 / 0.82);
+  color: #fff;
+}
+
+/* The mini bar is fixed to the screen and lives outside the routed page, so
+   it is part of the root snapshot. A page push or pop captures the page as one
+   opaque, full-viewport image that paints over the root, and the bar vanished
+   under it for the length of the slide. Named, it is captured on its own and
+   held above the page, still and in place, the way the bottom bar is. Sheets
+   are left alone: the watch sheet names the player itself, and the sheets over
+   a page hide the bar on purpose. */
+html[data-route-transition="forward"] .persistent-player.mini,
+html[data-route-transition="backward"] .persistent-player.mini,
+html[data-route-transition="cross-fade"] .persistent-player.mini {
+  view-transition-name: mini-player;
+}
+
+html[data-route-transition]::view-transition-group(mini-player) {
+  animation: none;
+  z-index: 10000;
+}
+
+html[data-route-transition]::view-transition-old(mini-player),
+html[data-route-transition]::view-transition-new(mini-player) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html[data-route-transition]::view-transition-old(mini-player):not(:only-child) {
+  opacity: 0;
 }

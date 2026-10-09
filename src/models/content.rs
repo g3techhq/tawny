@@ -98,6 +98,30 @@ pub struct CaptionTrack {
     pub auto_generated: bool,
 }
 
+/// Which of `tracks` a video opens with for a viewer who prefers `language`.
+///
+/// A written track beats YouTube's automatic one, which is a speech
+/// recognition guess. Regional variants count as the language (`en-GB` for
+/// `en`), since a viewer choosing a language is rarely choosing a country.
+/// With nothing in the language, the first track, as before.
+pub fn preferred_caption_index(tracks: &[CaptionTrack], language: &str) -> Option<usize> {
+    let wanted = primary_language(language);
+    let speaks = |track: &CaptionTrack| primary_language(&track.language_code) == wanted;
+    tracks
+        .iter()
+        .position(|track| speaks(track) && !track.auto_generated)
+        .or_else(|| tracks.iter().position(speaks))
+        .or_else(|| (!tracks.is_empty()).then_some(0))
+}
+
+fn primary_language(tag: &str) -> String {
+    tag.split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+}
+
 /// One selectable audio language for the video being watched.
 ///
 /// Reported by the transport rather than the extractor: Shaka is the authority

@@ -28,6 +28,10 @@ fn swipe_icon(kind: SwipeActionKind, size: u32) -> Element {
     }
 }
 
+/// How many cards a grid draws before the route transition that brought its
+/// page in has finished. Two screens of a phone, a row or two of a wide one.
+const GRID_FIRST_SCREEN: usize = 8;
+
 /// A grid of video cards.
 ///
 /// `videos` is a signal so a caller holding a memo passes it without copying
@@ -44,6 +48,16 @@ pub fn VideoGrid(
     let shorts = shorts_layout.unwrap_or(false);
     let empty_copy =
         empty_message.unwrap_or_else(|| "Your cached library will appear here.".to_string());
+    // A page slides in only once it has rendered, and a card is the costliest
+    // thing on any page, so a grid draws its first screenful and the rest
+    // follows once the slide has finished. That puts every list-bearing page's
+    // first frame at the same small price, cached or not.
+    let settled = super::use_after_route_transition();
+    let limit = if settled() {
+        usize::MAX
+    } else {
+        GRID_FIRST_SCREEN
+    };
     let videos = videos.read();
     rsx! {
         if videos.is_empty() {
@@ -58,7 +72,7 @@ pub fn VideoGrid(
                 columns: GridColumns::Count(if shorts { 2 } else { 1 }),
                 wide_columns: GridColumns::Count(if shorts { 6 } else { 4 }),
                 gap: Space::Lg,
-                for video in videos.iter() {
+                for video in videos.iter().take(limit) {
                     VideoCard { key: "{video.id}", video: video.clone(), playlist_id: playlist_id.clone(), short: shorts }
                 }
             }
@@ -201,7 +215,7 @@ pub fn VideoCard(
                             }
                         // Listings that come from a flat playlist carry no
                         // runtime. No badge is honest; "0:00" is not.
-                        div { class: "pointer-events-none absolute right-2 bottom-2 flex gap-1",
+                        div { class: "thumbnail-badges pointer-events-none absolute right-2 bottom-2 flex gap-1",
                             if video.watched {
                                 Badge { Check { size: 12 } "Watched" }
                             }

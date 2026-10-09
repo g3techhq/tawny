@@ -571,6 +571,7 @@ pub(crate) fn extraction_timed_out() -> PlaybackFailure {
         "Try again. If it keeps timing out, the server is slow to reach YouTube or the extractor \
          is overloaded.",
     )
+    .retryable()
 }
 
 /// The extractor sidecar's non-success answers. Each status is one it sends
@@ -612,6 +613,7 @@ pub(crate) fn extractor_status_failure(
             "The PO-token provider the extractor depends on is not running.",
         )
         .remedy("Start the pot-provider container and check its log.")
+        .retryable()
         .detail(said),
         429 => PlaybackFailure::new(
             PlaybackFailureOrigin::Setup,
@@ -621,6 +623,7 @@ pub(crate) fn extractor_status_failure(
             "Try again in a moment. If it happens often, raise YTDLP_CONCURRENCY for the \
              extractor.",
         )
+        .retryable()
         .detail(said),
         504 => extraction_timed_out().detail(said),
         400 => PlaybackFailure::new(
@@ -744,6 +747,7 @@ pub(crate) fn classify_ytdlp_error(stderr: &str) -> PlaybackFailure {
         PlaybackFailure::new(Youtube, "YouTube is rate-limiting the server.").remedy(
             "Wait a few minutes and try again. Lowering YTDLP_CONCURRENCY makes it less likely.",
         )
+        .retryable()
     } else if has(&["video unavailable", "not available", "no longer available"]) {
         // YouTube's catch-all. The watch page shows the same "Video
         // unavailable" to a browser on the server's network, so this is
@@ -782,6 +786,7 @@ pub(crate) fn classify_ytdlp_error(stderr: &str) -> PlaybackFailure {
     ]) {
         PlaybackFailure::new(Setup, "The server could not reach YouTube.")
             .remedy("Check the server's internet connection, then try again.")
+            .retryable()
     } else {
         PlaybackFailure::new(
             Unknown,
@@ -803,6 +808,7 @@ pub(crate) async fn ytdlp_playback_source(
     client: &reqwest::Client,
     video_id: &str,
     formats: &[YtdlpFormat],
+    known_ranges: &HashMap<(u32, u64), SegmentRanges>,
 ) -> Option<PlaybackSource> {
     let candidates = formats
         .iter()
@@ -827,10 +833,29 @@ pub(crate) async fn ytdlp_playback_source(
     //
     // Boxed so the stream's type does not carry the closure: unboxed, it is
     // not general enough to cross the `tokio::spawn` the resolve runs in.
+    // What the other extractor already told us about the same file needs no
+    // probe; see `unambiguous_segment_ranges`. The pair has to be unique on
+    // this side too, or it could be any of the languages sharing it.
+    let mut pairs = HashMap::<(u32, u64), usize>::new();
+    for (format, itag, _, _) in &candidates {
+        if let Some(size) = format.filesize {
+            *pairs.entry((*itag, size)).or_default() += 1;
+        }
+    }
+    let known = |format: &YtdlpFormat, itag: u32| {
+        let pair = (itag, format.filesize?);
+        (pairs.get(&pair) == Some(&1))
+            .then(|| known_ranges.get(&pair).copied())
+            .flatten()
+    };
+
     use futures_util::StreamExt;
     let probes = candidates
         .iter()
         .map(|(format, itag, _, url)| {
+            if let Some(ranges) = known(format, *itag) {
+                return futures_util::future::ready(Some(ranges)).boxed();
+            }
             // Without an exact size the file cannot be told apart from its
             // siblings, so it is probed every time rather than cached.
             let key = format.filesize.map(|size| SegmentRangeKey {
@@ -935,4 +960,26 @@ pub(crate) fn ytdlp_hls_source(formats: &[YtdlpFormat]) -> Option<PlaybackSource
         request_headers: Vec::new(),
         tracks: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn busy_and_rate_limited_failures_are_retried_by_the_player() {
+        let busy = extractor_status_failure(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            br#"{"error":"extractor is busy"}"#,
+        );
+        assert!(busy.retryable);
+        assert!(extraction_timed_out().retryable);
+        assert!(classify_ytdlp_error("ERROR: HTTP Error 429: Too Many Requests").retryable);
+    }
+
+    #[test]
+    fn a_video_youtube_will_never_serve_is_not_retried() {
+        assert!(!classify_ytdlp_error("ERROR: [youtube] abc: Video unavailable").retryable);
+        assert!(!classify_ytdlp_error("ERROR: Sign in to confirm your age").retryable);
+    }
 }

@@ -260,6 +260,17 @@ struct DbPlaylist {
     playlist_id: String,
     name: String,
     video_ids: Vec<String>,
+    /// Optional like the other later columns: a playlist never arranged has
+    /// none, and `SurrealValue` does not honour `#[serde(default)]`.
+    sort_order: Option<i64>,
+}
+
+/// The owner's own order first, then the playlists they never arranged by name.
+fn sort_playlists(playlists: &mut [DbPlaylist]) {
+    playlists.sort_by(|a, b| {
+        let rank = |playlist: &DbPlaylist| playlist.sort_order.unwrap_or(i64::MAX);
+        rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name))
+    });
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
@@ -470,7 +481,10 @@ impl AppServerState {
             ytdlp_http: reqwest::Client::builder()
                 .user_agent("Tawny/0.1 yt-dlp sidecar client")
                 .connect_timeout(Duration::from_secs(3))
-                .timeout(Duration::from_secs(40))
+                // Longer than the extractor's queue for a free slot plus its own
+                // extraction limit, so a video that waited its turn is not given
+                // up on from this side.
+                .timeout(Duration::from_secs(60))
                 .build()?,
             youtube: Arc::new(youtube),
             ytdlp_service_url,
@@ -800,9 +814,10 @@ mod tests {
         center_vtt_cues, classify_ytdlp_error, ebml_vint, extract_chapters,
         extractor_status_failure, mp4_segment_ranges, no_stream_failure, parse_youtube_feed,
         playback_proxy, playback_proxy_options, reconciliation_limit, requested_byte_range,
-        segment_ranges, sniff_media_type, store_segment_ranges, url_path_ends_with,
-        video_published_epoch, webm_segment_ranges, websub_channel_from_topic, ytdlp_hls_source,
-        ytdlp_po_provider_args, ytdlp_service_channel_shorts_url, ytdlp_service_video_url,
+        segment_ranges, sniff_media_type, store_segment_ranges, unambiguous_segment_ranges,
+        url_path_ends_with, video_published_epoch, webm_segment_ranges, websub_channel_from_topic,
+        ytdlp_hls_source, ytdlp_po_provider_args, ytdlp_service_channel_shorts_url,
+        ytdlp_service_video_url,
     };
     use crate::models::PlaybackProtocol;
     use crate::models::Video;
@@ -1841,6 +1856,38 @@ mod tests {
         assert_eq!(ranges.init_end, 737);
         assert_eq!(ranges.index_start, 738);
         assert_eq!(ranges.index_end, 4549);
+    }
+
+    #[test]
+    fn known_ranges_are_only_kept_for_a_file_named_once() {
+        use crate::models::PlaybackByteRange;
+        let range = |start, end| PlaybackByteRange { start, end };
+        let known = unambiguous_segment_ranges([
+            (137, 5_000, range(0, 740), range(741, 1_900)),
+            // Two dubbed languages of one itag, the same length: either
+            // could be meant, so neither is trusted.
+            (140, 9_000, range(0, 630), range(631, 1_200)),
+            (140, 9_000, range(0, 640), range(641, 1_210)),
+            // The same itag at another length is another file.
+            (140, 9_100, range(0, 650), range(651, 1_220)),
+            // Not the init-then-index layout: left to the probe.
+            (251, 7_000, range(0, 300), range(400, 900)),
+        ]);
+        assert_eq!(
+            known.get(&(137, 5_000)),
+            Some(&SegmentRanges {
+                init_end: 740,
+                index_start: 741,
+                index_end: 1_900,
+            })
+        );
+        assert_eq!(known.get(&(140, 9_000)), None);
+        assert_eq!(
+            known.get(&(140, 9_100)).map(|ranges| ranges.index_start),
+            Some(651)
+        );
+        assert_eq!(known.get(&(251, 7_000)), None);
+        assert_eq!(known.len(), 2);
     }
 
     #[test]

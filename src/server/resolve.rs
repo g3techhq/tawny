@@ -117,12 +117,17 @@ impl AppServerState {
         // Why yt-dlp gave nothing, kept for the error the viewer sees if no
         // other ungated source turns up either.
         let ytdlp_failure = ytdlp_result.as_ref().err().cloned();
+        let known_ranges = player
+            .as_ref()
+            .map(rustypipe_segment_ranges)
+            .unwrap_or_default();
         let mut ytdlp_formats = ytdlp_result.unwrap_or_default();
 
         // yt-dlp owns the adaptive source. The extractor is consulted only for
         // what yt-dlp does not produce: the HLS manifest a live stream needs.
         // Its own stream URLs are gated, so they are never played.
-        let mut ytdlp_source = ytdlp_playback_source(&self.http, video_id, &ytdlp_formats).await;
+        let mut ytdlp_source =
+            ytdlp_playback_source(&self.http, video_id, &ytdlp_formats, &known_ranges).await;
         let ranged_at = started.elapsed();
         // Now and then yt-dlp hands out URLs that serve the first minute or so
         // and then answer 403 to every later range: the video starts, plays its
@@ -140,7 +145,8 @@ impl AppServerState {
                 );
                 let retried_formats = self.ytdlp_formats(video_id).await.unwrap_or_default();
                 if let Some(retried) =
-                    ytdlp_playback_source(&self.http, video_id, &retried_formats).await
+                    ytdlp_playback_source(&self.http, video_id, &retried_formats, &known_ranges)
+                        .await
                     && self.adaptive_tail_is_available(&retried).await
                 {
                     ytdlp_source = Some(retried);

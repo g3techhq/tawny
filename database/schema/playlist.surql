@@ -5,6 +5,11 @@ DEFINE FIELD IF NOT EXISTS playlist_id ON playlist TYPE string;
 DEFINE FIELD IF NOT EXISTS name ON playlist TYPE string;
 DEFINE FIELD IF NOT EXISTS description ON playlist TYPE string DEFAULT "";
 DEFINE FIELD IF NOT EXISTS pinned ON playlist TYPE bool DEFAULT false;
+-- Where the owner put this playlist in their own order. Optional: playlists
+-- never arranged have none, and sort after the ones that have, by name. It is
+-- sorted in Rust rather than in the query, so a missing value never has to
+-- compare against a number in SurrealQL.
+DEFINE FIELD IF NOT EXISTS sort_order ON playlist TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS video_ids ON playlist TYPE array<string> DEFAULT [];
 DEFINE FIELD IF NOT EXISTS updated_at ON playlist TYPE datetime DEFAULT time::now();
 

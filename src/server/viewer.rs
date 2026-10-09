@@ -78,13 +78,14 @@ impl AppServerState {
             })
             .collect();
 
-        let playlists: Vec<DbPlaylist> = self
+        let mut playlists: Vec<DbPlaylist> = self
             .db
-            .query("SELECT playlist_id, name, video_ids FROM playlist WHERE owner = type::record($owner) ORDER BY name")
+            .query("SELECT playlist_id, name, video_ids, sort_order FROM playlist WHERE owner = type::record($owner)")
             .bind(("owner", owner.to_string()))
             .await?
             .check()?
             .take(0)?;
+        sort_playlists(&mut playlists);
         let groups: Vec<DbSubscriptionGroup> = self
             .db
             .query("SELECT group_id, name, channel_ids FROM subscription_group WHERE owner = type::record($owner) ORDER BY name")
@@ -308,13 +309,14 @@ impl AppServerState {
         owner: &str,
         thumbnails: usize,
     ) -> Result<Vec<PlaylistPreview>> {
-        let playlists: Vec<DbPlaylist> = self
+        let mut playlists: Vec<DbPlaylist> = self
             .db
-            .query("SELECT playlist_id, name, video_ids FROM playlist WHERE owner = type::record($owner) ORDER BY name")
+            .query("SELECT playlist_id, name, video_ids, sort_order FROM playlist WHERE owner = type::record($owner)")
             .bind(("owner", owner.to_string()))
             .await?
             .check()?
             .take(0)?;
+        sort_playlists(&mut playlists);
         let watched = self
             .watched_ids(owner)
             .await?
@@ -358,7 +360,7 @@ impl AppServerState {
     async fn find_playlist(&self, owner: &str, playlist_id: &str) -> Result<Option<Playlist>> {
         let rows: Vec<DbPlaylist> = self
             .db
-            .query("SELECT playlist_id, name, video_ids FROM playlist WHERE owner = type::record($owner) AND playlist_id = $playlist_id LIMIT 1")
+            .query("SELECT playlist_id, name, video_ids, sort_order FROM playlist WHERE owner = type::record($owner) AND playlist_id = $playlist_id LIMIT 1")
             .bind(("owner", owner.to_string()))
             .bind(("playlist_id", playlist_id.to_string()))
             .await?
@@ -631,6 +633,26 @@ impl AppServerState {
             self.upsert_playlist(owner, &playlist).await?;
         }
         Ok(removed)
+    }
+
+    /// Put the owner's playlists in the order given. A playlist the list does
+    /// not name (made on another device since it was read) keeps no position
+    /// and falls in after the ones that have one, rather than being lost.
+    pub async fn reorder_playlists(&self, owner: &str, playlist_ids: &[String]) -> Result<()> {
+        let _guard = self.sync_lock.lock().await;
+        for (position, playlist_id) in playlist_ids.iter().enumerate() {
+            self.db
+                .query(
+                    "UPDATE playlist SET sort_order = $position \
+                     WHERE owner = type::record($owner) AND playlist_id = $playlist_id",
+                )
+                .bind(("position", position as i64))
+                .bind(("owner", owner.to_string()))
+                .bind(("playlist_id", playlist_id.clone()))
+                .await?
+                .check()?;
+        }
+        Ok(())
     }
 
     /// Delete a playlist, and any queued run of it.
@@ -1095,6 +1117,47 @@ mod tests {
                 .set_in_playlist(&owner, "later", "a1", false)
                 .await
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn playlists_keep_the_order_they_were_put_in() {
+        let (state, owner) = state_and_owner().await;
+        for (id, name) in [("a", "Alpha"), ("b", "Bravo"), ("c", "Charlie")] {
+            state.save_playlist(&owner, id, name).await.unwrap();
+        }
+        let names = |viewer: Viewer| {
+            viewer
+                .playlists
+                .into_iter()
+                .filter(|playlist| ["a", "b", "c", "d"].contains(&playlist.id.as_str()))
+                .map(|playlist| playlist.id)
+                .collect::<Vec<_>>()
+        };
+        // Never arranged: by name.
+        assert_eq!(names(state.viewer(&owner).await.unwrap()), ["a", "b", "c"]);
+
+        state
+            .reorder_playlists(&owner, &["c".into(), "a".into(), "b".into()])
+            .await
+            .unwrap();
+        assert_eq!(names(state.viewer(&owner).await.unwrap()), ["c", "a", "b"]);
+        let previews = state.playlist_previews(&owner, 3).await.unwrap();
+        assert_eq!(
+            previews
+                .iter()
+                .filter(|preview| ["a", "b", "c"].contains(&preview.id.as_str()))
+                .map(|preview| preview.id.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "a", "b"]
+        );
+
+        // Renaming keeps the place, and a playlist made later goes last.
+        state.save_playlist(&owner, "a", "Zulu").await.unwrap();
+        state.save_playlist(&owner, "d", "Delta").await.unwrap();
+        assert_eq!(
+            names(state.viewer(&owner).await.unwrap()),
+            ["c", "a", "b", "d"]
         );
     }
 

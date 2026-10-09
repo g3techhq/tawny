@@ -1,6 +1,6 @@
 use crate::{
     api::{
-        get_comments_page, get_sponsor_segments, get_video_details, get_video_progress,
+        get_comments_page, get_sponsor_segments, get_video_details, get_video_progress, get_videos,
         resolve_playback,
     },
     app::Route,
@@ -484,6 +484,11 @@ fn attach_player_session(
 /// same place, give or take the last few seconds of a sample.
 const RESUME_DRIFT_SECONDS: u64 = 5;
 
+/// Waits before each automatic retry of a playback that failed for a reason
+/// that tends to pass. Spread out because a busy extractor or a rate limit
+/// needs time, not another immediate request.
+const AUTO_RETRY_DELAYS_MS: [u32; 3] = [1_500, 4_000, 9_000];
+
 /// Moves the playing video to the position the server has saved, once it is
 /// attached, unless the viewer has already moved it.
 ///
@@ -563,6 +568,12 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // rather than get the same broken answer back. Keyed by video so the flag
     // cannot leak into the next one and cost it the warm session.
     let mut stale_session_for = use_signal(|| None::<String>);
+    // How many times the player has asked again on its own for this video, and a
+    // counter that re-runs the resolver. The counter is separate from
+    // `playback_attempt` because that one is also the budget for transport
+    // errors and part of the element's key.
+    let mut auto_retries = use_signal(|| 0_u8);
+    let mut resolve_nonce = use_signal(|| 0_u32);
     let prefer_sabr = app_state.settings.read().prefer_sabr;
     let preferred_audio_language = app_state.settings.read().preferred_audio_language.clone();
 
@@ -573,8 +584,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     let playback_resource = use_resource(move || {
         let active_video = app_state.active_video();
         let attempt = playback_attempt();
+        let nonce = resolve_nonce();
         async move {
-            let _attempt = attempt;
+            let _attempt = (attempt, nonce);
             match active_video {
                 Some(video) => {
                     let id = video.id.clone();
@@ -591,6 +603,11 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     // server instead of waiting several seconds for it. Held back until this
     // video's own session is in, so the two never race for the extractor.
     let mut warmed_next = use_signal(|| None::<String>);
+    // The video itself, fetched with its session. Moving on can then hand it
+    // to the player the moment this one ends, and the stage goes straight to
+    // loading the next one instead of sitting paused with its controls up
+    // until the next watch page has fetched its details.
+    let mut upcoming_video = use_signal(|| None::<Video>);
     use_effect(move || {
         let resolved_video_id = playback_resource
             .read()
@@ -613,8 +630,43 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             return;
         }
         warmed_next.set(Some(next.clone()));
-        warm_playback(next, prefer_sabr);
+        warm_playback(next.clone(), prefer_sabr);
+        spawn(async move {
+            if let Ok(videos) = get_videos(vec![next.clone()]).await
+                && let Some(video) = videos.into_iter().find(|video| video.id == next)
+            {
+                upcoming_video.set(Some(video));
+            }
+        });
     });
+    // Moves on to `next`: shown in the player at once when it is the video
+    // fetched above, then the watch page follows.
+    //
+    // Minimized, the viewer chose to keep browsing, so the next video takes
+    // over the mini bar where it is. Navigating to it would throw the whole
+    // player open over whatever they were reading.
+    let advance_to = move |next: String| async move {
+        let upcoming = upcoming_video.peek().clone();
+        let known = upcoming.filter(|video| video.id == next);
+        if expanded {
+            if let Some(video) = known {
+                app_state.play(video);
+            }
+            animated_navigate(Route::VideoDetail { id: next }).await;
+            return;
+        }
+        let video = match known {
+            Some(video) => Some(video),
+            None => get_videos(vec![next.clone()])
+                .await
+                .ok()
+                .and_then(|videos| videos.into_iter().find(|video| video.id == next)),
+        };
+        if let Some(video) = video {
+            app_state.record_history(&video.id);
+            app_state.play(video);
+        }
+    };
 
     let active_video = app_state.active_video();
     let video_id = active_video
@@ -626,6 +678,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             observed_video_id.set(video_id.clone());
             playback_attempt.set(0);
             stale_session_for.set(None);
+            auto_retries.set(0);
             use_embed.set(false);
             playback_failed.set(false);
             failure_detail.set(String::new());
@@ -651,6 +704,53 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
             .read()
             .as_ref()
             .map(|video| video.id.clone())
+    });
+    // A failure that is likely to pass - a busy extractor, a rate limit, a
+    // stream cut off after the app sat idle - is asked again by the player
+    // itself, a few times and a little further apart each time, while the
+    // stage keeps showing it loading. Only when that runs out does the failure
+    // panel appear, with the manual retry it has always had. The value is how
+    // many automatic retries have been made, and ends at `None` once spent.
+    let auto_retry_attempt = use_memo(move || {
+        let attempts = usize::from(auto_retries());
+        if attempts >= AUTO_RETRY_DELAYS_MS.len() {
+            return None;
+        }
+        let active = playing_id()?;
+        let resolve_failed_for_now = playback_resource
+            .read()
+            .as_ref()
+            .and_then(|value| value.as_ref())
+            .is_some_and(|(id, result)| {
+                *id == active
+                    && result
+                        .as_ref()
+                        .err()
+                        .is_some_and(|failure| failure.retryable)
+            });
+        (resolve_failed_for_now || playback_failed()).then_some(attempts)
+    });
+    use_effect(move || {
+        let Some(attempt) = auto_retry_attempt() else {
+            return;
+        };
+        spawn(async move {
+            let mut eval = document::eval(&format!(
+                "await new Promise((resolve) => setTimeout(resolve, {}));
+                dioxus.send(true);",
+                AUTO_RETRY_DELAYS_MS[attempt]
+            ));
+            let _ = eval.recv::<bool>().await;
+            // The viewer may have retried by hand, or moved on, while waiting.
+            if auto_retry_attempt.peek().as_ref() != Some(&attempt) {
+                return;
+            }
+            stale_session_for.set(playing_id.peek().clone());
+            auto_retries.set(attempt as u8 + 1);
+            playback_failed.set(false);
+            playback_attempt.set(0);
+            resolve_nonce += 1;
+        });
     });
     let progress_state = app_state;
     use_effect(move || {
@@ -755,11 +855,6 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
         }
     });
 
-    // Where a drag on the placeholder stage began. The JS controller handles
-    // swipes once a video element exists; before that this is the only thing
-    // listening.
-    let mut stage_swipe_start = use_signal(|| None::<(f64, f64)>);
-
     // Metadata belongs to the media element, so a replacement element starts
     // with none: no chapters, no segments, a bare timeline. Both things that
     // build a new one - a retried stream, and the audio-only switch, which
@@ -843,7 +938,7 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
     });
     // Only a session actually resolved for *this* video can justify the failure
     // panel; anything else means the resolve is still in flight.
-    let resolving = !resolved_for_this_video;
+    let resolving = !resolved_for_this_video || auto_retry_attempt().is_some();
     let direct_stream = !use_embed()
         && !playback_failed()
         && playback_source
@@ -1074,14 +1169,15 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     tabindex: "-1",
                                     aria_hidden: "true",
                                     "data-player-autoplay-next": "",
+                                    // Read by the JS at the end of a video, so a
+                                    // stage about to move on shows the next one
+                                    // loading rather than its own paused controls.
+                                    "data-has-next": has_next_queued.to_string(),
                                     onclick: move |_| {
                                         let finished = autoplay_video_id.clone();
-                                        spawn(async move {
-                                            let Some(next) = app_state.take_next_queued(&finished) else {
-                                                return;
-                                            };
-                                            animated_navigate(Route::VideoDetail { id: next }).await;
-                                        });
+                                        if let Some(next) = app_state.take_next_queued(&finished) {
+                                            spawn(advance_to(next));
+                                        }
                                     },
                                 }
                                 button {
@@ -1143,12 +1239,9 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                     title: "{next_label}",
                                     onclick: move |_| {
                                         let current = step_forward_id.clone();
-                                        spawn(async move {
-                                            let Some(next) = app_state.take_next_queued(&current) else {
-                                                return;
-                                            };
-                                            animated_navigate(Route::VideoDetail { id: next }).await;
-                                        });
+                                        if let Some(next) = app_state.take_next_queued(&current) {
+                                            spawn(advance_to(next));
+                                        }
                                     },
                                     ChevronRight { size: 27 }
                                 }
@@ -1344,27 +1437,13 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                     // only reads as something going wrong.
                     div {
                         class: "player-stage-status",
-                        onpointerdown: move |event: PointerEvent| {
-                            if expanded {
-                                let point = event.client_coordinates();
-                                stage_swipe_start.set(Some((point.x, point.y)));
-                            }
-                        },
-                        onpointerup: move |event: PointerEvent| {
-                            let Some((x, y)) = stage_swipe_start() else { return };
-                            stage_swipe_start.set(None);
-                            let point = event.client_coordinates();
-                            let (dx, dy) = (point.x - x, point.y - y);
-                            // Same threshold as the attached controller's flick.
-                            if dy > 55.0 && dy.abs() > dx.abs() {
-                                spawn(animated_back_or_navigate(Route::Feed {}));
-                            }
-                        },
-                        onpointercancel: move |_| stage_swipe_start.set(None),
                         Spinner {}
                     }
                 } else {
-                    div { class: "player-stage-status player-stage-error",
+                    // A drag down puts the player away here too; the controls
+                    // script handles it, since there is no attached controller.
+                    div {
+                        class: "player-stage-status player-stage-error",
                     {
                         let failure = resolve_error.clone().unwrap_or_else(|| {
                             if nothing_extracted {
@@ -1414,6 +1493,8 @@ pub fn PersistentPlayer(expanded: bool) -> Element {
                                 onclick: move |_| {
                                     playback_failed.set(false);
                                     stale_session_for.set(Some(retried_video_id.clone()));
+                                    auto_retries.set(0);
+                                    resolve_nonce += 1;
                                     // Rewinding to zero both re-runs the
                                     // resolver and restores the retry budget.
                                     playback_attempt.set(0);
