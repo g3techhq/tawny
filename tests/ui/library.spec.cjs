@@ -22,6 +22,34 @@ test.describe("Tawny library interactions", () => {
     await expectNoHorizontalScroll(appPage);
   });
 
+  test("renames and reorders a playlist from its card menu", async ({ appPage }) => {
+    await openApp(appPage, "/playlists");
+    const names = () => appPage.locator(".g3-card-title").allInnerTexts();
+    const before = await names();
+    expect(before.length).toBeGreaterThan(1);
+    const first = before[0];
+
+    // Delete is on the cover, top right, and the dots open the menu.
+    const card = appPage.locator(".g3-card", { hasText: first }).first();
+    await expect(card.getByRole("button", { name: `Delete ${first}` })).toBeVisible();
+    await card.getByRole("button", { name: `Actions for ${first}` }).click();
+    const menu = appPage.getByRole("dialog").or(appPage.locator(".g3-sheet")).last();
+    await menu.getByText("Move down", { exact: true }).click();
+    await expect.poll(async () => (await names())[1]).toBe(first);
+
+    await appPage
+      .locator(".g3-card", { hasText: first })
+      .first()
+      .getByRole("button", { name: `Actions for ${first}` })
+      .click();
+    await appPage.getByText("Rename", { exact: true }).last().click();
+    const dialog = appPage.getByRole("dialog");
+    await dialog.getByLabel("Playlist name", { exact: true }).fill("Renamed by test");
+    await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(appPage.getByText("Renamed by test", { exact: true })).toBeVisible();
+    await expect(appPage.getByText(first, { exact: true })).toHaveCount(0);
+  });
+
   test("starts with useful duration defaults and a differentiated light theme", async ({
     appPage,
   }) => {
@@ -72,6 +100,42 @@ test.describe("Tawny library interactions", () => {
     }));
     expect(surfaces.item).not.toBe(surfaces.card);
     await expectNoHorizontalScroll(appPage);
+  });
+
+  // Real touch input, not a mouse: a finger's pointer starts out captured by
+  // the element it pressed, and the row taking capture over from it once used
+  // to end the gesture, so the card never moved.
+  test("a finger swipes a card and runs its action", async ({ appPage }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chromium", "touch behavior");
+    await openApp(appPage, "/playlists/deep-dives");
+
+    const row = appPage.locator(".video-card-swipe").first();
+    await expect(row).toBeVisible();
+    // The gesture script starts once a row mounts.
+    await appPage.waitForFunction(() => window[Symbol.for("g3-ui.swipe")]);
+    const box = await row.boundingBox();
+    const cdp = await appPage.context().newCDPSession(appPage);
+    const touch = (type, x, y) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1 }],
+      });
+    const x = box.x + box.width * 0.3;
+    const y = box.y + 80;
+    const offset = () =>
+      row.evaluate(
+        (element) => parseFloat(element.style.getPropertyValue("--g3-swipe-offset")) || 0,
+      );
+
+    await touch("touchStart", x, y);
+    for (let step = 1; step <= 16; step += 1) {
+      await touch("touchMove", x + step * 10, y);
+    }
+    await expect.poll(offset).toBeGreaterThan(100);
+    await touch("touchEnd", 0, 0);
+
+    await expect(appPage.locator(".g3-toast")).toHaveAttribute("data-state", "open");
+    await expect.poll(offset).toBe(0);
   });
 
   test("replaces a desktop action toast and disables desktop card swipes", async ({

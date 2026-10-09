@@ -3302,9 +3302,9 @@ dependencies = [
 
 [[package]]
 name = "g3-auth"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39bc034a49ab69aafcd7b53fb813e8e4a6304d08270416f0c80f05ba6eb8c00e"
+checksum = "d51b298319aeb608599aae12ab4feb0ecf0b238bce72fb38f815b67d66c34c46"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3312,6 +3312,7 @@ dependencies = [
  "axum_session",
  "axum_session_auth",
  "chrono",
+ "dioxus-cookie",
  "g3-auth-macros",
  "inventory",
  "surrealdb",
@@ -3368,9 +3369,9 @@ dependencies = [
 
 [[package]]
 name = "g3-native-plugins"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae3944f2b44025cf50a22cdffd115a6970ddf28e3be9aed3fa23c2e0dd3d722"
+checksum = "0ef100d395f57e82007b143bbb3577cb5e0f446c02e83391e4ae190c0d08098e"
 dependencies = [
  "cfg-if",
  "dioxus",
@@ -3387,9 +3388,9 @@ dependencies = [
 
 [[package]]
 name = "g3-route-transitions"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a786b893f5e8494cc17b0a962912bc14a3e7f7b8d3c5e8dd81b1f1f31c2423"
+checksum = "6237a984bc4082cf414a94ba4ec645f231fe597441d72d7306ce484a0f233192"
 dependencies = [
  "dioxus",
  "g3-native-plugins",
@@ -3411,9 +3412,9 @@ dependencies = [
 
 [[package]]
 name = "g3-ui"
-version = "0.4.4"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbdc222b2933582ded1cd11beeef87ce049ba3c06979cbc7f3b55996206a3a09"
+checksum = "632d141c7d4bca07ef4cc30119d394e63a27425880d1372b7ca000b7f0c088a7"
 dependencies = [
  "cfg-if",
  "dioxus",
@@ -6445,7 +6446,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -8673,7 +8674,6 @@ dependencies = [
  "base64",
  "cfg-if",
  "dioxus",
- "dioxus-cookie",
  "dioxus-fullstack",
  "dioxus-icons",
  "dirs",

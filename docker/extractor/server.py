@@ -26,9 +26,17 @@ PO_TOKEN_PROVIDER_URL = os.environ.get(
     "PO_TOKEN_PROVIDER_URL", "http://pot-provider:4416"
 ).rstrip("/")
 EXTRACTION_TIMEOUT_SECONDS = int(os.environ.get("EXTRACTION_TIMEOUT_SECONDS", "35"))
-EXTRACTION_SLOTS = threading.BoundedSemaphore(
+# Playing a video and listing a channel's Shorts do not share slots. The Shorts
+# listings come in bursts from background work - a refresh after the app has
+# been away fills every slot with them - and a viewer pressing play then got
+# "extractor is busy" for something they had asked for themselves. Videos wait
+# their turn instead of being turned away; a listing that finds its one slot
+# taken just skips this round.
+VIDEO_SLOTS = threading.BoundedSemaphore(
     int(os.environ.get("MAX_CONCURRENT_EXTRACTIONS", "2"))
 )
+LISTING_SLOTS = threading.BoundedSemaphore(1)
+VIDEO_QUEUE_SECONDS = int(os.environ.get("VIDEO_QUEUE_SECONDS", "15"))
 
 
 def build_video_command(video_id: str) -> list[str]:
@@ -142,7 +150,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
 
-        if not EXTRACTION_SLOTS.acquire(timeout=1):
+        slots = VIDEO_SLOTS if path.startswith(video_prefix) else LISTING_SLOTS
+        wait = VIDEO_QUEUE_SECONDS if slots is VIDEO_SLOTS else 1
+        if not slots.acquire(timeout=wait):
             self.send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "extractor is busy"})
             return
         try:
@@ -156,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.GATEWAY_TIMEOUT, {"error": "extraction timed out"})
             return
         finally:
-            EXTRACTION_SLOTS.release()
+            slots.release()
 
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()

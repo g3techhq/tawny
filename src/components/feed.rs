@@ -28,11 +28,11 @@ pub fn FeedFilterSegments(value: Signal<FeedFilter>) -> Element {
 #[component]
 pub fn Feed() -> Element {
     let mut app_state = use_context::<AppState>();
-    let mut selected_group = use_signal(|| FeedGroup::All);
-    let mut selected_duration = use_signal(|| None::<DurationFilter>);
+    let mut selected_group = app_state.feed_group;
+    let mut selected_duration = app_state.feed_duration;
     // How many pages are on screen. Each is its own cached read, so asking
     // for the next one appends it without redrawing the ones above.
-    let mut pages = use_signal(|| 1usize);
+    let mut pages = app_state.feed_pages;
     // Whether the last page on screen said there is more.
     let has_more = use_signal(|| false);
     let groups =
@@ -49,10 +49,16 @@ pub fn Feed() -> Element {
             thresholds: (&*settings).into(),
         }
     });
-    // A different question starts again at one page.
+    // A different question starts again at one page. The first run is not a
+    // different question: the filters and the pages are the ones this screen
+    // was left with.
+    let mut asked = use_signal(|| query.peek().clone());
     use_effect(move || {
-        let _ = query.read();
-        pages.set(1);
+        let current = query.read().clone();
+        if *asked.peek() != current {
+            asked.set(current);
+            pages.set(1);
+        }
     });
 
     let mut refresh = move || {

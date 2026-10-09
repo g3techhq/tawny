@@ -130,6 +130,11 @@ pub struct PlaybackFailure {
     /// The underlying error verbatim, for bug reports and the server log.
     #[serde(default)]
     pub detail: Option<String>,
+    /// Whether asking again shortly is likely to succeed: a busy extractor, a
+    /// rate limit or a timeout, as opposed to a video YouTube will never serve.
+    /// The player retries these by itself before showing the failure.
+    #[serde(default)]
+    pub retryable: bool,
 }
 
 impl PlaybackFailure {
@@ -139,11 +144,17 @@ impl PlaybackFailure {
             summary: summary.into(),
             remedy: None,
             detail: None,
+            retryable: false,
         }
     }
 
     pub fn remedy(mut self, remedy: impl Into<String>) -> Self {
         self.remedy = Some(remedy.into());
+        self
+    }
+
+    pub fn retryable(mut self) -> Self {
+        self.retryable = true;
         self
     }
 

@@ -30,6 +30,7 @@ pub fn AppOverlays() -> Element {
     let mut app_state = use_context::<AppState>();
     let mut create_playlist_open = use_signal(|| false);
     let mut new_playlist_name = use_signal(String::new);
+    let mut new_playlist_video = use_signal(|| None::<crate::models::Video>);
     #[cfg(any(
         target_arch = "wasm32",
         target_os = "android",
@@ -213,6 +214,12 @@ pub fn AppOverlays() -> Element {
                     start: rsx! { Plus { size: 18 } },
                     onclick: move |_| {
                         new_playlist_name.set(String::new());
+                        // The picker steps aside rather than staying up under
+                        // the dialog, where the dialog was hidden by it. The
+                        // video is kept here: the picker's own copy is not
+                        // something to rely on once the sheet has closed.
+                        new_playlist_video.set((app_state.playlist_picker_video)());
+                        app_state.playlist_picker_open.set(false);
                         create_playlist_open.set(true);
                     },
                     "New playlist"
@@ -233,12 +240,18 @@ pub fn AppOverlays() -> Element {
                     disabled: new_playlist_name().trim().is_empty(),
                     onclick: move |_| {
                         let name = new_playlist_name().trim().to_string();
-                        let Some(video) = target.as_ref() else { return; };
-                        let playlist_id = app_state.create_playlist(name.clone());
-                        let _ = app_state.add_to_playlist(video, &playlist_id);
+                        if name.is_empty() { return; }
                         create_playlist_open.set(false);
-                        app_state.playlist_picker_open.set(false);
-                        app_state.show_toast(format!("Created {name} and saved video"), Color::Success);
+                        match new_playlist_video.peek().as_ref() {
+                            Some(video) => {
+                                app_state.create_playlist_with(name.clone(), video);
+                                app_state.show_toast(format!("Created {name} and saved video"), Color::Success);
+                            }
+                            None => {
+                                app_state.create_playlist(name.clone());
+                                app_state.show_toast(format!("Created {name}"), Color::Success);
+                            }
+                        }
                     },
                     "Create"
                 }

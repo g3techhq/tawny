@@ -5,13 +5,17 @@ use crate::{
     state::AppState,
 };
 use dioxus::prelude::*;
-use dioxus_icons::lucide::{CheckCheck, ListPlus, Play, Plus, Shuffle, Trash2};
+use dioxus_icons::lucide::{
+    ArrowDown, ArrowUp, CheckCheck, ChevronsDown, ChevronsUp, EllipsisVertical, ListPlus, Pencil,
+    Play, Plus, Shuffle, Trash2,
+};
 use g3_cache::use_cached;
 use g3_route_transitions::animated_navigate;
 use g3_ui::{
-    Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
-    DividerOrientation, EmptyState, Grid, GridColumns, Img, InfiniteScroll, Input, Modal,
-    SegmentButton, SegmentGroup, Shelf, Space, Spinner, Stack, StackAlign, Text, TextTone,
+    BottomSheet, Button, ButtonFill, ButtonSize, Card, Chip, Color, ConfirmModal, Content, Divider,
+    DividerOrientation, EmptyState, Grid, GridColumns, Img, InfiniteScroll, Input, Item, List,
+    ListLines, ListVariant, Modal, SegmentButton, SegmentGroup, Shelf, Space, Spinner, Stack,
+    StackAlign, Text, TextTone,
 };
 
 use super::{
@@ -22,6 +26,8 @@ use super::{
 /// swipe row with an image, and a long playlist built them all before the push
 /// animation could start.
 const PLAYLIST_PAGE_SIZE: usize = 24;
+/// Enough cards to fill the first screen, phone or desktop, before the rest.
+const PLAYLIST_FIRST_SCREEN: usize = 8;
 
 /// Fisher-Yates with a generator of its own.
 ///
@@ -114,6 +120,16 @@ struct PlaylistRow {
     thumbnails: Vec<String>,
 }
 
+/// `ids` with `id` taken out and put back at position `to`.
+fn with_moved(ids: &[String], id: &str, to: usize) -> Vec<String> {
+    let mut ids = ids.to_vec();
+    if let Some(from) = ids.iter().position(|ordered| ordered == id) {
+        let moved = ids.remove(from);
+        ids.insert(to.min(ids.len()), moved);
+    }
+    ids
+}
+
 /// "1 video", "3 videos".
 fn video_count(count: usize) -> String {
     if count == 1 {
@@ -156,6 +172,10 @@ pub fn Playlists() -> Element {
     let mut playlist_name = use_signal(String::new);
     let mut delete_target = use_signal(|| None::<(String, String)>);
     let mut delete_open = use_signal(|| false);
+    let mut menu_target = use_signal(|| None::<(String, String)>);
+    let mut menu_open = use_signal(|| false);
+    let mut rename_open = use_signal(|| false);
+    let mut rename_name = use_signal(String::new);
     // No filters here. The index is a set of covers to pick from, not a list to
     // work through - filtering it hides the playlist you came to open.
     let previews = use_cached(get_playlist_previews, ());
@@ -188,6 +208,23 @@ pub fn Playlists() -> Element {
     let delete_name = delete_target()
         .map(|(_, name)| name)
         .unwrap_or_else(|| "This playlist".into());
+    // The card's menu: which playlist it is for, and where that one sits now,
+    // which decides the moves it offers.
+    let ordered_ids = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+    let playlist_count = ordered_ids.len();
+    let menu_name = menu_target().map(|(_, name)| name).unwrap_or_default();
+    let menu_name_for_rename = menu_name.clone();
+    let menu_index = menu_target()
+        .and_then(|(id, _)| ordered_ids.iter().position(|ordered| *ordered == id))
+        .unwrap_or(0);
+    let move_playlist = move |to: usize| {
+        let Some((id, name)) = menu_target() else {
+            return;
+        };
+        app_state.reorder_playlists(with_moved(&ordered_ids, &id, to));
+        menu_open.set(false);
+        app_state.show_toast(format!("Moved {name}"), Color::Neutral);
+    };
 
     rsx! {
         PageHeader {
@@ -217,6 +254,8 @@ pub fn Playlists() -> Element {
                         let playlist_id = row.id.clone();
                         let remove_id = row.id.clone();
                         let remove_name = row.name.clone();
+                        let menu_id = row.id.clone();
+                        let menu_label = row.name.clone();
                         // The count that answers "is there anything left in
                         // here", which is the reason to open one.
                         let subtitle = if row.unwatched > 0 && row.unwatched < row.count {
@@ -229,25 +268,101 @@ pub fn Playlists() -> Element {
                                 key: "{row.id}",
                                 title: row.name.clone(),
                                 subtitle,
-                                media: rsx! { PlaylistCollage { thumbnails: row.thumbnails } },
+                                media: rsx! {
+                                    // Delete sits where a video card's remove
+                                    // does, so the two read as the same control.
+                                    div { class: "relative",
+                                        PlaylistCollage { thumbnails: row.thumbnails }
+                                        div { class: "absolute top-2 right-2",
+                                            Button {
+                                                size: ButtonSize::Sm,
+                                                color: Color::Neutral,
+                                                aria_label: "Delete {row.name}",
+                                                onclick: move |event: MouseEvent| {
+                                                    event.stop_propagation();
+                                                    delete_target.set(Some((remove_id.clone(), remove_name.clone())));
+                                                    delete_open.set(true);
+                                                },
+                                                Trash2 { size: 15 }
+                                            }
+                                        }
+                                    }
+                                },
                                 onclick: move |_| { spawn(animated_navigate(Route::PlaylistDetail { id: playlist_id.clone() })); },
                                 end: rsx! {
                                     Button {
                                         fill: ButtonFill::Clear,
-                                        color: Color::Danger,
                                         size: ButtonSize::Sm,
-                                        aria_label: "Delete {row.name}",
-                                        onclick: move |_| {
-                                            delete_target.set(Some((remove_id.clone(), remove_name.clone())));
-                                            delete_open.set(true);
+                                        aria_label: "Actions for {row.name}",
+                                        onclick: move |event: MouseEvent| {
+                                            event.stop_propagation();
+                                            menu_target.set(Some((menu_id.clone(), menu_label.clone())));
+                                            menu_open.set(true);
                                         },
-                                        Trash2 { size: 16 }
+                                        EllipsisVertical { size: 20 }
                                     }
                                 },
                             }
                         }
                     }
                 }
+            }
+            BottomSheet { open: menu_open, title: "{menu_name}",
+                List { variant: ListVariant::Raised, lines: ListLines::Inset,
+                    Item {
+                        start: rsx! { Pencil { size: 18 } },
+                        label: "Rename",
+                        onclick: move |_| {
+                            rename_name.set(menu_name_for_rename.clone());
+                            menu_open.set(false);
+                            rename_open.set(true);
+                        },
+                    }
+                    if menu_index > 0 {
+                        Item {
+                            start: rsx! { ChevronsUp { size: 18 } },
+                            label: "Move to the top",
+                            onclick: { let mut go = move_playlist.clone(); move |_| go(0) },
+                        }
+                        Item {
+                            start: rsx! { ArrowUp { size: 18 } },
+                            label: "Move up",
+                            onclick: { let mut go = move_playlist.clone(); move |_| go(menu_index - 1) },
+                        }
+                    }
+                    if menu_index + 1 < playlist_count {
+                        Item {
+                            start: rsx! { ArrowDown { size: 18 } },
+                            label: "Move down",
+                            onclick: { let mut go = move_playlist.clone(); move |_| go(menu_index + 1) },
+                        }
+                        Item {
+                            start: rsx! { ChevronsDown { size: 18 } },
+                            label: "Move to the bottom",
+                            onclick: { let mut go = move_playlist.clone(); move |_| go(playlist_count - 1) },
+                        }
+                    }
+                }
+            }
+            Modal {
+                open: rename_open,
+                title: "Rename playlist",
+                actions: rsx! {
+                    Button { fill: ButtonFill::Clear, onclick: move |_| rename_open.set(false), "Cancel" }
+                    Button {
+                        disabled: rename_name().trim().is_empty(),
+                        onclick: move |_| {
+                            let name = rename_name().trim().to_string();
+                            let Some((id, _)) = menu_target() else { return };
+                            if name.is_empty() { return; }
+                            app_state.rename_playlist(&id, name.clone());
+                            rename_open.set(false);
+                            app_state.show_toast(format!("Renamed to {name}"), Color::Success);
+                        },
+                        "Rename"
+                    }
+                },
+                Input { label: "Playlist name", value: rename_name, autofocus: true }
             }
             ConfirmModal {
                 open: delete_open,
@@ -345,6 +460,29 @@ pub fn PlaylistDetail(id: String) -> Element {
     });
     use_duration_hydration(candidates);
     let mut visible_count = use_signal(|| PLAYLIST_PAGE_SIZE);
+    // The cards on screen, as a memo so the grid only renders again when they
+    // change. Built in the render, every background refetch rebuilt all of
+    // them mid-slide, identical or not. And only the first screenful comes
+    // with the slide: a push cannot start moving until its page has rendered,
+    // and a full page of cards held a cached playlist still for ~0.4 s after
+    // the tap (4x CPU). The rest fill in once it has landed.
+    let shown_id = id.clone();
+    let shown = use_memo(move || {
+        let Some(Ok(Some(found))) = &*contents.read() else {
+            return Vec::new();
+        };
+        let view = app_state.playlist_view(&shown_id);
+        let mut videos = found.videos.clone();
+        view.arrange(&mut videos, &app_state.settings.read());
+        videos.retain(|video| view.shows(video));
+        let limit = if settled() {
+            visible_count()
+        } else {
+            visible_count().min(PLAYLIST_FIRST_SCREEN)
+        };
+        videos.truncate(limit);
+        videos
+    });
 
     let Some(playlist) = playlist else {
         // Still renders the bar: reaching a stale deep link with no way back was
@@ -388,9 +526,9 @@ pub fn PlaylistDetail(id: String) -> Element {
     videos.retain(|video| view.shows(video));
 
     let run: Vec<String> = videos.iter().map(|video| video.id.clone()).collect();
-    // The run above is the whole arranged list; only its first pages are laid out.
+    // The run above is the whole arranged list; only its first pages are laid
+    // out, by `shown`.
     let remaining = videos.len().saturating_sub(visible_count());
-    videos.truncate(visible_count());
     let shuffle_run = run.clone();
     let filtered = view.is_filtered();
     let clear_id = playlist.id.clone();
@@ -535,7 +673,7 @@ pub fn PlaylistDetail(id: String) -> Element {
                     }
                 }
                 VideoGrid {
-                    videos,
+                    videos: shown,
                     playlist_id: grid_playlist_id,
                     empty_message: if filtered {
                         "Nothing here matches those filters.".to_string()
@@ -547,12 +685,38 @@ pub fn PlaylistDetail(id: String) -> Element {
                     loading: false,
                     complete: remaining == 0,
                     on_load: move |_| {
-                        if remaining > 0 {
+                        // Only a first screenful is out during the slide, which
+                        // leaves this in view without anyone having scrolled.
+                        if remaining > 0 && settled() {
                             visible_count += PLAYLIST_PAGE_SIZE;
                         }
                     },
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_moved;
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn a_playlist_moves_to_the_place_asked_for() {
+        let order = ids(&["a", "b", "c", "d"]);
+        assert_eq!(with_moved(&order, "c", 0), ids(&["c", "a", "b", "d"]));
+        assert_eq!(with_moved(&order, "a", 3), ids(&["b", "c", "d", "a"]));
+        assert_eq!(with_moved(&order, "b", 2), ids(&["a", "c", "b", "d"]));
+    }
+
+    #[test]
+    fn moving_somewhere_unreasonable_or_something_missing_changes_nothing_odd() {
+        let order = ids(&["a", "b"]);
+        assert_eq!(with_moved(&order, "a", 9), ids(&["b", "a"]));
+        assert_eq!(with_moved(&order, "gone", 0), order);
     }
 }

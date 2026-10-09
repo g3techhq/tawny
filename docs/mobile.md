@@ -49,8 +49,8 @@ connecting to a home-lab server.
 
 ## Sessions
 
-Native builds initialize the Dioxus cookie runtime before launch
-(`dioxus-cookie`), so the session cookie stays outside application state. See
+Native builds initialize the cookie runtime before launch
+(`g3_auth::init()`), so the session cookie stays outside application state. See
 [authentication.md](authentication.md).
 
 ## Builds

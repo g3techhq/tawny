@@ -670,6 +670,42 @@
     throw lastError;
   }
 
+  // A video that starts while the page is hidden - the screen locked while it
+  // loaded, or autoplay moving on in the background - is paused by Chrome on
+  // Android, which only lets a video play hidden if it was already playing
+  // when the page went away. Resuming it gets paused again, and what comes out
+  // is audio stuttering until the screen is back on. Audio alone is always
+  // allowed to play hidden, so that is what starts, and the picture is loaded
+  // back in at the same place once there is a screen to show it on.
+  function startsHidden(options) {
+    return document.visibilityState === "hidden" && !options.audioOnly;
+  }
+
+  function restoreVideoWhenVisible(video, session, options, generation) {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onVisible);
+      if (video.__tawnyGeneration !== generation || !video.isConnected) return;
+      const resume = !video.paused;
+      recordTransportEvent({ phase: "restoring-video", position: playbackPosition(video) });
+      loadSources(
+        video,
+        session,
+        { ...options, audioOnly: false, startTime: playbackPosition(video) },
+        generation,
+        0,
+      )
+        .then(() => {
+          if (!resume) video.pause();
+        })
+        .catch((error) => {
+          emit(video, "tawnytransporterror", { message: String(error) });
+          video.dispatchEvent(new Event("error"));
+        });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+  }
+
   async function attach(video, session, options) {
     if (!video) throw new Error("Player element is missing");
     const generation = nextGeneration++;
@@ -681,6 +717,10 @@
       generation,
       position: attachOptions.startTime,
     });
+    if (startsHidden(attachOptions)) {
+      restoreVideoWhenVisible(video, session, attachOptions, generation);
+      return loadSources(video, session, { ...attachOptions, audioOnly: true }, generation, 0);
+    }
     return loadSources(video, session, attachOptions, generation, 0);
   }
 

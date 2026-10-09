@@ -120,6 +120,7 @@ fn tawny_theme(appearance: Appearance) -> Theme {
         ),
         Appearance::Dark => Theme {
             accent: "#f5a524".into(),
+            accent_secondary: "#f5a524".into(),
             // Amber is light, so what sits on it is dark.
             on_accent: "#1a1206".into(),
             text: "#f8fafc".into(),
@@ -137,12 +138,14 @@ fn tawny_theme(appearance: Appearance) -> Theme {
             on_warning: "#1a1206".into(),
             danger: "#ff6b6b".into(),
             color_scheme: "dark".into(),
+            ..Theme::default()
         },
         Appearance::Light => Theme {
             // Tawny in daylight: warm parchment and weathered-sage layers,
             // not a white system theme with an orange accent. Keep every
             // elevation visibly distinct, as the g3 playground themes do.
             accent: "#a9530b".into(),
+            accent_secondary: "#a9530b".into(),
             on_accent: "#ffffff".into(),
             text: "#342a21".into(),
             text_secondary: "#725f4d".into(),
@@ -159,6 +162,7 @@ fn tawny_theme(appearance: Appearance) -> Theme {
             on_warning: "#ffffff".into(),
             danger: "#c93b45".into(),
             color_scheme: "light".into(),
+            ..Theme::default()
         },
     }
 }
@@ -181,11 +185,39 @@ pub fn App() -> Element {
     }
 }
 
+/// Whether the system is in dark mode, where the page cannot tell by itself.
+///
+/// Android's WebView reports the app's own theme to `prefers-color-scheme`,
+/// and the one `dx` generates is light, so Auto stayed light on a phone set to
+/// dark. The system is asked directly there. Everywhere else the page's media
+/// query is right, and Auto's `light-dark()` pairs follow it.
+fn system_dark() -> Option<bool> {
+    #[cfg(target_os = "android")]
+    {
+        let mut plugins = try_consume_context::<g3_native_plugins::NativePlugins>()?;
+        plugins.appearance.with_mut(|appearance| appearance.dark())
+    }
+    #[cfg(not(target_os = "android"))]
+    None
+}
+
+/// Auto, settled to the system's answer where the page could not read it.
+fn resolved_appearance(appearance: Appearance, system_dark: Option<bool>) -> Appearance {
+    match (appearance, system_dark) {
+        (Appearance::Auto, Some(true)) => Appearance::Dark,
+        (Appearance::Auto, Some(false)) => Appearance::Light,
+        (chosen, _) => chosen,
+    }
+}
+
 #[component]
 fn ThemedApp() -> Element {
     let app_state = use_context::<AppState>();
     let settings = app_state.settings();
-    let appearance = settings.appearance;
+    // Once: changing the system theme recreates the Android Activity, which
+    // starts the app over.
+    let system_dark = use_hook(system_dark);
+    let appearance = resolved_appearance(settings.appearance, system_dark);
     use_browser_history_transitions::<Route>();
 
     // g3-ui and the transition library each keep their own notion of platform,
@@ -215,7 +247,10 @@ fn ThemedApp() -> Element {
         // From the signal for the same reason as the platform above: a copy
         // taken at render time pinned the root to the default dark background,
         // so light mode kept a dark page wherever the root showed through.
-        let background = tawny_theme(app_state.settings.read().appearance).bg.clone();
+        let chosen = app_state.settings.read().appearance;
+        let background = tawny_theme(resolved_appearance(chosen, system_dark))
+            .bg
+            .clone();
         spawn(async move {
             let script = format!(
                 "document.documentElement.style.setProperty('--route-transition-bg', {background:?});\
@@ -375,5 +410,36 @@ mod transition_tests {
 
         assert!(first.replaces_history(&next));
         assert!(!Route::Feed {}.replaces_history(&next));
+    }
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+
+    #[test]
+    fn auto_follows_the_system_where_the_page_cannot_see_it() {
+        assert_eq!(
+            resolved_appearance(Appearance::Auto, Some(true)),
+            Appearance::Dark
+        );
+        assert_eq!(
+            resolved_appearance(Appearance::Auto, Some(false)),
+            Appearance::Light
+        );
+        // No answer: the page's own media query decides.
+        assert_eq!(
+            resolved_appearance(Appearance::Auto, None),
+            Appearance::Auto
+        );
+        // A theme the viewer picked is never overridden.
+        assert_eq!(
+            resolved_appearance(Appearance::Light, Some(true)),
+            Appearance::Light
+        );
+        assert_eq!(
+            resolved_appearance(Appearance::Dark, Some(false)),
+            Appearance::Dark
+        );
     }
 }

@@ -69,6 +69,11 @@ pub struct AppSettings {
     /// language cannot unexpectedly change what a viewer hears.
     #[serde(default = "default_audio_language")]
     pub preferred_audio_language: String,
+    /// BCP-47 language tag of the captions a video opens with. Without it the
+    /// first track was chosen, and YouTube lists them alphabetically, so most
+    /// videos with translated captions came up in Arabic.
+    #[serde(default = "default_caption_language")]
+    pub preferred_caption_language: String,
     pub prefer_sabr: bool,
     pub po_token_provider_url: Option<String>,
     /// How each playlist is arranged, keyed by playlist id.
@@ -91,6 +96,10 @@ pub(crate) fn default_true() -> bool {
 }
 
 pub(crate) fn default_audio_language() -> String {
+    "en".to_string()
+}
+
+pub(crate) fn default_caption_language() -> String {
     "en".to_string()
 }
 
@@ -210,6 +219,7 @@ impl Default for AppSettings {
             shorts_medium_max_seconds: default_shorts_medium_max_seconds(),
             sponsor_block: SponsorBlockSettings::default(),
             preferred_audio_language: default_audio_language(),
+            preferred_caption_language: default_caption_language(),
             prefer_sabr: true,
             po_token_provider_url: None,
             playlist_views: BTreeMap::new(),

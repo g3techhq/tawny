@@ -206,6 +206,63 @@ pub(crate) async fn probe_segment_ranges(
     Some(ranges)
 }
 
+/// Byte ranges another extractor already reported, by `(itag, exact size)`.
+///
+/// Probing every format's head is most of a second of a cold resolve, and
+/// rustypipe has already described the same files by the time it runs. An
+/// itag and an exact byte count name one transcode, so its ranges hold for
+/// yt-dlp's URL to it. Only a pair that appears once is kept: dubbed audio
+/// repeats an itag per language, and two languages can share a size, so an
+/// ambiguous pair is left to the probe. Ranges that are not the contiguous
+/// `init` then `index` layout both containers use are left to it too.
+pub(crate) fn unambiguous_segment_ranges(
+    streams: impl IntoIterator<Item = (u32, u64, PlaybackByteRange, PlaybackByteRange)>,
+) -> HashMap<(u32, u64), SegmentRanges> {
+    let mut seen: HashMap<(u32, u64), Option<SegmentRanges>> = HashMap::new();
+    for (itag, size, init, index) in streams {
+        let ranges = (init.start == 0 && init.end.checked_add(1) == Some(index.start)).then_some(
+            SegmentRanges {
+                init_end: init.end,
+                index_start: index.start,
+                index_end: index.end,
+            },
+        );
+        seen.entry((itag, size))
+            .and_modify(|entry| *entry = None)
+            .or_insert(ranges);
+    }
+    seen.into_iter()
+        .filter_map(|(key, ranges)| Some((key, ranges?)))
+        .collect()
+}
+
+/// [`unambiguous_segment_ranges`] for what a rustypipe player lists.
+pub(crate) fn rustypipe_segment_ranges(
+    player: &rustypipe::model::VideoPlayer,
+) -> HashMap<(u32, u64), SegmentRanges> {
+    let range = |range: &std::ops::Range<u32>| PlaybackByteRange {
+        start: u64::from(range.start),
+        end: u64::from(range.end),
+    };
+    let video = player.video_only_streams.iter().filter_map(|stream| {
+        Some((
+            stream.itag,
+            stream.size?,
+            range(stream.init_range.as_ref()?),
+            range(stream.index_range.as_ref()?),
+        ))
+    });
+    let audio = player.audio_streams.iter().filter_map(|stream| {
+        Some((
+            stream.itag,
+            stream.size,
+            range(stream.init_range.as_ref()?),
+            range(stream.index_range.as_ref()?),
+        ))
+    });
+    unambiguous_segment_ranges(video.chain(audio))
+}
+
 /// Pick a parser from the container's magic rather than its declared extension.
 pub(crate) fn segment_ranges(head: &[u8]) -> Option<SegmentRanges> {
     if head.len() >= 8 && &head[4..8] == b"ftyp" {

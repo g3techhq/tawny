@@ -63,6 +63,81 @@
   // The element whose controller holds the page's Media Session actions.
   let sessionOwner = null;
 
+  /// Deliberate, mostly vertical, and quick enough to be a flick. Positive
+  /// `dy` is downward.
+  function isVerticalFlick(dx, dy, elapsedMs) {
+    return elapsedMs <= 800 && Math.abs(dy) >= 55 && Math.abs(dy) > Math.abs(dx);
+  }
+
+  // The player sits at the very top of the screen, which is also where a
+  // pulled-down notification shade starts. A drag that begins in this strip is
+  // someone reaching for the status bar, not asking to minimize the video.
+  const TOP_DEAD_ZONE_PX = 44;
+  const inTopDeadZone = (clientY) => clientY < TOP_DEAD_ZONE_PX;
+
+  // While the watch sheet slides in, the browser hit-tests the transition's
+  // snapshots instead of the page, so every touch lands on the document and
+  // the player never hears it. That is the half second or more after tapping
+  // a video, with the spinner up: just when someone changes their mind. The
+  // page has only just opened at its top, so a downward flick then can only
+  // mean "put it away", and it does what the stage's own swipe does. The
+  // stylesheet stops the browser cancelling the touch to pan the document.
+  function presentingWatchSheet() {
+    const root = document.documentElement;
+    return (
+      root.dataset.routeTransition === "present-sheet" &&
+      (root.dataset.routeTransitionTo || "").startsWith("/watch/")
+    );
+  }
+
+  // The expanded stage while no controller owns it: the spinner while the
+  // stream resolves, the gap between the video element mounting and the
+  // controller attaching, and the failure panel after the element is gone. The
+  // controller handles its own swipes once attached, so this stays out of its
+  // way. Done here, in the page, rather than in a Rust handler: on a native
+  // webview every Rust pointer handler is a blocking round trip, and the drag
+  // never reached it reliably.
+  function unattachedStage(target) {
+    if (!(target instanceof Element)) return false;
+    const stage = target.closest("#tawny-player");
+    if (!stage || !stage.closest(".persistent-player.expanded")) return false;
+    if (target.closest("button, a, input, select, .player-options-menu")) return false;
+    const media = document.getElementById("tawny-player-media");
+    return !(media && controllers.has(media));
+  }
+
+  let sheetFlick = null;
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      sheetFlick =
+        ((event.target === document.documentElement && presentingWatchSheet()) ||
+          unattachedStage(event.target)) &&
+        !inTopDeadZone(event.clientY)
+          ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY, at: Date.now() }
+          : null;
+    },
+    true,
+  );
+  document.addEventListener(
+    "pointerup",
+    (event) => {
+      const flick = sheetFlick;
+      sheetFlick = null;
+      if (!flick || flick.pointerId !== event.pointerId) return;
+      const dy = event.clientY - flick.y;
+      if (dy <= 0 || !isVerticalFlick(event.clientX - flick.x, dy, Date.now() - flick.at)) return;
+      // Whichever way out the stage has right now: the control bar's once a
+      // stream is attached, the stage's Back while it is still resolving.
+      document
+        .getElementById("tawny-player")
+        ?.querySelector("[data-player-minimize], .player-stage-back")
+        ?.click();
+    },
+    true,
+  );
+  document.addEventListener("pointercancel", () => (sheetFlick = null), true);
+
   function attach(video) {
     if (!video) return;
     const root = video.closest("#tawny-player");
@@ -939,7 +1014,6 @@
     let surfacePressSequence = null;
     let lastPointerTapAt = 0;
     let lastClickSequenceActionAt = 0;
-    const SWIPE_DISTANCE = 55;
     const DOUBLE_PRESS_MS = 500;
     const TAP_SLOP = 14;
 
@@ -1007,6 +1081,10 @@
         // bridge heard it, so the controls flashed and the player stayed put.
         if (!tapOpensControls || !event.isTrusted) return;
         tapOpensControls = false;
+        // A press on a button is the button's own. A flag left set by an
+        // earlier tap on the picture (the stream failed before its click, say)
+        // would otherwise eat the click on Back or Try again.
+        if (isPlayerChrome(event.target)) return;
         event.preventDefault();
         event.stopPropagation();
         showControls(false);
@@ -1030,6 +1108,7 @@
         y: event.clientY,
         at: Date.now(),
         committed: event.pointerType === "mouse",
+        deadZone: !document.fullscreenElement && inTopDeadZone(event.clientY),
       };
       // A finger has no hover, so a tap is the only way to reach the controls
       // - and taking that tap as play/pause stopped the video every time
@@ -1054,6 +1133,7 @@
       const dx = event.clientX - gestureStart.x;
       const dy = event.clientY - gestureStart.y;
       const elapsed = Date.now() - gestureStart.at;
+      const startedInDeadZone = gestureStart.deadZone;
       gestureStart = null;
       resetGestureVisuals();
       try {
@@ -1081,10 +1161,7 @@
       // Only a tap raises the bar. A drag produces no click to consume this,
       // so left set it would swallow whatever the next real tap was for.
       if (Math.abs(dx) > TAP_SLOP || Math.abs(dy) > TAP_SLOP) tapOpensControls = false;
-      // Deliberate, mostly-vertical, and quick enough to be a flick.
-      if (elapsed > 800 || Math.abs(dy) < SWIPE_DISTANCE || Math.abs(dy) <= Math.abs(dx)) {
-        return;
-      }
+      if (!isVerticalFlick(dx, dy, elapsed)) return;
       // A swipe is not a tap: keep the click that follows from toggling play.
       swallowNextClick = true;
       const fullscreen = document.fullscreenElement === root;
@@ -1094,7 +1171,7 @@
         if (!fullscreen) enterFullscreenFor(root);
       } else if (fullscreen) {
         document.exitFullscreen && document.exitFullscreen();
-      } else {
+      } else if (!startedInDeadZone) {
         controls.querySelector("[data-player-minimize]")?.click();
       }
     };
@@ -1226,15 +1303,24 @@
       updatePlaybackState();
     });
     listen(video, "ended", () => {
+      // Advancing is Rust's decision: it owns the queue and the setting. This
+      // only reports that the video finished.
+      const next = autoplayEnabled && controls.querySelector("[data-player-autoplay-next]");
+      if (next?.dataset.hasNext === "true") {
+        // Moving straight on. Putting up the paused bar here flashed Play and
+        // the controls over the last frame before the next video took over;
+        // the stage shows it loading instead. The media session stays active,
+        // since playback is carrying on.
+        setStarting(true);
+        hideControls();
+        next.click();
+        return;
+      }
       setStarting(false);
       setPlaybackIntent(false);
       updatePlaybackState();
       root.querySelector("[data-player-native-playback-stop]")?.click();
-      // Advancing is Rust's decision: it owns the queue and the setting. This
-      // only reports that the video finished.
-      if (autoplayEnabled) {
-        controls.querySelector("[data-player-autoplay-next]")?.click();
-      }
+      next?.click();
     });
     // The system media controls extrapolate position from the last report, so
     // a seek or speed change has to be reported too. Uses the intent rather

@@ -91,8 +91,7 @@ fn main() {
 
 #[cfg(not(feature = "server"))]
 fn main() {
-    #[cfg(any(feature = "desktop", feature = "mobile"))]
-    dioxus_cookie::init();
+    g3_auth::init();
     g3_ui::init_auto_mode();
     // Before `launch`, not after: `set_server_url` keeps only its first value.
     // The cookie runtime is initialized above so the first request can restore

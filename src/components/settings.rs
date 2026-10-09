@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use g3_route_transitions::ROUTE_TRANSITION_OVERLAY_REGION_CLASS;
 
 use super::{AccountSettings, BackendSettings, PageHeader};
-use dioxus_icons::lucide::{Download, Gauge, Languages, RotateCw, ShieldCheck, Upload};
+use dioxus_icons::lucide::{Captions, Download, Gauge, Languages, RotateCw, ShieldCheck, Upload};
 use g3_ui::{
     Button, ButtonFill, ButtonSize, Card, Color, Content, ContentWidth, Grid, GridColumns, Input,
     InputType, Item, List, ListLines, ListVariant, SegmentButton, SegmentGroup, Select,
@@ -44,7 +44,8 @@ fn download_text_file(file_name: &str, mime_type: &str, contents: String) {
     });
 }
 
-const PREFERRED_AUDIO_LANGUAGES: [(&str, &str); 10] = [
+/// The languages offered for audio dubs and for captions.
+const PREFERRED_LANGUAGES: [(&str, &str); 10] = [
     ("en", "English"),
     ("es", "Spanish"),
     ("fr", "French"),
@@ -111,6 +112,7 @@ fn SwipeSetting(label: String, right: bool) -> Element {
 
     rsx! {
         Item {
+            wrap: true,
             label: label.clone(),
             description: "What the gesture does",
             end: rsx! {
@@ -131,6 +133,7 @@ fn SwipeSetting(label: String, right: bool) -> Element {
         }
         if action() == SwipeActionKind::AddToPlaylist {
             Item {
+                wrap: true,
                 label: "Destination playlist",
                 end: rsx! {
                     Select {
@@ -157,6 +160,7 @@ pub fn SettingsPage() -> Element {
     let autoplay = use_signal(|| settings.autoplay);
     let shorts_autoplay = use_signal(|| settings.shorts_autoplay);
     let audio_language = use_signal(|| settings.preferred_audio_language.clone());
+    let caption_language = use_signal(|| settings.preferred_caption_language.clone());
     let prefer_sabr = use_signal(|| settings.prefer_sabr);
     let appearance = use_signal(|| settings.appearance);
     let platform_style = use_signal(|| settings.platform_style);
@@ -192,18 +196,21 @@ pub fn SettingsPage() -> Element {
                     Card { title: "Playback",
                         List { variant: ListVariant::Filled, lines: ListLines::Inset,
                             Item {
+                                wrap: true,
                                 start: rsx! { Gauge { size: 19 } },
                                 label: "Video speed",
                                 description: "Remembered for long-form video",
                                 metadata: format!("{}×", settings.playback_speed),
                             }
                             Item {
+                                wrap: true,
                                 start: rsx! { Gauge { size: 19 } },
                                 label: "Shorts speed",
                                 description: "Remembered separately from video",
                                 metadata: format!("{}×", settings.shorts_playback_speed),
                             }
                             Item {
+                                wrap: true,
                                 label: "Autoplay videos",
                                 description: "Continue with the next queued video",
                                 end: rsx! {
@@ -215,6 +222,7 @@ pub fn SettingsPage() -> Element {
                                 },
                             }
                             Item {
+                                wrap: true,
                                 label: "Autoplay Shorts",
                                 description: "Remembered separately from video",
                                 end: rsx! {
@@ -226,15 +234,16 @@ pub fn SettingsPage() -> Element {
                                 },
                             }
                             Item {
+                                wrap: true,
                                 start: rsx! { Languages { size: 19 } },
-                                label: "Preferred audio language",
+                                label: "Audio language",
                                 description: "Use this dub when a video offers one",
                                 end: rsx! {
                                     Select {
                                         value: audio_language,
-                                        aria_label: "Preferred audio language",
+                                        aria_label: "Audio language",
                                         width: SelectWidth::Fit,
-                                        options: PREFERRED_AUDIO_LANGUAGES
+                                        options: PREFERRED_LANGUAGES
                                             .iter()
                                             .map(|(code, label)| SelectOption::new(code.to_string(), *label))
                                             .collect::<Vec<_>>(),
@@ -243,6 +252,28 @@ pub fn SettingsPage() -> Element {
                                 },
                             }
                             Item {
+                                wrap: true,
+                                start: rsx! { Captions { size: 19 } },
+                                label: "Captions language",
+                                description: "Shown when a video has them",
+                                end: rsx! {
+                                    Select {
+                                        value: caption_language,
+                                        aria_label: "Captions language",
+                                        width: SelectWidth::Fit,
+                                        options: PREFERRED_LANGUAGES
+                                            .iter()
+                                            .map(|(code, label)| SelectOption::new(code.to_string(), *label))
+                                            .collect::<Vec<_>>(),
+                                        onchange: move |code: String| {
+                                            app_state.settings.write().preferred_caption_language = code;
+                                            app_state.select_preferred_caption();
+                                        },
+                                    }
+                                },
+                            }
+                            Item {
+                                wrap: true,
                                 start: rsx! { RotateCw { size: 19 } },
                                 label: "Rotate horizontal fullscreen video",
                                 description: "Switch phones to landscape automatically",
@@ -255,6 +286,7 @@ pub fn SettingsPage() -> Element {
                                 },
                             }
                             Item {
+                                wrap: true,
                                 start: rsx! { ShieldCheck { size: 19 } },
                                 label: "Prefer SABR",
                                 description: "Use adaptive streaming when the stream supports it",
@@ -364,6 +396,7 @@ fn SubscriptionTransferCard() -> Element {
             Stack { gap: Space::Md,
                 List { variant: ListVariant::Filled,
                     Item {
+                        wrap: true,
                         start: rsx! { Upload { size: 18 } },
                         label: "Import subscriptions",
                         description: "Choose a .json, .csv, or .opml export",
